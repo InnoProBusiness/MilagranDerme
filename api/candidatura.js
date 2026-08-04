@@ -3,7 +3,7 @@
 //
 // Required env var (set in Vercel → Project Settings → Environment Variables):
 //   RESEND_API_KEY      — API key from resend.com
-//   CANDIDATURA_TO      — destination email address for new applications
+//   CANDIDATURA_TO      — destination email address for new applications (milagranoficial@gmail.com)
 //   CANDIDATURA_FROM    — verified sender address/domain in Resend (e.g. "Milagran <candidaturas@milagranoficial.com>")
 
 const REQUIRED_FIELDS = [
