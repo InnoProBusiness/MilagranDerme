@@ -1,3 +1,24 @@
+// ============================================================
+// CONFIG — ajuste aqui
+// ============================================================
+const MARGEM_REPRESENTANTE = null; // TODO: confirmar percentual (ex.: 30). Exibe "a definir" enquanto null.
+
+// ============================================================
+// Tracking helper — no-op até Meta Pixel / GA4 serem instalados
+// ============================================================
+function trackEvent(name, params = {}) {
+  if (typeof window.fbq === 'function') window.fbq('trackCustom', name, params);
+  if (typeof window.gtag === 'function') window.gtag('event', name, params);
+}
+
+// ---- Margem ----
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('margemValor');
+  if (el) {
+    el.textContent = MARGEM_REPRESENTANTE !== null ? `${MARGEM_REPRESENTANTE}%` : 'A definir';
+  }
+});
+
 // ---- Menu toggle ----
 const menuToggle = document.getElementById('menuToggle');
 const navOverlay = document.getElementById('navOverlay');
@@ -45,47 +66,116 @@ revealEls.forEach((el, i) => {
   revealObserver.observe(el);
 });
 
-// ---- Header shrink on scroll ----
+// ---- Header background on scroll ----
 const header = document.getElementById('siteHeader');
-let lastScroll = 0;
 window.addEventListener('scroll', () => {
   const y = window.scrollY;
   header.style.background = y > 40 ? 'rgba(11,10,8,0.75)' : 'transparent';
   header.style.backdropFilter = y > 40 ? 'blur(10px)' : 'none';
-  lastScroll = y;
 }, { passive: true });
 
-// ---- Countdown to launch ----
-const launchDate = new Date('2026-08-25T09:00:00-03:00').getTime();
+// ---- Nível pré-seleção (cards "Consultar condições") ----
+document.querySelectorAll('.nivel-card__cta').forEach(cta => {
+  cta.addEventListener('click', () => {
+    const nivel = cta.dataset.nivel;
+    const select = document.getElementById('nivel');
+    if (select && nivel) {
+      select.value = nivel;
+    }
+    trackEvent('consultar_condicoes_click', { nivel });
+  });
+});
 
-function updateCountdown() {
-  const now = Date.now();
-  const diff = launchDate - now;
+// ============================================================
+// Formulário de candidatura
+// ============================================================
+const form = document.getElementById('candidaturaForm');
+const submitBtn = document.getElementById('formSubmit');
+const statusEl = document.getElementById('formStatus');
 
-  const daysEl = document.getElementById('cd-days');
-  const hoursEl = document.getElementById('cd-hours');
-  const minEl = document.getElementById('cd-min');
-  const secEl = document.getElementById('cd-sec');
-  if (!daysEl) return;
+const validators = {
+  nome: (v) => v.trim().length >= 3 || 'Informe seu nome completo.',
+  whatsapp: (v) => /^[\d\s()+-]{10,20}$/.test(v.trim()) || 'Informe um WhatsApp válido.',
+  email: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) || 'Informe um e-mail válido.',
+  cidade: (v) => v.trim().length >= 2 || 'Informe sua cidade.',
+  estado: (v) => v !== '' || 'Selecione seu estado.',
+  area: (v) => v !== '' || 'Selecione sua área de atuação.',
+  atuaEstetica: (v) => v !== '' || 'Selecione uma opção.',
+  nivel: (v) => v !== '' || 'Selecione o nível de interesse.',
+  origem: (v) => v !== '' || 'Selecione uma opção.',
+};
 
-  if (diff <= 0) {
-    daysEl.textContent = '00';
-    hoursEl.textContent = '00';
-    minEl.textContent = '00';
-    secEl.textContent = '00';
-    return;
-  }
-
-  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
-  const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
-  const minutes = Math.floor((diff / (1000 * 60)) % 60);
-  const seconds = Math.floor((diff / 1000) % 60);
-
-  daysEl.textContent = String(days).padStart(2, '0');
-  hoursEl.textContent = String(hours).padStart(2, '0');
-  minEl.textContent = String(minutes).padStart(2, '0');
-  secEl.textContent = String(seconds).padStart(2, '0');
+function clearErrors() {
+  form.querySelectorAll('.form__error').forEach(el => { el.textContent = ''; });
+  form.querySelectorAll('.form__field').forEach(el => el.classList.remove('form__field--invalid'));
 }
 
-updateCountdown();
-setInterval(updateCountdown, 1000);
+function setError(fieldName, message) {
+  const errEl = form.querySelector(`[data-error-for="${fieldName}"]`);
+  if (errEl) errEl.textContent = message;
+  const fieldEl = document.getElementById(fieldName);
+  if (fieldEl) {
+    const wrapper = fieldEl.closest('.form__field') || fieldEl.closest('.form__consent');
+    if (wrapper) wrapper.classList.add('form__field--invalid');
+  }
+}
+
+function validateForm(data) {
+  let isValid = true;
+  for (const [field, validate] of Object.entries(validators)) {
+    const result = validate(data[field] || '');
+    if (result !== true) {
+      setError(field, result);
+      isValid = false;
+    }
+  }
+  if (!data.lgpd) {
+    setError('lgpd', 'É necessário aceitar o uso dos dados para continuar.');
+    isValid = false;
+  }
+  return isValid;
+}
+
+if (form) {
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearErrors();
+    statusEl.textContent = '';
+    statusEl.className = 'form__status';
+
+    const formData = new FormData(form);
+    const data = Object.fromEntries(formData.entries());
+    data.lgpd = form.querySelector('#lgpd').checked;
+
+    if (!validateForm(data)) {
+      statusEl.textContent = 'Verifique os campos destacados.';
+      statusEl.classList.add('form__status--error');
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.classList.add('is-loading');
+
+    try {
+      const res = await fetch('/api/candidatura', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+
+      if (!res.ok) throw new Error('request_failed');
+
+      form.reset();
+      statusEl.textContent = 'Candidatura enviada! Nossa equipe entrará em contato em breve.';
+      statusEl.classList.add('form__status--success');
+      trackEvent('candidatura_enviada', { nivel: data.nivel, estado: data.estado });
+    } catch (err) {
+      statusEl.textContent = 'Não foi possível enviar agora. Tente novamente ou fale com a gente pelo WhatsApp.';
+      statusEl.classList.add('form__status--error');
+      trackEvent('candidatura_erro');
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.classList.remove('is-loading');
+    }
+  });
+}
