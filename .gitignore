@@ -1,0 +1,14 @@
+# Environment variables — never commit real secrets
+.env
+.env.local
+.env.*.local
+
+# Vercel
+.vercel
+
+# Dependencies (in case a package.json is added later)
+node_modules
+
+# OS/editor cruft
+.DS_Store
+Thumbs.db

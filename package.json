@@ -1,0 +1,9 @@
+{
+  "name": "milagran-landing",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Milagran Derme — landing page + serverless candidatura endpoint",
+  "dependencies": {
+    "pdf-lib": "^1.17.1"
+  }
+}
