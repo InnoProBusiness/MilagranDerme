@@ -1,7 +1,7 @@
 // ============================================================
 // CONFIG — ajuste aqui
 // ============================================================
-const MARGEM_REPRESENTANTE = null; // TODO: confirmar percentual (ex.: 30). Exibe "a definir" enquanto null.
+const MARGEM_REPRESENTANTE = 20; // percentual de margem por kit vendido — ajuste aqui
 
 // ============================================================
 // Tracking helper — no-op até Meta Pixel / GA4 serem instalados
@@ -15,7 +15,7 @@ function trackEvent(name, params = {}) {
 document.addEventListener('DOMContentLoaded', () => {
   const el = document.getElementById('margemValor');
   if (el) {
-    el.textContent = MARGEM_REPRESENTANTE !== null ? `${MARGEM_REPRESENTANTE}%` : 'A definir';
+    el.textContent = MARGEM_REPRESENTANTE !== null ? `Até ${MARGEM_REPRESENTANTE}%` : 'A definir';
   }
 });
 
