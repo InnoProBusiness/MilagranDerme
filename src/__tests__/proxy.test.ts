@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import { NextRequest } from 'next/server'
 import { getDb, closeDb } from '@/lib/db'
 import { proxy } from '@/proxy'
@@ -49,10 +49,19 @@ function requisicao(caminho: string, cookieHeader?: string): NextRequest {
 }
 
 describe('proxy de atribuicao (src/proxy.ts)', () => {
+  // O proxy registra console.warn nos caminhos em que a atribuicao se perde
+  // (ver "avisar" em src/proxy.ts). O spy mantem a saida do teste limpa e
+  // serve de assercao nos dois testes que cobram a migalha de log.
+  let avisos: ReturnType<typeof vi.spyOn>
+
   beforeAll(() => {
     process.env.ATRIBUICAO_SECRET = SEGREDO
   })
-  beforeEach(semear)
+  beforeEach(async () => {
+    avisos = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await semear()
+  })
+  afterEach(() => { avisos.mockRestore() })
   afterAll(async () => { await closeDb() })
 
   it('slug ativo grava o cookie de atribuicao', async () => {
@@ -94,6 +103,36 @@ describe('proxy de atribuicao (src/proxy.ts)', () => {
     const resposta = await proxy(requisicao('/r/%E0%A4%A'))
     expect(resposta.cookies.get(NOME_COOKIE_ATRIBUICAO)).toBeUndefined()
     expect(resposta.headers.get('set-cookie')).toBeNull()
+  })
+
+  it('registra o slug perdido em vez de falhar em silencio', async () => {
+    await proxy(requisicao('/r/proxy-nao-existe'))
+
+    expect(avisos).toHaveBeenCalledTimes(1)
+    const [mensagem, dados] = avisos.mock.calls[0] as [string, Record<string, string>]
+    expect(mensagem).toContain('[atribuicao]')
+    expect(dados).toEqual({ slug: 'proxy-nao-existe', motivo: 'slug_inexistente_ou_inativo' })
+  })
+
+  it('registra o cookie descartado sem logar o valor, a assinatura ou o segredo', async () => {
+    const forjado = assinarAtribuicao(
+      { slug: SLUG_ATIVO, em: Date.now(), utmSource: null, utmMedium: null, utmCampaign: null },
+      'b'.repeat(64), // outro segredo: nao passa na verificacao
+    )
+    const resposta = await proxy(
+      requisicao(`/r/${SLUG_ATIVO}`, `${NOME_COOKIE_ATRIBUICAO}=${forjado}`),
+    )
+
+    // O visitante continua atribuido: o cookie ruim e substituido por um bom.
+    expect(resposta.cookies.get(NOME_COOKIE_ATRIBUICAO)).toBeDefined()
+
+    expect(avisos).toHaveBeenCalledTimes(1)
+    const [, dados] = avisos.mock.calls[0] as [string, Record<string, string>]
+    expect(dados.motivo).toBe('assinatura_invalida_ou_expirado')
+
+    const tudoQueFoiLogado = JSON.stringify(avisos.mock.calls)
+    expect(tudoQueFoiLogado).not.toContain(forjado)
+    expect(tudoQueFoiLogado).not.toContain(SEGREDO)
   })
 
   it('DINHEIRO: visitante com atribuicao valida ao representante ativo que cai num link morto (inativo) continua atribuido ao original', async () => {

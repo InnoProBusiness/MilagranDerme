@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { createHmac } from 'node:crypto'
 import { getDb, closeDb } from '@/lib/db'
 import { resolverAtribuicaoDoPedido } from '@/lib/resolver-pedido'
@@ -38,7 +38,13 @@ function cookie(slug: string, em = Date.now()): string {
 }
 
 describe('resolucao da atribuicao autoritativa do pedido', () => {
-  beforeEach(semear)
+  let avisos: ReturnType<typeof vi.spyOn>
+
+  beforeEach(async () => {
+    avisos = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await semear()
+  })
+  afterEach(() => { avisos.mockRestore() })
   afterAll(async () => { await closeDb() })
 
   it('sem cookie, a venda e da casa', async () => {
@@ -57,6 +63,11 @@ describe('resolucao da atribuicao autoritativa do pedido', () => {
     const r = await resolverAtribuicaoDoPedido(forjado, SEGREDO)
     expect(r.origem).toBe('casa')
     expect(r.utmSource).toBeNull()
+
+    // ... e o descarte deixa rastro: sem ele, este pedido e indistinguivel
+    // de uma compra que nunca teve cookie. O valor do cookie nao vai junto.
+    expect(avisos).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(avisos.mock.calls)).not.toContain(forjado)
   })
 
   it('cookie malformado nao estoura e vira venda da casa', async () => {

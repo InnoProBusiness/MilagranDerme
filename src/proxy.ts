@@ -58,9 +58,34 @@ function slugDaRota(pathname: string): string | null {
   }
 }
 
+/**
+ * Migalha de log, nao framework de observabilidade. Todo caminho em que a
+ * atribuicao se perde era indistinguivel de sucesso: um slug morto, um
+ * cookie adulterado e uma visita normal produziam exatamente a mesma
+ * resposta e zero linhas de log. Quando um representante diz "mandei
+ * quarenta pessoas e me creditaram tres", isto e o que existe para
+ * responder.
+ *
+ * Nunca recebe o valor do cookie, a assinatura nem o segredo. O slug vai
+ * como propriedade de objeto (e nao concatenado na mensagem) para que o
+ * inspect do Node escape quebras de linha — slug vem da URL e e conteudo
+ * do visitante ate a consulta no banco dizer o contrario.
+ */
+function avisar(evento: string, dados: Record<string, string>): void {
+  console.warn(`[atribuicao] ${evento}`, dados)
+}
+
+const MAX_SLUG_LOG = 64
+
 export async function proxy(request: NextRequest) {
   const slugVisitado = slugDaRota(request.nextUrl.pathname)
-  if (slugVisitado === null) return NextResponse.next()
+  if (slugVisitado === null) {
+    avisar('slug ignorado', {
+      caminho: request.nextUrl.pathname.slice(0, MAX_SLUG_LOG),
+      motivo: 'percent_encoding_invalido',
+    })
+    return NextResponse.next()
+  }
 
   // Slug invalido/inativo nao deve tocar o cookie. Sem este check, um link
   // morto (representante desligado ou digitado errado) sofreria LAST CLICK
@@ -76,12 +101,28 @@ export async function proxy(request: NextRequest) {
   // vira um jeito de forjar atribuicao. Duas consultas baratas numa coluna
   // com indice unico custa menos do que esse invariante de seguranca.
   const representante = await buscarRepresentanteAtivoPorSlug(slugVisitado)
-  if (!representante) return NextResponse.next()
+  if (!representante) {
+    avisar('visita sem representante ativo', {
+      slug: slugVisitado.slice(0, MAX_SLUG_LOG),
+      motivo: 'slug_inexistente_ou_inativo',
+    })
+    return NextResponse.next()
+  }
 
   const segredo = segredoDeAtribuicao()
 
   const bruto = request.cookies.get(NOME_COOKIE_ATRIBUICAO)?.value ?? null
   const atual = bruto ? verificarAtribuicao(bruto, segredo) : null
+  if (bruto && !atual) {
+    // Cookie existia e nao passou: assinatura invalida, payload adulterado
+    // ou janela de 30 dias vencida. Sem esta linha, o caso e identico a
+    // "visitante sem cookie" — inclusive quando a causa e um segredo
+    // rotacionado, que invalida a atribuicao de TODO MUNDO de uma vez.
+    avisar('cookie descartado', {
+      slug: slugVisitado.slice(0, MAX_SLUG_LOG),
+      motivo: 'assinatura_invalida_ou_expirado',
+    })
+  }
 
   const { cookieNovo } = resolverAtribuicao({
     slugVisitado,

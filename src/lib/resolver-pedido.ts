@@ -57,7 +57,16 @@ export async function resolverAtribuicaoDoPedido(
   if (!cookieBruto) return VENDA_DA_CASA
 
   const atribuicao = verificarAtribuicao(cookieBruto, segredo, agora)
-  if (!atribuicao) return VENDA_DA_CASA
+  if (!atribuicao) {
+    // O visitante TINHA cookie e o pedido vai ser gravado como venda da
+    // casa. Sem esta linha, esse caso e indistinguivel de uma compra sem
+    // cookie nenhum — e e exatamente aqui que a comissao deixa de existir.
+    // Nunca logar o valor do cookie, a assinatura ou o segredo.
+    console.warn('[atribuicao] cookie descartado na criacao do pedido', {
+      motivo: 'assinatura_invalida_ou_expirado',
+    })
+    return VENDA_DA_CASA
+  }
 
   const utm = {
     utmSource: atribuicao.utmSource,
