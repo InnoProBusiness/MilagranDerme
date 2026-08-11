@@ -66,4 +66,31 @@ describe('resolucao de atribuicao', () => {
     })
     expect(r.efetiva.utmSource!.length).toBeLessThanOrEqual(120)
   })
+
+  it('atribuicao nova grava o instante de "agora", nao um valor arbitrario', () => {
+    const agora = new Date(emAgosto)
+    const r = resolverAtribuicao({
+      slugVisitado: 'maria', atual: null,
+      utm: { source: null, medium: null, campaign: null },
+      agora,
+    })
+    expect(r.efetiva.em).toBe(agora.getTime())
+  })
+
+  it('LAST CLICK: usa o instante da nova visita, NAO o da atribuicao anterior', () => {
+    // Sem este teste, um bug que devolvesse atual.em ao transferir a
+    // atribuicao passaria pelos outros 5 testes (nenhum deles olha para
+    // .em num last click) e o representante novo herdaria o que sobrou da
+    // janela de 30 dias do antigo — silenciosamente. O gap de 20 dias entre
+    // os dois "agora" garante que um mutante que devolva o valor errado
+    // falhe de forma obvia, nao por 1ms de diferenca de relogio.
+    const novoInstante = emAgosto + 20 * 86_400_000
+    const r = resolverAtribuicao({
+      slugVisitado: 'joao', atual: existente,
+      utm: { source: null, medium: null, campaign: null },
+      agora: new Date(novoInstante),
+    })
+    expect(r.efetiva.em).toBe(novoInstante)
+    expect(r.efetiva.em).not.toBe(existente.em)
+  })
 })

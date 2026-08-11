@@ -40,6 +40,13 @@ export async function proxy(request: NextRequest) {
   // realmente fechou a venda — a pagina so vai devolver 404 depois, mas o
   // estrago no cookie ja estaria feito. O 404 em si continua sendo
   // responsabilidade da pagina (notFound()), que roda esta mesma consulta.
+  // A pagina em src/app/r/[slug]/page.tsx faz esta MESMA consulta de novo,
+  // de proposito — nao encaminhe o resultado daqui para la via header. Um
+  // header so e confiavel se for removido de QUALQUER requisicao de
+  // entrada em TODO caminho deste proxy, inclusive este early return, onde
+  // os headers originais do cliente passam intactos; esquecer um caminho
+  // vira um jeito de forjar atribuicao. Duas consultas baratas numa coluna
+  // com indice unico custa menos do que esse invariante de seguranca.
   const representante = await buscarRepresentanteAtivoPorSlug(slugVisitado)
   if (!representante) return NextResponse.next()
 

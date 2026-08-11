@@ -2,9 +2,17 @@ import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb, closeDb } from '@/lib/db'
 import { buscarRepresentanteAtivoPorSlug } from '@/repositories/representantes'
 
+// Deleta so os proprios slugs, nao a tabela inteira: um DELETE sem filtro
+// aqui corre contra qualquer outro arquivo de teste que tambem escreva em
+// "representantes" (ex.: src/__tests__/proxy.test.ts) quando o Vitest roda
+// os arquivos em paralelo — um apaga as linhas que o outro acabou de
+// inserir. Escopar por slug torna os dois arquivos independentes mesmo
+// rodando ao mesmo tempo contra o mesmo Postgres real.
+const SLUGS_PROPRIOS = ['maria', 'joao', 'ana'] as const
+
 async function semear() {
   const db = getDb()
-  await db.deleteFrom('representantes').execute()
+  await db.deleteFrom('representantes').where('slug', 'in', SLUGS_PROPRIOS).execute()
   await db.insertInto('representantes').values([
     {
       slug: 'maria', codigo: 'MARIA', nome: 'Maria', email: 'maria@exemplo.com',
