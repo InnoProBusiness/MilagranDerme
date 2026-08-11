@@ -66,7 +66,67 @@ CREATE INDEX pedidos_rep_data ON pedidos (representante_id, criado_em DESC)
   WHERE representante_id IS NOT NULL;
 CREATE INDEX pedidos_status ON pedidos (status);
 
+-- A ATRIBUICAO CONGELADA e uma promessa de escrita (o repositorio so grava
+-- uma vez), nao uma garantia do banco: um UPDATE direto na linha, fora do
+-- repositorio, conseguia reatribuir um pedido ja feito para outro
+-- representante e reescrever o percentual — e, pior, ao mudar o
+-- representante_id para outra pessoa, o ON DELETE RESTRICT parava de
+-- enxergar o pedido como dependente do representante original, liberando a
+-- exclusao dele e apagando o historico da venda. Este trigger fecha os dois
+-- problemas de uma vez: nenhuma coluna congelada pode mudar depois da
+-- criacao, entao o representante original nunca fica sem pedido para o
+-- RESTRICT proteger. status/pago_em/entregue_em ficam de fora de proposito:
+-- a maquina de estados do pedido e o webhook de pagamento (Plano 3) tem que
+-- poder mudar essas colunas livremente.
+CREATE FUNCTION pedido_impedir_alteracao_congelada() RETURNS trigger AS $$
+BEGIN
+  IF NEW.representante_id IS DISTINCT FROM OLD.representante_id THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna representante_id nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.percentual_comissao_snapshot IS DISTINCT FROM OLD.percentual_comissao_snapshot THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna percentual_comissao_snapshot nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.origem IS DISTINCT FROM OLD.origem THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna origem nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.utm_source IS DISTINCT FROM OLD.utm_source THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna utm_source nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.utm_medium IS DISTINCT FROM OLD.utm_medium THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna utm_medium nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.utm_campaign IS DISTINCT FROM OLD.utm_campaign THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna utm_campaign nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.subtotal_centavos IS DISTINCT FROM OLD.subtotal_centavos THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna subtotal_centavos nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.desconto_centavos IS DISTINCT FROM OLD.desconto_centavos THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna desconto_centavos nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.frete_centavos IS DISTINCT FROM OLD.frete_centavos THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna frete_centavos nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.total_centavos IS DISTINCT FROM OLD.total_centavos THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna total_centavos nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.numero IS DISTINCT FROM OLD.numero THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna numero nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  IF NEW.criado_em IS DISTINCT FROM OLD.criado_em THEN
+    RAISE EXCEPTION 'pedido_atribuicao_imutavel: coluna criado_em nao pode ser alterada apos a criacao do pedido';
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER pedido_atribuicao_imutavel_trg
+  BEFORE UPDATE ON pedidos
+  FOR EACH ROW
+  EXECUTE FUNCTION pedido_impedir_alteracao_congelada();
+
 -- Down Migration
 DROP TABLE pedidos;
+DROP FUNCTION pedido_impedir_alteracao_congelada();
 DROP TYPE origem_atribuicao;
 DROP TYPE pedido_status;

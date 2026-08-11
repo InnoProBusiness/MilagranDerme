@@ -2,9 +2,11 @@ import { Kysely, PostgresDialect } from 'kysely'
 import pg from 'pg'
 import type { DB } from '@/lib/db-types'
 
-// Postgres devolve int8 (bigint) como string por seguranca. Como todo
-// dinheiro no sistema cabe em int4 e ids sao uuid, converter para number
-// e seguro e evita string vazando para calculo.
+// Postgres devolve int8 (bigint) como string por seguranca. Todo dinheiro
+// no sistema cabe em int4, ids sao uuid, e pedidos.numero (o unico bigint
+// genuino do projeto) e um contador de pedidos que jamais vai chegar perto
+// de 2^53 — converter para number e seguro nos tres casos e evita string
+// vazando para calculo.
 pg.types.setTypeParser(pg.types.builtins.INT8, (v) => Number(v))
 
 declare global {

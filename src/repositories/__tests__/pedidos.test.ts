@@ -9,6 +9,12 @@ import { centavos } from '@/lib/money'
 // um slug exclusivo evita que este arquivo e os outros disputem a mesma
 // linha de representante.
 const SLUG_MARIA = 'pedido-maria'
+// Representantes "coadjuvantes" usados so pelos testes do trigger, para
+// tentar reatribuir um pedido para ALGUEM (o trigger tem que rejeitar antes
+// que a troca se concretize). Slugs proprios e limpos no inicio de semear()
+// pela mesma razao do SLUG_MARIA: se um teste falhar entre criar e apagar
+// essas linhas, a proxima rodada nao pode esbarrar num slug ja usado.
+const SLUGS_COADJUVANTES = ['pedido-outro', 'pedido-outro2'] as const
 
 let idMaria: string
 
@@ -47,6 +53,10 @@ async function semear() {
     )
     .execute()
   await db.deleteFrom('representantes').where('slug', '=', SLUG_MARIA).execute()
+  // Os coadjuvantes nunca ficam presos por ON DELETE RESTRICT: o trigger
+  // rejeita a UPDATE antes que qualquer pedido chegue a apontar para eles,
+  // entao um DELETE direto por slug basta.
+  await db.deleteFrom('representantes').where('slug', 'in', SLUGS_COADJUVANTES).execute()
 
   const maria = await db
     .insertInto('representantes')
@@ -144,6 +154,112 @@ describe('criacao de pedido com atribuicao congelada', () => {
     })
     await expect(
       getDb().deleteFrom('representantes').where('id', '=', idMaria).execute(),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/pedidos_representante_id_fkey/)
+  })
+
+  // A atribuicao congelada era, ate aqui, uma promessa de escrita: so o
+  // caminho de criacao (criarPedido) nunca reescrevia essas colunas. Nada
+  // impedia um UPDATE direto na linha de fora do repositorio — e pior,
+  // reatribuir representante_id fazia o ON DELETE RESTRICT parar de
+  // enxergar o pedido como dependente do representante ORIGINAL, liberando
+  // a exclusao dele e apagando o historico da venda. O trigger
+  // pedido_atribuicao_imutavel_trg (migrations/1754900300000_pedidos.sql)
+  // fecha isso no banco, nao na aplicacao.
+  describe('trigger que trava a atribuicao congelada contra UPDATE', () => {
+    it('rejeita alterar representante_id de um pedido existente', async () => {
+      const p = await criar({
+        origem: 'link', representanteId: idMaria, percentualComissao: 20,
+        utmSource: null, utmMedium: null, utmCampaign: null,
+        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      })
+      const outro = await getDb().insertInto('representantes').values({
+        slug: 'pedido-outro', codigo: 'PEDIDOOUTRO', nome: 'Outro',
+        email: 'pedido-outro@exemplo.com', percentual_comissao: '10.00', ativo: true,
+      }).returning('id').executeTakeFirstOrThrow()
+
+      await expect(
+        getDb().updateTable('pedidos')
+          .set({ representante_id: outro.id })
+          .where('id', '=', p.id)
+          .execute(),
+      ).rejects.toThrow(/pedido_atribuicao_imutavel/)
+
+      await getDb().deleteFrom('representantes').where('id', '=', outro.id).execute()
+    })
+
+    it('rejeita alterar percentual_comissao_snapshot de um pedido existente', async () => {
+      const p = await criar({
+        origem: 'link', representanteId: idMaria, percentualComissao: 20,
+        utmSource: null, utmMedium: null, utmCampaign: null,
+        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      })
+      await expect(
+        getDb().updateTable('pedidos')
+          .set({ percentual_comissao_snapshot: 99 })
+          .where('id', '=', p.id)
+          .execute(),
+      ).rejects.toThrow(/pedido_atribuicao_imutavel/)
+    })
+
+    it('rejeita alterar total_centavos de um pedido existente', async () => {
+      const p = await criar({
+        origem: 'casa', representanteId: null, percentualComissao: null,
+        utmSource: null, utmMedium: null, utmCampaign: null,
+        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      })
+      await expect(
+        getDb().updateTable('pedidos')
+          .set({ total_centavos: 1 })
+          .where('id', '=', p.id)
+          .execute(),
+      ).rejects.toThrow(/pedido_atribuicao_imutavel/)
+    })
+
+    it('permite alterar status para pago — o trigger nao pode travar a maquina de estados', async () => {
+      const p = await criar({
+        origem: 'link', representanteId: idMaria, percentualComissao: 20,
+        utmSource: null, utmMedium: null, utmCampaign: null,
+        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      })
+      await getDb().updateTable('pedidos')
+        .set({ status: 'pago' })
+        .where('id', '=', p.id)
+        .execute()
+
+      const relido = await getDb().selectFrom('pedidos')
+        .select('status')
+        .where('id', '=', p.id).executeTakeFirstOrThrow()
+      expect(relido.status).toBe('pago')
+    })
+
+    it('apos um UPDATE rejeitado, apagar o representante original continua bloqueado pela FK', async () => {
+      const p = await criar({
+        origem: 'link', representanteId: idMaria, percentualComissao: 20,
+        utmSource: null, utmMedium: null, utmCampaign: null,
+        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      })
+      const outro = await getDb().insertInto('representantes').values({
+        slug: 'pedido-outro2', codigo: 'PEDIDOOUTRO2', nome: 'Outro 2',
+        email: 'pedido-outro2@exemplo.com', percentual_comissao: '10.00', ativo: true,
+      }).returning('id').executeTakeFirstOrThrow()
+
+      // A tentativa de sequestrar a atribuicao falha...
+      await expect(
+        getDb().updateTable('pedidos')
+          .set({ representante_id: outro.id, percentual_comissao_snapshot: 1 })
+          .where('id', '=', p.id)
+          .execute(),
+      ).rejects.toThrow(/pedido_atribuicao_imutavel/)
+
+      // ...e por isso o pedido continua apontando para o representante
+      // original: o RESTRICT ainda o ve como dependente e bloqueia a
+      // exclusao. Este e o segundo tempo da exploracao que o trigger fecha:
+      // sem ele, a linha acima teria sucesso e a linha abaixo NAO lancaria.
+      await expect(
+        getDb().deleteFrom('representantes').where('id', '=', idMaria).execute(),
+      ).rejects.toThrow(/pedidos_representante_id_fkey/)
+
+      await getDb().deleteFrom('representantes').where('id', '=', outro.id).execute()
+    })
   })
 })
