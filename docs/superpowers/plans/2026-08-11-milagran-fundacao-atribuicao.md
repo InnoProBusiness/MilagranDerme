@@ -132,7 +132,7 @@ Substitui o atual. `pdf-lib` permanece porque `api/candidatura.js` ainda depende
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "jsx": "preserve",
+    "jsx": "react-jsx",
     "incremental": true,
     "plugins": [{ "name": "next" }],
     "paths": { "@/*": ["./src/*"] }
