@@ -1039,10 +1039,10 @@ git commit -m "Add kits table with price and ANVISA fields, plus typed repositor
 - Test: `src/repositories/__tests__/representantes.test.ts`
 
 **Interfaces:**
-- Consumes: `getDb()`, `deInteiro`
+- Consumes: `getDb()`, `Selectable` (kysely), generated `Representantes` row type from `src/lib/db-types.ts`
 - Produces:
   - `buscarRepresentanteAtivoPorSlug(slug: string): Promise<Representante | null>`
-  - `type Representante = { id: string; slug: string; nome: string; codigo: string; percentualComissao: number; ativo: boolean }`
+  - `type Representante = { id: string; slug: string; codigo: string; nome: string; fotoUrl: string | null; cidade: string; estado: string; percentualComissao: number; ativo: boolean }`
 
 - [ ] **Step 1: Escrever a migration**
 
@@ -1059,7 +1059,10 @@ CREATE TABLE representantes (
   email                text        NOT NULL,
   whatsapp             text        NOT NULL DEFAULT '',
   cidade               text        NOT NULL DEFAULT '',
-  estado               char(2)     NOT NULL DEFAULT '',
+  -- varchar, nao char: char(n) e blank-padded (bpchar) e o valor com
+  -- espacos de preenchimento chega assim ate a aplicacao — quebra o
+  -- contrato de "string vazia = nao preenchido" de Representante.estado.
+  estado               varchar(2)  NOT NULL DEFAULT '',
   foto_url             text,
   -- Percentual configuravel POR representante (spec 8). Guardado como
   -- numeric para permitir 12,5% sem perder precisao no cadastro; o calculo
@@ -1100,7 +1103,11 @@ async function semear() {
   const db = getDb()
   await db.deleteFrom('representantes').execute()
   await db.insertInto('representantes').values([
-    { slug: 'maria', codigo: 'MARIA', nome: 'Maria', email: 'maria@exemplo.com', percentual_comissao: '20.00', ativo: true },
+    {
+      slug: 'maria', codigo: 'MARIA', nome: 'Maria', email: 'maria@exemplo.com',
+      percentual_comissao: '20.00', ativo: true,
+      foto_url: 'https://exemplo.com/maria.jpg', cidade: 'Recife', estado: 'PE',
+    },
     { slug: 'joao', codigo: 'JOAO', nome: 'Joao', email: 'joao@exemplo.com', percentual_comissao: '15.50', ativo: true },
     { slug: 'ana', codigo: 'ANA', nome: 'Ana', email: 'ana@exemplo.com', percentual_comissao: '20.00', ativo: false },
   ]).execute()
@@ -1114,6 +1121,27 @@ describe('repositorio de representantes', () => {
     const r = await buscarRepresentanteAtivoPorSlug('maria')
     expect(r?.nome).toBe('Maria')
     expect(r?.percentualComissao).toBe(20)
+  })
+
+  it('mapeia cada campo para a coluna correta, sem trocar valores', async () => {
+    const r = await buscarRepresentanteAtivoPorSlug('maria')
+    expect(r).toMatchObject({
+      slug: 'maria',
+      codigo: 'MARIA',
+      nome: 'Maria',
+      fotoUrl: 'https://exemplo.com/maria.jpg',
+      cidade: 'Recife',
+      estado: 'PE',
+      percentualComissao: 20,
+      ativo: true,
+    })
+    expect(typeof r?.id).toBe('string')
+  })
+
+  it('devolve estado como string vazia quando nao preenchido, sem blank-padding do bpchar', async () => {
+    const r = await buscarRepresentanteAtivoPorSlug('joao')
+    expect(r?.estado).toBe('')
+    expect(r?.estado.length).toBe(0)
   })
 
   it('devolve percentual fracionario como number', async () => {
@@ -1170,7 +1198,9 @@ Esperado: FALHA com `Cannot find module '@/repositories/representantes'`.
 
 ```ts
 // src/repositories/representantes.ts
+import type { Selectable } from 'kysely'
 import { getDb } from '@/lib/db'
+import type { Representantes } from '@/lib/db-types'
 
 export type Representante = {
   id: string
@@ -1184,13 +1214,7 @@ export type Representante = {
   ativo: boolean
 }
 
-type LinhaRepresentante = {
-  id: string; slug: string; codigo: string; nome: string
-  foto_url: string | null; cidade: string; estado: string
-  percentual_comissao: string | number; ativo: boolean
-}
-
-function paraRepresentante(l: LinhaRepresentante): Representante {
+function paraRepresentante(l: Selectable<Representantes>): Representante {
   return {
     id: l.id,
     slug: l.slug,
@@ -1215,7 +1239,7 @@ export async function buscarRepresentanteAtivoPorSlug(
     .where('slug', '=', slug)
     .where('ativo', '=', true)
     .executeTakeFirst()
-  return linha ? paraRepresentante(linha as LinhaRepresentante) : null
+  return linha ? paraRepresentante(linha) : null
 }
 ```
 

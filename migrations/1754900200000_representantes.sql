@@ -8,7 +8,7 @@ CREATE TABLE representantes (
   email                text        NOT NULL,
   whatsapp             text        NOT NULL DEFAULT '',
   cidade               text        NOT NULL DEFAULT '',
-  estado               char(2)     NOT NULL DEFAULT '',
+  estado               varchar(2)  NOT NULL DEFAULT '',
   foto_url             text,
   -- Percentual configuravel POR representante (spec 8). Guardado como
   -- numeric para permitir 12,5% sem perder precisao no cadastro; o calculo
