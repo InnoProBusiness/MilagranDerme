@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: milagran
+      POSTGRES_PASSWORD: milagran
+      POSTGRES_DB: milagran
+    ports:
+      - "5433:5432"
+    volumes:
+      - milagran_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U milagran"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  milagran_pgdata:
