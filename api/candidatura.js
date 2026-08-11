@@ -5,7 +5,7 @@
 // Required env vars (Vercel → Project Settings → Environment Variables):
 //   RESEND_API_KEY      — API key from resend.com
 //   EMAIL_FROM          — verified sender address/domain in Resend
-//                          (e.g. "Milagran <candidaturas@milagranoficial.com>")
+//                          (e.g. "Milagran <candidaturas@milagranoficial.com.br>")
 //   EMAIL_TO            — destination address for new candidatura notifications
 //   ENVIAR_CONFIRMACAO  — "true" to also email the candidate a confirmation
 //
