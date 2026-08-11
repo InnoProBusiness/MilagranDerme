@@ -2049,7 +2049,7 @@ git commit -m "Add pedidos table with frozen attribution snapshot and integrity 
 | 6 — atribuição de venda, cookie, janela de 30 dias | 7, 8 |
 | 10 — registro da origem da venda | 9 |
 | 11 — parâmetros UTM | 7, 8, 9 |
-| 13 — regra de atribuição com janela configurável | 7 |
+| 13 — regra de atribuição com a janela num único ponto de configuração (`JANELA_ATRIBUICAO_DIAS = 30`, em `src/lib/atribuicao.ts`) | 7 |
 | 14 — conflito entre representantes (last click) | 8 |
 | 16 — os 8 status de pedido | 9 |
 | 17 — percentual configurável por representante | 6, 9 |
@@ -2057,6 +2057,13 @@ git commit -m "Add pedidos table with frozen attribution snapshot and integrity 
 | 32 — estrutura de banco relacionada corretamente | 5, 6, 9 |
 | 34 — número ANVISA no cadastro do produto | 5 |
 | 36 — perfil oficial como origem comercial (`casa`) | 9 |
+
+Sobre o item 13: a janela é uma constante nomeada, **não** uma variável de
+ambiente. Mudá-la exige alterar uma linha e fazer deploy, e é assim de
+propósito — trocar a janela reinterpreta retroativamente cookies já
+assinados e emitidos, então não é o tipo de coisa que se ajusta pelo painel
+sem revisão. Se a operação vier a precisar de janelas diferentes por
+campanha, isso vira plumbing próprio num plano posterior.
 
 **Lacunas conhecidas e deliberadas deste plano:** cupom, checkout, gateway, itens do pedido, comissão em ledger, autenticação e dashboard. Todos estão nos planos seguintes, e nenhum deles é pré-requisito da atribuição funcionar.
 
