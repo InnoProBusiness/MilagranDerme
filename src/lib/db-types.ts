@@ -9,7 +9,13 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
+
 export type Numeric = ColumnType<string, number | string, number | string>;
+
+export type OrigemAtribuicao = "casa" | "cupom" | "link" | "rep_inativo";
+
+export type PedidoStatus = "aguardando_pagamento" | "cancelado" | "em_preparacao" | "entregue" | "enviado" | "pago" | "pendente" | "reembolsado";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -26,6 +32,25 @@ export interface Kits {
   sku: string;
   slug: string;
   unidades: number;
+}
+
+export interface Pedidos {
+  criado_em: Generated<Timestamp>;
+  desconto_centavos: Generated<number>;
+  entregue_em: Timestamp | null;
+  frete_centavos: Generated<number>;
+  id: Generated<string>;
+  numero: Generated<Int8>;
+  origem: OrigemAtribuicao;
+  pago_em: Timestamp | null;
+  percentual_comissao_snapshot: Numeric | null;
+  representante_id: string | null;
+  status: Generated<PedidoStatus>;
+  subtotal_centavos: number;
+  total_centavos: number;
+  utm_campaign: string | null;
+  utm_medium: string | null;
+  utm_source: string | null;
 }
 
 export interface Pgmigrations {
@@ -52,6 +77,7 @@ export interface Representantes {
 
 export interface DB {
   kits: Kits;
+  pedidos: Pedidos;
   pgmigrations: Pgmigrations;
   representantes: Representantes;
 }
