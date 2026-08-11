@@ -73,6 +73,21 @@ describe('aplicarPercentual', () => {
     expect(() => aplicarPercentual(deInteiro(100), -1)).toThrow(/percentual/)
     expect(() => aplicarPercentual(deInteiro(100), 101)).toThrow(/percentual/)
   })
+
+  it('rejeita valor negativo — percentual deve ser aplicado com sign explícito', () => {
+    expect(() => aplicarPercentual(deInteiro(-1990), 15)).toThrow(/nao-negativo/)
+  })
+
+  it('devolve zero quando o valor e zero', () => {
+    expect(aplicarPercentual(deInteiro(0), 20)).toBe(0)
+  })
+
+  it('respeita os limites 0 e 100 do percentual', () => {
+    // 0% de qualquer valor = 0
+    expect(aplicarPercentual(deInteiro(1990), 0)).toBe(0)
+    // 100% retorna o valor original
+    expect(aplicarPercentual(deInteiro(1990), 100)).toBe(1990)
+  })
 })
 
 describe('calcularComissao', () => {

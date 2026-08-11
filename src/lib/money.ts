@@ -49,8 +49,18 @@ export function multiplicar(valor: Centavos, quantidade: number): Centavos {
  * Arredondamento: meio para cima (round-half-up), deterministico e sempre
  * favorecendo o representante em caso de empate. A regra precisa ser unica
  * em todo o sistema, senao o extrato nao fecha com o total.
+ *
+ * Rejeita valores negativos para garantir que a regra de arredondamento seja
+ * consistente. Math.round() arredonda para o infinito positivo em casos de empate,
+ * o que inverte a direction do arredondamento para valores negativos. Operacoes
+ * com valores negativos (estornos, reversoes) devem computar o percentual sobre
+ * o valor positivo e negar o resultado explicitamente no call site, deixando
+ * visivel no codigo.
  */
 export function aplicarPercentual(valor: Centavos, percentual: number): Centavos {
+  if (valor < 0) {
+    throw new Error(`Valor precisa ser nao-negativo, recebido: ${valor}`)
+  }
   if (!Number.isFinite(percentual) || percentual < 0 || percentual > 100) {
     throw new Error(`percentual precisa estar entre 0 e 100: ${percentual}`)
   }
