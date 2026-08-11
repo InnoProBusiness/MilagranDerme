@@ -28,11 +28,39 @@ export const config = {
   matcher: '/r/:slug',
 }
 
-export async function proxy(request: NextRequest) {
+/**
+ * Extrai o slug da rota /r/<slug> EXATAMENTE como a pagina o enxerga.
+ *
+ * Isso nao e detalhe de estilo, e dinheiro: `nextUrl.pathname` nunca vem
+ * percent-decoded (WHATWG URL preserva as sequencias %XX), enquanto o
+ * `params.slug` que src/app/r/[slug]/page.tsx recebe do Next JA vem
+ * decodificado. Sem o decode aqui, /r/mar%69a fazia o proxy procurar
+ * "mar%69a" (nao existe -> sai sem cookie) e a pagina procurar "maria"
+ * (existe -> renderiza 200). O visitante via a pagina da Maria, comprava, e
+ * o pedido era gravado como venda da casa: Maria nao recebia e nada
+ * registrava o ocorrido.
+ *
+ * decodeURIComponent lanca URIError em sequencia percent malformada
+ * ("%E0%A4%A"); nesse caso o slug e tratado como inexistente (sem cookie,
+ * requisicao segue), nunca como erro — um 500 no proxy derrubaria a pagina
+ * inteira por causa de uma URL torta.
+ */
+function slugDaRota(pathname: string): string | null {
   // pathname.split('/').pop() pareceria equivalente, mas devolve '' para
   // "/r/maria/" (barra final) em vez de 'maria' — o regex ancorado no
   // segmento evita esse caso.
-  const slugVisitado = request.nextUrl.pathname.match(/^\/r\/([^/]+)/)?.[1] ?? ''
+  const bruto = pathname.match(/^\/r\/([^/]+)/)?.[1]
+  if (!bruto) return null
+  try {
+    return decodeURIComponent(bruto)
+  } catch {
+    return null
+  }
+}
+
+export async function proxy(request: NextRequest) {
+  const slugVisitado = slugDaRota(request.nextUrl.pathname)
+  if (slugVisitado === null) return NextResponse.next()
 
   // Slug invalido/inativo nao deve tocar o cookie. Sem este check, um link
   // morto (representante desligado ou digitado errado) sofreria LAST CLICK

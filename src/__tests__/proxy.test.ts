@@ -74,6 +74,28 @@ describe('proxy de atribuicao (src/proxy.ts)', () => {
     expect(resposta.cookies.get(NOME_COOKIE_ATRIBUICAO)).toBeUndefined()
   })
 
+  it('DINHEIRO: slug percent-encoded na URL grava o cookie do mesmo jeito que o slug literal', async () => {
+    // nextUrl.pathname NUNCA vem decodificado; params.slug (que a pagina
+    // recebe) vem. Antes do decode no proxy, esta URL renderizava a pagina
+    // da Maria com 200 e sem Set-Cookie nenhum — a venda seguinte era
+    // gravada como 'casa' e a Maria nao recebia.
+    const codificado = `/r/${SLUG_ATIVO.replace('i', '%69')}`
+    expect(codificado).toBe('/r/proxy-mar%69a')
+
+    const resposta = await proxy(requisicao(codificado))
+    const setado = resposta.cookies.get(NOME_COOKIE_ATRIBUICAO)
+    expect(setado).toBeDefined()
+    expect(verificarAtribuicao(setado!.value, SEGREDO)?.slug).toBe(SLUG_ATIVO)
+  })
+
+  it('percent-encoding malformado nao estoura o proxy e nao grava cookie', async () => {
+    // decodeURIComponent('%E0%A4%A') lanca URIError. Um throw aqui viraria
+    // 500 na pagina inteira; o proxy trata como slug inexistente.
+    const resposta = await proxy(requisicao('/r/%E0%A4%A'))
+    expect(resposta.cookies.get(NOME_COOKIE_ATRIBUICAO)).toBeUndefined()
+    expect(resposta.headers.get('set-cookie')).toBeNull()
+  })
+
   it('DINHEIRO: visitante com atribuicao valida ao representante ativo que cai num link morto (inativo) continua atribuido ao original', async () => {
     // Este e o cenario que o proxy existe para prevenir: um link morto ou
     // digitado errado NAO PODE, via LAST CLICK, apagar uma atribuicao valida
