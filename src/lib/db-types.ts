@@ -11,6 +11,21 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface Kits {
+  anvisa_registro: string | null;
+  ativo: Generated<boolean>;
+  atualizado_em: Generated<Timestamp>;
+  criado_em: Generated<Timestamp>;
+  descricao: Generated<string>;
+  id: Generated<string>;
+  nome: string;
+  ordem: Generated<number>;
+  preco_centavos: number;
+  sku: string;
+  slug: string;
+  unidades: number;
+}
+
 export interface Pgmigrations {
   id: Generated<number>;
   name: string;
@@ -18,5 +33,6 @@ export interface Pgmigrations {
 }
 
 export interface DB {
+  kits: Kits;
   pgmigrations: Pgmigrations;
 }
