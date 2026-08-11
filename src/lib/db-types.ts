@@ -9,6 +9,8 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
   : ColumnType<T, T | undefined, T>;
 
+export type Numeric = ColumnType<string, number | string, number | string>;
+
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export interface Kits {
@@ -32,7 +34,24 @@ export interface Pgmigrations {
   run_on: Timestamp;
 }
 
+export interface Representantes {
+  ativo: Generated<boolean>;
+  atualizado_em: Generated<Timestamp>;
+  cidade: Generated<string>;
+  codigo: string;
+  criado_em: Generated<Timestamp>;
+  email: string;
+  estado: Generated<string>;
+  foto_url: string | null;
+  id: Generated<string>;
+  nome: string;
+  percentual_comissao: Generated<Numeric>;
+  slug: string;
+  whatsapp: Generated<string>;
+}
+
 export interface DB {
   kits: Kits;
   pgmigrations: Pgmigrations;
+  representantes: Representantes;
 }

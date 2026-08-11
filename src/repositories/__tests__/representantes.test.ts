@@ -1,0 +1,64 @@
+import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { getDb, closeDb } from '@/lib/db'
+import { buscarRepresentanteAtivoPorSlug } from '@/repositories/representantes'
+
+async function semear() {
+  const db = getDb()
+  await db.deleteFrom('representantes').execute()
+  await db.insertInto('representantes').values([
+    { slug: 'maria', codigo: 'MARIA', nome: 'Maria', email: 'maria@exemplo.com', percentual_comissao: '20.00', ativo: true },
+    { slug: 'joao', codigo: 'JOAO', nome: 'Joao', email: 'joao@exemplo.com', percentual_comissao: '15.50', ativo: true },
+    { slug: 'ana', codigo: 'ANA', nome: 'Ana', email: 'ana@exemplo.com', percentual_comissao: '20.00', ativo: false },
+  ]).execute()
+}
+
+describe('repositorio de representantes', () => {
+  beforeEach(semear)
+  afterAll(async () => { await closeDb() })
+
+  it('busca representante ativo por slug', async () => {
+    const r = await buscarRepresentanteAtivoPorSlug('maria')
+    expect(r?.nome).toBe('Maria')
+    expect(r?.percentualComissao).toBe(20)
+  })
+
+  it('devolve percentual fracionario como number', async () => {
+    const r = await buscarRepresentanteAtivoPorSlug('joao')
+    expect(r?.percentualComissao).toBe(15.5)
+  })
+
+  it('nao devolve representante inativo', async () => {
+    expect(await buscarRepresentanteAtivoPorSlug('ana')).toBeNull()
+  })
+
+  it('devolve null para slug inexistente', async () => {
+    expect(await buscarRepresentanteAtivoPorSlug('ninguem')).toBeNull()
+  })
+
+  it('impede reutilizar o slug de um representante desligado', async () => {
+    await expect(
+      getDb().insertInto('representantes').values({
+        slug: 'ana', codigo: 'ANA2', nome: 'Outra Ana',
+        email: 'ana2@exemplo.com', percentual_comissao: '20.00', ativo: true,
+      }).execute(),
+    ).rejects.toThrow(/rep_slug_unico/)
+  })
+
+  it('rejeita slug com maiuscula ou espaco', async () => {
+    await expect(
+      getDb().insertInto('representantes').values({
+        slug: 'Maria Silva', codigo: 'MS', nome: 'Maria Silva',
+        email: 'ms@exemplo.com', percentual_comissao: '20.00', ativo: true,
+      }).execute(),
+    ).rejects.toThrow(/rep_slug_formato/)
+  })
+
+  it('rejeita percentual acima de 100', async () => {
+    await expect(
+      getDb().insertInto('representantes').values({
+        slug: 'ganancioso', codigo: 'GAN', nome: 'Ganancioso',
+        email: 'g@exemplo.com', percentual_comissao: '150.00', ativo: true,
+      }).execute(),
+    ).rejects.toThrow(/rep_percentual_valido/)
+  })
+})
