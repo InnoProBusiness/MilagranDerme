@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import {
   NOME_COOKIE_ATRIBUICAO, JANELA_ATRIBUICAO_DIAS,
-  assinarAtribuicao, verificarAtribuicao,
+  assinarAtribuicao, verificarAtribuicao, segredoDeAtribuicao,
 } from '@/lib/atribuicao'
 import { resolverAtribuicao } from '@/app/r/[slug]/registrar-atribuicao'
 import { buscarRepresentanteAtivoPorSlug } from '@/repositories/representantes'
@@ -78,8 +78,7 @@ export async function proxy(request: NextRequest) {
   const representante = await buscarRepresentanteAtivoPorSlug(slugVisitado)
   if (!representante) return NextResponse.next()
 
-  const segredo = process.env.ATRIBUICAO_SECRET
-  if (!segredo) throw new Error('ATRIBUICAO_SECRET nao configurada')
+  const segredo = segredoDeAtribuicao()
 
   const bruto = request.cookies.get(NOME_COOKIE_ATRIBUICAO)?.value ?? null
   const atual = bruto ? verificarAtribuicao(bruto, segredo) : null

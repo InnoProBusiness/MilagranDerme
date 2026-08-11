@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
   assinarAtribuicao, verificarAtribuicao, NOME_COOKIE_ATRIBUICAO,
-  JANELA_ATRIBUICAO_DIAS, type Atribuicao,
+  JANELA_ATRIBUICAO_DIAS, TAMANHO_MINIMO_SEGREDO, segredoDeAtribuicao,
+  type Atribuicao,
 } from '@/lib/atribuicao'
 
 const SEGREDO = 'a'.repeat(64)
@@ -64,5 +65,48 @@ describe('cookie de atribuicao', () => {
     const semUtm: Atribuicao = { slug: 'ana', em: base.em, utmSource: null, utmMedium: null, utmCampaign: null }
     expect(verificarAtribuicao(assinarAtribuicao(semUtm, SEGREDO), SEGREDO,
       new Date('2026-08-12T12:00:00Z'))).toEqual(semUtm)
+  })
+})
+
+describe('leitura do segredo (segredoDeAtribuicao)', () => {
+  const original = process.env.ATRIBUICAO_SECRET
+  afterEach(() => {
+    if (original === undefined) delete process.env.ATRIBUICAO_SECRET
+    else process.env.ATRIBUICAO_SECRET = original
+  })
+
+  it('devolve o segredo quando ele tem tamanho suficiente', () => {
+    process.env.ATRIBUICAO_SECRET = SEGREDO
+    expect(segredoDeAtribuicao()).toBe(SEGREDO)
+  })
+
+  it('estoura quando a variavel nao esta configurada', () => {
+    delete process.env.ATRIBUICAO_SECRET
+    expect(() => segredoDeAtribuicao()).toThrow(/ATRIBUICAO_SECRET ausente ou curta demais/)
+  })
+
+  it('estoura com segredo curto — "changeme" assina HMAC perfeitamente bem', () => {
+    // Este e o caso que o antigo `if (!segredo) throw` deixava passar: um
+    // segredo adivinhavel nao gera erro nenhum, so degrada em silencio a
+    // unica coisa que impede alguem de forjar a propria atribuicao.
+    process.env.ATRIBUICAO_SECRET = 'changeme'
+    expect(() => segredoDeAtribuicao()).toThrow(/minimo 32 caracteres/)
+  })
+
+  it('aceita exatamente o tamanho minimo e recusa um caractere a menos', () => {
+    process.env.ATRIBUICAO_SECRET = 'x'.repeat(TAMANHO_MINIMO_SEGREDO)
+    expect(segredoDeAtribuicao()).toHaveLength(TAMANHO_MINIMO_SEGREDO)
+    process.env.ATRIBUICAO_SECRET = 'x'.repeat(TAMANHO_MINIMO_SEGREDO - 1)
+    expect(() => segredoDeAtribuicao()).toThrow()
+  })
+
+  it('nunca ecoa o valor lido na mensagem de erro', () => {
+    process.env.ATRIBUICAO_SECRET = 'segredo-fraco-mas-identificavel'
+    expect(() => segredoDeAtribuicao()).toThrow()
+    try {
+      segredoDeAtribuicao()
+    } catch (e) {
+      expect((e as Error).message).not.toContain('segredo-fraco-mas-identificavel')
+    }
   })
 })

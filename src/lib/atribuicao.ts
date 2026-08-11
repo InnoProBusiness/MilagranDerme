@@ -9,6 +9,31 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 export const NOME_COOKIE_ATRIBUICAO = '__Host-mg_attr'
 export const JANELA_ATRIBUICAO_DIAS = 30
 
+/**
+ * 32 caracteres = os 32 bytes hex (64 chars) recomendados no .env.example
+ * com folga para outros formatos. O ponto e barrar o caso silencioso:
+ * createHmac('sha256', 'changeme') assina perfeitamente bem, e o HMAC que
+ * impede um dos dez representantes de creditar a si proprio vendas que nao
+ * fez vira adivinhavel sem nenhum sinal de erro.
+ */
+export const TAMANHO_MINIMO_SEGREDO = 32
+
+/**
+ * Unico ponto de leitura de ATRIBUICAO_SECRET. Falha ruidosamente na
+ * ausencia E no segredo fraco — nunca ecoa o valor lido.
+ */
+export function segredoDeAtribuicao(): string {
+  const segredo = process.env.ATRIBUICAO_SECRET ?? ''
+  if (segredo.length < TAMANHO_MINIMO_SEGREDO) {
+    throw new Error(
+      `ATRIBUICAO_SECRET ausente ou curta demais: minimo ${TAMANHO_MINIMO_SEGREDO} caracteres. ` +
+      'Gerar com: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))" ' +
+      '(ver .env.example).',
+    )
+  }
+  return segredo
+}
+
 export type Atribuicao = {
   slug: string
   /** Instante da primeira visita, em epoch ms. */
