@@ -53,7 +53,7 @@ A base de cálculo da comissão está implementada como **percentual sobre o sub
 
 ---
 
-## Tarefa 1: Scaffold Next.js com TypeScript strict e Vitest
+## Task 1: Scaffold Next.js com TypeScript strict e Vitest
 
 **Files:**
 - Create: `package.json` (substitui o atual), `tsconfig.json`, `next.config.ts`, `vitest.config.ts`, `.gitignore` (append), `src/app/layout.tsx`, `src/app/page.tsx`, `src/app/globals.css`
@@ -252,7 +252,7 @@ git commit -m "Scaffold Next.js 16 app with strict TypeScript and Vitest"
 
 ---
 
-## Tarefa 2: Postgres local e runner de migrations em SQL puro
+## Task 2: Postgres local e runner de migrations em SQL puro
 
 **Files:**
 - Create: `docker-compose.yml`, `migrations/1754900000000_extensoes.sql`, `.env.example` (append)
@@ -421,7 +421,7 @@ git commit -m "Add local Postgres, plain-SQL migration runner and typed db clien
 
 ---
 
-## Tarefa 3: Dinheiro em centavos e cálculo de comissão
+## Task 3: Dinheiro em centavos e cálculo de comissão
 
 **Files:**
 - Create: `src/lib/money.ts`
@@ -658,7 +658,7 @@ git commit -m "Add integer-cents money type with deterministic commission roundi
 
 ---
 
-## Tarefa 4: Limites de período em America/Sao_Paulo
+## Task 4: Limites de período em America/Sao_Paulo
 
 **Files:**
 - Create: `src/lib/tempo.ts`
@@ -817,7 +817,7 @@ git commit -m "Add America/Sao_Paulo period boundaries for goal and report group
 
 ---
 
-## Tarefa 5: Schema de produtos e kits
+## Task 5: Schema de produtos e kits
 
 **Files:**
 - Create: `migrations/1754900100000_produtos.sql`, `src/repositories/produtos.ts`
@@ -1029,7 +1029,7 @@ git commit -m "Add kits table with price and ANVISA fields, plus typed repositor
 
 ---
 
-## Tarefa 6: Schema de representantes
+## Task 6: Schema de representantes
 
 **Files:**
 - Create: `migrations/1754900200000_representantes.sql`, `src/repositories/representantes.ts`
@@ -1232,7 +1232,7 @@ git commit -m "Add representantes table with never-reused slug and per-rep commi
 
 ---
 
-## Tarefa 7: Cookie de atribuição assinado
+## Task 7: Cookie de atribuição assinado
 
 **Files:**
 - Create: `src/lib/atribuicao.ts`
@@ -1425,7 +1425,7 @@ git commit -m "Add HMAC-signed attribution cookie with 30-day window"
 
 ---
 
-## Tarefa 8: Página do representante em `/r/[slug]`
+## Task 8: Página do representante em `/r/[slug]`
 
 **Files:**
 - Create: `src/app/r/[slug]/page.tsx`, `src/app/r/[slug]/registrar-atribuicao.ts`
@@ -1692,7 +1692,7 @@ git commit -m "Add representative landing page with last-click attribution captu
 
 ---
 
-## Tarefa 9: Pedido com atribuição congelada
+## Task 9: Pedido com atribuição congelada
 
 **Files:**
 - Create: `migrations/1754900300000_pedidos.sql`, `src/repositories/pedidos.ts`
