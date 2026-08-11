@@ -94,4 +94,57 @@ describe('repositorio de representantes', () => {
       }).execute(),
     ).rejects.toThrow(/rep_percentual_valido/)
   })
+
+  it('rejeita slug longo demais para caber num link ditado por telefone', async () => {
+    await expect(
+      getDb().insertInto('representantes').values({
+        slug: 'a'.repeat(300), codigo: 'LONGO', nome: 'Slug Longo',
+        email: 'longo@exemplo.com', percentual_comissao: '20.00', ativo: true,
+      }).execute(),
+    ).rejects.toThrow(/rep_slug_tamanho/)
+  })
+
+  // O indice unico sozinho so impede duas linhas com o mesmo slug ao mesmo
+  // tempo. Sem o trigger, renomear o slug de um representante desligado
+  // liberava o valor antigo para o proximo cadastro — e todo link ainda em
+  // circulacao passava a creditar outra pessoa.
+  describe('trigger que trava a identidade publica contra UPDATE', () => {
+    it('rejeita alterar o slug de um representante ja cadastrado', async () => {
+      await expect(
+        getDb().updateTable('representantes')
+          .set({ slug: 'maria-nova' }).where('slug', '=', 'maria').execute(),
+      ).rejects.toThrow(/rep_identidade_imutavel: coluna slug/)
+    })
+
+    it('rejeita alterar o codigo de cupom de um representante ja cadastrado', async () => {
+      await expect(
+        getDb().updateTable('representantes')
+          .set({ codigo: 'MARIA2' }).where('slug', '=', 'maria').execute(),
+      ).rejects.toThrow(/rep_identidade_imutavel: coluna codigo/)
+    })
+
+    it('permite ao admin editar nome e percentual — o trigger nao pode travar o cadastro', async () => {
+      await getDb().updateTable('representantes')
+        .set({ nome: 'Maria Silva', percentual_comissao: '25.50' })
+        .where('slug', '=', 'maria').execute()
+
+      const r = await buscarRepresentanteAtivoPorSlug('maria')
+      expect(r?.nome).toBe('Maria Silva')
+      expect(r?.percentualComissao).toBe(25.5)
+    })
+
+    it('permite desativar o representante e trocar email, foto, cidade e estado', async () => {
+      await getDb().updateTable('representantes')
+        .set({
+          ativo: false, email: 'maria.nova@exemplo.com',
+          foto_url: null, cidade: 'Olinda', estado: 'PE', whatsapp: '81999999999',
+        })
+        .where('slug', '=', 'maria').execute()
+
+      const linha = await getDb().selectFrom('representantes')
+        .selectAll().where('slug', '=', 'maria').executeTakeFirstOrThrow()
+      expect(linha.ativo).toBe(false)
+      expect(linha.cidade).toBe('Olinda')
+    })
+  })
 })
