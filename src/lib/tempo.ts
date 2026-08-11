@@ -23,18 +23,31 @@ function civilBR(instante: Date): Civil {
 
 /**
  * Encontra o instante UTC correspondente a uma data/hora civil de Sao Paulo.
- * Sao Paulo nao observa horario de verao desde 2019, mas resolver por
- * aproximacao sucessiva mantem a funcao correta para datas historicas e
- * caso a politica volte a mudar.
+ * Usa aproximacao sucessiva para resolver a ambiguidade causada por mudancas de horario de verao.
+ * Quando a data/hora civil solicitada nao existe (na transicao de primavera),
+ * retorna o primeiro instante valido depois da lacuna horaria.
  */
 function instanteDeCivilBR(ano: number, mes: number, dia: number, hora = 0, minuto = 0, segundo = 0, ms = 0): Date {
   let palpite = Date.UTC(ano, mes - 1, dia, hora, minuto, segundo, ms)
+  let converged = false
   for (let i = 0; i < 3; i++) {
     const c = civilBR(new Date(palpite))
     const obtido = Date.UTC(c.ano, c.mes - 1, c.dia, c.hora, c.minuto, c.segundo, ms)
     const alvo = Date.UTC(ano, mes - 1, dia, hora, minuto, segundo, ms)
-    if (obtido === alvo) break
+    if (obtido === alvo) {
+      converged = true
+      break
+    }
     palpite += alvo - obtido
+  }
+  // When civil time does not exist (spring-forward gap), resolve forward to the first valid instant.
+  if (!converged) {
+    const c = civilBR(new Date(palpite))
+    const obtido = Date.UTC(c.ano, c.mes - 1, c.dia, c.hora, c.minuto, c.segundo, ms)
+    const alvo = Date.UTC(ano, mes - 1, dia, hora, minuto, segundo, ms)
+    if (obtido < alvo) {
+      palpite += alvo - obtido
+    }
   }
   return new Date(palpite)
 }
@@ -49,6 +62,13 @@ export function inicioDoMesBR(referencia: Date): Date {
   return instanteDeCivilBR(c.ano, c.mes, 1)
 }
 
+/**
+ * Retorna o ultimo instante do mes: um millisegundo antes da meia-noite BRT do dia 1 do proximo mes.
+ * CUIDADO: este resultado eh valido apenas em precisao de millisegundos (JavaScript Date).
+ * Para queries SQL em timestamptz (precisao de microsegundos), use a forma semi-aberta:
+ * `>= inicioDoMesBR AND < instanteDeCivilBR(proximoAno, proximoMes, 1)`
+ * em vez de `<= fimDoMesBR`.
+ */
 export function fimDoMesBR(referencia: Date): Date {
   const c = civilBR(referencia)
   const proximoMes = c.mes === 12 ? 1 : c.mes + 1
