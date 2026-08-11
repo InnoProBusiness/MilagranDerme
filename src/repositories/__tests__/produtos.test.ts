@@ -57,6 +57,28 @@ describe('repositorio de produtos', () => {
     ).rejects.toThrow(/kits_slug_unico/)
   })
 
+  it('atualiza atualizado_em a cada UPDATE, sem mexer em criado_em', async () => {
+    // A coluna tinha DEFAULT now() e nenhum trigger: marcava a criacao e
+    // ficava parada ali para sempre. Semear com data antiga torna o teste
+    // deterministico — nao depende de dois now() caírem em milissegundos
+    // diferentes.
+    const antigo = new Date('2020-01-01T00:00:00.000Z')
+    await getDb().insertInto('kits').values({
+      slug: 'kit-carimbo', nome: 'Carimbo', preco_centavos: 1000, unidades: 1,
+      sku: 'MG-CARIMBO', ordem: 9, ativo: true, criado_em: antigo, atualizado_em: antigo,
+    }).execute()
+
+    await getDb().updateTable('kits')
+      // Tenta gravar uma data velha de proposito: o trigger tem que vencer.
+      .set({ preco_centavos: 2000, atualizado_em: antigo })
+      .where('slug', '=', 'kit-carimbo').execute()
+
+    const l = await getDb().selectFrom('kits').select(['criado_em', 'atualizado_em'])
+      .where('slug', '=', 'kit-carimbo').executeTakeFirstOrThrow()
+    expect(l.criado_em.getTime()).toBe(antigo.getTime())
+    expect(l.atualizado_em.getTime()).toBeGreaterThan(antigo.getTime())
+  })
+
   it('impede preco zero ou negativo', async () => {
     await expect(
       getDb().insertInto('kits').values({

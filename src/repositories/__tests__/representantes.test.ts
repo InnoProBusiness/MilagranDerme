@@ -8,7 +8,7 @@ import { buscarRepresentanteAtivoPorSlug } from '@/repositories/representantes'
 // os arquivos em paralelo — um apaga as linhas que o outro acabou de
 // inserir. Escopar por slug torna os dois arquivos independentes mesmo
 // rodando ao mesmo tempo contra o mesmo Postgres real.
-const SLUGS_PROPRIOS = ['maria', 'joao', 'ana'] as const
+const SLUGS_PROPRIOS = ['maria', 'joao', 'ana', 'rep-carimbo'] as const
 
 async function semear() {
   const db = getDb()
@@ -131,6 +131,30 @@ describe('repositorio de representantes', () => {
       const r = await buscarRepresentanteAtivoPorSlug('maria')
       expect(r?.nome).toBe('Maria Silva')
       expect(r?.percentualComissao).toBe(25.5)
+    })
+
+    it('atualiza atualizado_em a cada UPDATE, sem mexer em criado_em', async () => {
+      // Mesma correcao aplicada a kits: a coluna so tinha DEFAULT now(),
+      // entao marcava a criacao e mentia dali em diante. Numa tabela em que
+      // uma edicao muda quanto alguem recebe, a data da ultima alteracao e
+      // auditoria.
+      const antigo = new Date('2020-01-01T00:00:00.000Z')
+      await getDb().insertInto('representantes').values({
+        slug: 'rep-carimbo', codigo: 'REPCARIMBO', nome: 'Carimbo',
+        email: 'carimbo@exemplo.com', percentual_comissao: '20.00', ativo: true,
+        criado_em: antigo, atualizado_em: antigo,
+      }).execute()
+
+      await getDb().updateTable('representantes')
+        // Data velha informada de proposito: o trigger tem que sobrescrever.
+        .set({ percentual_comissao: '30.00', atualizado_em: antigo })
+        .where('slug', '=', 'rep-carimbo').execute()
+
+      const l = await getDb().selectFrom('representantes')
+        .select(['criado_em', 'atualizado_em'])
+        .where('slug', '=', 'rep-carimbo').executeTakeFirstOrThrow()
+      expect(l.criado_em.getTime()).toBe(antigo.getTime())
+      expect(l.atualizado_em.getTime()).toBeGreaterThan(antigo.getTime())
     })
 
     it('permite desativar o representante e trocar email, foto, cidade e estado', async () => {

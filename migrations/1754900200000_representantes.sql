@@ -46,7 +46,12 @@ CREATE UNIQUE INDEX rep_email_unico  ON representantes (lower(email));
 -- pelo admin (nome, email, whatsapp, percentual_comissao, ativo, foto_url,
 -- cidade, estado). IS DISTINCT FROM, e nao <>, porque <> devolve NULL quando
 -- um dos lados e NULL e a comparacao passaria batida.
-CREATE FUNCTION rep_impedir_alteracao_identidade() RETURNS trigger AS $$
+--
+-- O mesmo trigger mantem atualizado_em: sem isso a coluna ficaria parada na
+-- data de criacao para sempre (ver kits_tocar_atualizado_em). Numa tabela em
+-- que uma edicao muda quanto uma pessoa recebe, "quando isso mudou" e
+-- informacao de auditoria, nao enfeite.
+CREATE FUNCTION rep_antes_de_atualizar() RETURNS trigger AS $$
 BEGIN
   IF NEW.slug IS DISTINCT FROM OLD.slug THEN
     RAISE EXCEPTION 'rep_identidade_imutavel: coluna slug nao pode ser alterada apos o cadastro (o link antigo continua circulando)';
@@ -54,15 +59,16 @@ BEGIN
   IF NEW.codigo IS DISTINCT FROM OLD.codigo THEN
     RAISE EXCEPTION 'rep_identidade_imutavel: coluna codigo nao pode ser alterada apos o cadastro (o cupom antigo continua circulando)';
   END IF;
+  NEW.atualizado_em := now();
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER rep_identidade_imutavel_trg
+CREATE TRIGGER rep_antes_de_atualizar_trg
   BEFORE UPDATE ON representantes
   FOR EACH ROW
-  EXECUTE FUNCTION rep_impedir_alteracao_identidade();
+  EXECUTE FUNCTION rep_antes_de_atualizar();
 
 -- Down Migration
 DROP TABLE representantes;
-DROP FUNCTION rep_impedir_alteracao_identidade();
+DROP FUNCTION rep_antes_de_atualizar();
