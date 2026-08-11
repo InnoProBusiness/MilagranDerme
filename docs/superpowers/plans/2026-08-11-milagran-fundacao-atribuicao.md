@@ -828,7 +828,7 @@ git commit -m "Add America/Sao_Paulo period boundaries for goal and report group
 - Consumes: `getDb()` da Tarefa 2, `Centavos`/`deInteiro` da Tarefa 3
 - Produces:
   - `listarKitsAtivos(): Promise<Kit[]>`
-  - `buscarKitPorSlug(slug: string): Promise<Kit | null>`
+  - `buscarKitAtivoPorSlug(slug: string): Promise<Kit | null>`
   - `type Kit = { id: string; slug: string; nome: string; descricao: string; precoCentavos: Centavos; unidades: number; sku: string; ativo: boolean; ordem: number }`
 
 - [ ] **Step 1: Escrever a migration**
@@ -880,14 +880,18 @@ npm run db:types
 // src/repositories/__tests__/produtos.test.ts
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb, closeDb } from '@/lib/db'
-import { listarKitsAtivos, buscarKitPorSlug } from '@/repositories/produtos'
+import { listarKitsAtivos, buscarKitAtivoPorSlug } from '@/repositories/produtos'
 
 async function semear() {
   const db = getDb()
   await db.deleteFrom('kits').execute()
   await db.insertInto('kits').values([
     { slug: 'kit-1', nome: 'Kit 1', preco_centavos: 19990, unidades: 1, sku: 'MG-K1', ordem: 1, ativo: true },
-    { slug: 'kit-3', nome: 'Kit 3', preco_centavos: 53900, unidades: 3, sku: 'MG-K3', ordem: 2, ativo: true },
+    {
+      slug: 'kit-3', nome: 'Kit 3', descricao: 'Kit com 3 unidades do creme Milagran',
+      preco_centavos: 53900, unidades: 3, sku: 'MG-K3', anvisa_registro: '25351.000123/2024-01',
+      ordem: 2, ativo: true,
+    },
     { slug: 'kit-antigo', nome: 'Kit descontinuado', preco_centavos: 9990, unidades: 1, sku: 'MG-OLD', ordem: 3, ativo: false },
   ]).execute()
 }
@@ -908,17 +912,20 @@ describe('repositorio de produtos', () => {
   })
 
   it('busca por slug', async () => {
-    const kit = await buscarKitPorSlug('kit-3')
+    const kit = await buscarKitAtivoPorSlug('kit-3')
     expect(kit?.nome).toBe('Kit 3')
     expect(kit?.unidades).toBe(3)
+    expect(kit?.sku).toBe('MG-K3')
+    expect(kit?.descricao).toBe('Kit com 3 unidades do creme Milagran')
+    expect(kit?.anvisaRegistro).toBe('25351.000123/2024-01')
   })
 
   it('devolve null para slug inexistente', async () => {
-    expect(await buscarKitPorSlug('nao-existe')).toBeNull()
+    expect(await buscarKitAtivoPorSlug('nao-existe')).toBeNull()
   })
 
   it('nao devolve kit inativo na busca por slug', async () => {
-    expect(await buscarKitPorSlug('kit-antigo')).toBeNull()
+    expect(await buscarKitAtivoPorSlug('kit-antigo')).toBeNull()
   })
 
   it('impede dois kits com o mesmo slug', async () => {
@@ -953,7 +960,9 @@ Esperado: FALHA com `Cannot find module '@/repositories/produtos'`.
 
 ```ts
 // src/repositories/produtos.ts
+import type { Selectable } from 'kysely'
 import { getDb } from '@/lib/db'
+import type { Kits } from '@/lib/db-types'
 import { deInteiro, type Centavos } from '@/lib/money'
 
 export type Kit = {
@@ -969,13 +978,7 @@ export type Kit = {
   ordem: number
 }
 
-type LinhaKit = {
-  id: string; slug: string; nome: string; descricao: string
-  preco_centavos: number; unidades: number; sku: string
-  anvisa_registro: string | null; ativo: boolean; ordem: number
-}
-
-function paraKit(l: LinhaKit): Kit {
+function paraKit(l: Selectable<Kits>): Kit {
   return {
     id: l.id,
     slug: l.slug,
@@ -997,17 +1000,17 @@ export async function listarKitsAtivos(): Promise<Kit[]> {
     .where('ativo', '=', true)
     .orderBy('ordem', 'asc')
     .execute()
-  return linhas.map((l) => paraKit(l as LinhaKit))
+  return linhas.map((l) => paraKit(l))
 }
 
-export async function buscarKitPorSlug(slug: string): Promise<Kit | null> {
+export async function buscarKitAtivoPorSlug(slug: string): Promise<Kit | null> {
   const linha = await getDb()
     .selectFrom('kits')
     .selectAll()
     .where('slug', '=', slug)
     .where('ativo', '=', true)
     .executeTakeFirst()
-  return linha ? paraKit(linha as LinhaKit) : null
+  return linha ? paraKit(linha) : null
 }
 ```
 

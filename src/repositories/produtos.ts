@@ -1,4 +1,6 @@
+import type { Selectable } from 'kysely'
 import { getDb } from '@/lib/db'
+import type { Kits } from '@/lib/db-types'
 import { deInteiro, type Centavos } from '@/lib/money'
 
 export type Kit = {
@@ -14,13 +16,7 @@ export type Kit = {
   ordem: number
 }
 
-type LinhaKit = {
-  id: string; slug: string; nome: string; descricao: string
-  preco_centavos: number; unidades: number; sku: string
-  anvisa_registro: string | null; ativo: boolean; ordem: number
-}
-
-function paraKit(l: LinhaKit): Kit {
+function paraKit(l: Selectable<Kits>): Kit {
   return {
     id: l.id,
     slug: l.slug,
@@ -42,15 +38,15 @@ export async function listarKitsAtivos(): Promise<Kit[]> {
     .where('ativo', '=', true)
     .orderBy('ordem', 'asc')
     .execute()
-  return linhas.map((l) => paraKit(l as LinhaKit))
+  return linhas.map((l) => paraKit(l))
 }
 
-export async function buscarKitPorSlug(slug: string): Promise<Kit | null> {
+export async function buscarKitAtivoPorSlug(slug: string): Promise<Kit | null> {
   const linha = await getDb()
     .selectFrom('kits')
     .selectAll()
     .where('slug', '=', slug)
     .where('ativo', '=', true)
     .executeTakeFirst()
-  return linha ? paraKit(linha as LinhaKit) : null
+  return linha ? paraKit(linha) : null
 }
