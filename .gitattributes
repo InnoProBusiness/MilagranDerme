@@ -1,0 +1,18 @@
+# Normalize line endings so Windows and Linux checkouts produce identical
+# diffs. Without this, every file touched on Windows flips to CRLF and shows
+# up as fully rewritten in review.
+* text=auto eol=lf
+
+# Binary assets must never be normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff  binary
+*.woff2 binary
+
+# Generated — collapse in diffs and exclude from language stats.
+package-lock.json  -diff linguist-generated
+src/lib/db-types.ts -diff linguist-generated
