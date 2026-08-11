@@ -261,11 +261,11 @@ git commit -m "Scaffold Next.js 16 app with strict TypeScript and Vitest"
 
 **Interfaces:**
 - Consumes: projeto compilável da Tarefa 1
-- Produces: `getDb(): Kysely<DB>` singleton; banco local em `postgres://milagran:milagran@localhost:5433/milagran`; convenção de migration em SQL puro
+- Produces: `getDb(): Kysely<DB>` singleton; banco local em `postgres://milagran:milagran@localhost:55432/milagran`; convenção de migration em SQL puro
 
 - [ ] **Step 1: Escrever o docker-compose**
 
-Porta 5433 e não 5432 para não colidir com um Postgres já instalado na máquina.
+Porta 55432, deliberadamente fora da faixa comum de Postgres — 5432 e 5433 estão ambas frequentemente ocupadas em máquinas de desenvolvedor (a segunda, inclusive, por instalações nativas do Postgres que escolhem 5433 pelo mesmo motivo).
 
 ```yaml
 services:
@@ -276,7 +276,7 @@ services:
       POSTGRES_PASSWORD: milagran
       POSTGRES_DB: milagran
     ports:
-      - "5433:5432"
+      - "55432:5432"
     volumes:
       - milagran_pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -299,8 +299,8 @@ cat >> .env.example <<'EOF'
 # Producao: string COM POOLING do provedor. A string direta (sem pooler)
 # so deve ser usada por node-pg-migrate, nunca pela aplicacao — sem pooler,
 # trafego de campanha estoura max_connections e a loja devolve 500 no pico.
-DATABASE_URL=postgres://milagran:milagran@localhost:5433/milagran
-DIRECT_URL=postgres://milagran:milagran@localhost:5433/milagran
+DATABASE_URL=postgres://milagran:milagran@localhost:55432/milagran
+DIRECT_URL=postgres://milagran:milagran@localhost:55432/milagran
 
 # Segredo para assinar o cookie de atribuicao (HMAC).
 # Gerar com: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"

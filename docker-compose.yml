@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: milagran
       POSTGRES_DB: milagran
     ports:
-      - "5433:5432"
+      - "55432:5432"
     volumes:
       - milagran_pgdata:/var/lib/postgresql/data
     healthcheck:

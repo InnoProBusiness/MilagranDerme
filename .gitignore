@@ -23,7 +23,7 @@ next-env.d.ts
 # Scratch space for the build process — never commit
 .superpowers/
 
-# Local Docker Compose override (e.g. remapping the db port when a native
-# Postgres already occupies 5433 on this machine). Never commit — the
+# Local Docker Compose override (e.g. remapping the db port if something
+# else already occupies it on a given machine). Never commit — the
 # canonical port for the team lives only in docker-compose.yml.
 docker-compose.override.yml
