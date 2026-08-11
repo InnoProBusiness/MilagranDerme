@@ -84,6 +84,9 @@ describe('criacao de pedido com atribuicao congelada', () => {
     expect(p.percentualComissaoSnapshot).toBe(20)
     expect(p.utmSource).toBe('instagram')
     expect(p.totalCentavos).toBe(53973)
+    // status e tipado como PedidoStatus (o union gerado do ENUM), nao
+    // string: e o que a maquina de estados do Plano 3 usa para exaustividade.
+    expect(p.status).toBe('pendente')
   })
 
   it('alterar o percentual do representante NAO muda pedido ja criado', async () => {

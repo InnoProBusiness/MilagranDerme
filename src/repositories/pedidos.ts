@@ -1,13 +1,15 @@
 import type { Selectable } from 'kysely'
 import { getDb } from '@/lib/db'
-import type { Pedidos, OrigemAtribuicao } from '@/lib/db-types'
+import type { Pedidos, OrigemAtribuicao, PedidoStatus } from '@/lib/db-types'
 import { deInteiro, type Centavos } from '@/lib/money'
 
-// kysely-codegen ja gera um union literal 'link' | 'cupom' | 'casa' |
-// 'rep_inativo' a partir do ENUM origem_atribuicao do Postgres (ver
-// migrations/1754900300000_pedidos.sql). Reexportar em vez de redeclarar
-// evita que o tipo do repositorio e o ENUM do banco divirjam com o tempo.
-export type { OrigemAtribuicao }
+// kysely-codegen ja gera unions literais a partir dos ENUMs do Postgres
+// (ver migrations/1754900300000_pedidos.sql): origem_atribuicao vira
+// 'link' | 'cupom' | 'casa' | 'rep_inativo' e pedido_status vira os oito
+// estados. Reexportar em vez de redeclarar evita que o tipo do repositorio
+// e o ENUM do banco divirjam com o tempo — e e o que da a maquina de
+// estados do Plano 3 uma checagem de exaustividade de verdade no switch.
+export type { OrigemAtribuicao, PedidoStatus }
 
 export type EntradaPedido = {
   origem: OrigemAtribuicao
@@ -24,7 +26,7 @@ export type EntradaPedido = {
 export type Pedido = {
   id: string
   numero: number
-  status: string
+  status: PedidoStatus
   origem: OrigemAtribuicao
   representanteId: string | null
   percentualComissaoSnapshot: number | null
