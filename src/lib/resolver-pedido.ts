@@ -13,15 +13,6 @@ export type AtribuicaoDoPedido = Pick<
   'origem' | 'representanteId' | 'percentualComissao' | 'utmSource' | 'utmMedium' | 'utmCampaign'
 >
 
-const VENDA_DA_CASA: AtribuicaoDoPedido = {
-  origem: 'casa',
-  representanteId: null,
-  percentualComissao: null,
-  utmSource: null,
-  utmMedium: null,
-  utmCampaign: null,
-}
-
 /**
  * Traduz o cookie do navegador na atribuicao AUTORITATIVA que sera congelada
  * na linha do pedido. Este e o segundo tempo do mecanismo: o proxy grava o
@@ -47,14 +38,25 @@ const VENDA_DA_CASA: AtribuicaoDoPedido = {
  *
  * A hierarquia completa (cupom > last click > first click) so se fecha no
  * Plano 2: o cupom informado no checkout tem prioridade sobre este
- * resultado e produz origem 'cupom'.
+ * resultado e produz origem 'cupom'. Cada chamada retorna um objeto fresco:
+ * se o cupom mutasse este resultado em lugar, corrompia a constante e todos
+ * os proximos pedidos, atribuindo a representantes errados em silencio.
  */
 export async function resolverAtribuicaoDoPedido(
   cookieBruto: string | null,
   segredo: string,
   agora: Date = new Date(),
-): Promise<AtribuicaoDoPedido> {
-  if (!cookieBruto) return VENDA_DA_CASA
+): Promise<Readonly<AtribuicaoDoPedido>> {
+  if (!cookieBruto) {
+    return {
+      origem: 'casa',
+      representanteId: null,
+      percentualComissao: null,
+      utmSource: null,
+      utmMedium: null,
+      utmCampaign: null,
+    }
+  }
 
   const atribuicao = verificarAtribuicao(cookieBruto, segredo, agora)
   if (!atribuicao) {
@@ -65,7 +67,14 @@ export async function resolverAtribuicaoDoPedido(
     console.warn('[atribuicao] cookie descartado na criacao do pedido', {
       motivo: 'assinatura_invalida_ou_expirado',
     })
-    return VENDA_DA_CASA
+    return {
+      origem: 'casa',
+      representanteId: null,
+      percentualComissao: null,
+      utmSource: null,
+      utmMedium: null,
+      utmCampaign: null,
+    }
   }
 
   const utm = {

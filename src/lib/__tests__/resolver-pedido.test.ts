@@ -54,6 +54,13 @@ describe('resolucao da atribuicao autoritativa do pedido', () => {
     })
   })
 
+  it('chamadas separadas que retornam casa nao compartilham referencia de objeto', async () => {
+    const a = await resolverAtribuicaoDoPedido(null, SEGREDO)
+    const b = await resolverAtribuicaoDoPedido(null, SEGREDO)
+    expect(a).toEqual(b)
+    expect(a).not.toBe(b)
+  })
+
   it('cookie que nao verifica e tratado como venda da casa, sem UTM', async () => {
     // Assinado com OUTRO segredo: nada dentro dele e confiavel, nem os UTM.
     const forjado = assinarAtribuicao(
