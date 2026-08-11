@@ -91,7 +91,7 @@ Substitui o atual. `pdf-lib` permanece porque `api/candidatura.js` ainda depende
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d",
-    "db:migrate": "node-pg-migrate -m migrations up",
+    "db:migrate": "node-pg-migrate -d DIRECT_URL -m migrations up",
     "db:types": "kysely-codegen --out-file src/lib/db-types.ts"
   },
   "dependencies": {
@@ -261,7 +261,7 @@ git commit -m "Scaffold Next.js 16 app with strict TypeScript and Vitest"
 
 **Interfaces:**
 - Consumes: projeto compilável da Tarefa 1
-- Produces: `getDb(): Kysely<DB>` singleton; banco local em `postgres://milagran:milagran@localhost:55432/milagran`; convenção de migration em SQL puro
+- Produces: `getDb(): Kysely<DB>` singleton; banco local em `postgres://milagran:milagran@localhost:55432/milagran`; convenção de migration em SQL puro; `db:migrate` aponta explicitamente para `DIRECT_URL` (`-d DIRECT_URL`, nome da env var, nunca a URL embutida), nunca para `DATABASE_URL`, para que DDL de migration não rode através do pooler em produção
 
 - [ ] **Step 1: Escrever o docker-compose**
 

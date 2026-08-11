@@ -11,7 +11,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d",
-    "db:migrate": "node-pg-migrate -m migrations up",
+    "db:migrate": "node-pg-migrate -d DIRECT_URL -m migrations up",
     "db:types": "kysely-codegen --out-file src/lib/db-types.ts"
   },
   "dependencies": {
