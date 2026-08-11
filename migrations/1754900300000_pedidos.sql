@@ -52,6 +52,15 @@ CREATE TABLE pedidos (
     OR
     (representante_id IS NOT NULL AND percentual_comissao_snapshot IS NOT NULL)
   ),
+  -- representantes.rep_percentual_valido NAO cobre esta coluna: o snapshot
+  -- vem da aplicacao, nao e copiado pelo banco. Sem este CHECK o banco
+  -- aceitava 500.00 — e como pedido_atribuicao_imutavel_trg proibe UPDATE
+  -- nesta coluna, um valor errado gravado aqui fica permanentemente
+  -- incorrigivel.
+  CONSTRAINT pedido_percentual_snapshot_valido CHECK (
+    percentual_comissao_snapshot IS NULL
+    OR (percentual_comissao_snapshot >= 0 AND percentual_comissao_snapshot <= 100)
+  ),
   -- 'casa' e 'rep_inativo' nunca tem representante atribuido.
   CONSTRAINT pedido_origem_coerente CHECK (
     (origem IN ('casa', 'rep_inativo') AND representante_id IS NULL)

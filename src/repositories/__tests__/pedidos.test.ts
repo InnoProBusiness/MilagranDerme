@@ -128,6 +128,18 @@ describe('criacao de pedido com atribuicao congelada', () => {
     })).rejects.toThrow(/pedido_origem_coerente/)
   })
 
+  it('o banco rejeita percentual de comissao fora de [0,100]', async () => {
+    // O snapshot vem da aplicacao (nao e copiado do cadastro pelo banco),
+    // entao rep_percentual_valido nao alcanca esta coluna. E como o trigger
+    // de imutabilidade proibe UPDATE nela, um 500.00 gravado aqui ficaria
+    // incorrigivel para sempre.
+    await expect(criar({
+      origem: 'link', representanteId: idMaria, percentualComissao: 500,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+    })).rejects.toThrow(/pedido_percentual_snapshot_valido/)
+  })
+
   it('o banco rejeita total que nao fecha com as parcelas', async () => {
     await expect(
       getDb().insertInto('pedidos').values({
