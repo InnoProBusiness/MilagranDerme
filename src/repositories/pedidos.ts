@@ -11,6 +11,35 @@ import { deInteiro, type Centavos } from '@/lib/money'
 // estados do Plano 3 uma checagem de exaustividade de verdade no switch.
 export type { OrigemAtribuicao, PedidoStatus }
 
+/**
+ * O preco que o chamador enviou nao bate com kits.preco_centavos lido dentro
+ * da transacao — o preco mudou entre a vitrine e o checkout.
+ *
+ * CLASSE, e nao um prefixo de string: a rota (src/app/api/pedidos/route.ts)
+ * mapeia isto para um 422 com mensagem curada, e nenhum teste percebia se
+ * alguem reescrevesse a frase — o `mensagem.startsWith('preco_divergente')`
+ * simplesmente deixava de casar e o comprador passava a ver 500. Com
+ * `instanceof`, o vinculo e verificado pelo compilador. Mesmo padrao de
+ * RecusaDeCupom.
+ *
+ * Os tres numeros ficam em campos proprios (alem da mensagem) para que o log
+ * do servidor tenha o diagnostico completo sem que nada disso precise ser
+ * ecoado ao cliente.
+ */
+export class PrecoDivergenteError extends Error {
+  constructor(
+    readonly kitId: string,
+    readonly precoCatalogoCentavos: number,
+    readonly precoEnviadoCentavos: number,
+  ) {
+    super(
+      `preco_divergente: catalogo do kit ${kitId} tem ${precoCatalogoCentavos} ` +
+        `centavos, mas o checkout enviou ${precoEnviadoCentavos}`,
+    )
+    this.name = 'PrecoDivergenteError'
+  }
+}
+
 export type ItemDoPedido = {
   kitId: string
   quantidade: number
@@ -172,9 +201,8 @@ export async function criarPedido(e: EntradaPedido, trx?: Transaction<DB>): Prom
       // defeito por si so, entao isto lanca em vez de sobrescrever em
       // silencio com o valor do catalogo ou com o valor do chamador.
       if (item.precoUnitarioCentavos !== kit.preco_centavos) {
-        throw new Error(
-          `preco_divergente: catalogo do kit ${item.kitId} tem ${kit.preco_centavos} ` +
-            `centavos, mas o checkout enviou ${item.precoUnitarioCentavos}`,
+        throw new PrecoDivergenteError(
+          item.kitId, kit.preco_centavos, item.precoUnitarioCentavos,
         )
       }
 

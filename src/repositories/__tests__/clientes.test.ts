@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { sql } from 'kysely'
 import { getDb, closeDb } from '@/lib/db'
-import { salvarClienteComEndereco } from '@/repositories/clientes'
+import { salvarClienteComEndereco, CpfDivergenteError } from '@/repositories/clientes'
 
 // E-mails PROPRIOS deste arquivo, como slug/codigo em cupons.test.ts e em
 // pedidos-route.test.ts. O Vitest roda os arquivos de teste em paralelo
@@ -118,7 +118,9 @@ describe('clientes', () => {
         { ...CLIENTE, email: EMAIL_CLIENTE_MINUSCULO, cpf: CPF_DIVERGENTE },
         ENDERECO,
       ),
-    ).rejects.toThrow(/cpf_divergente/)
+      // O contrato e o TIPO do erro, nao o texto: a rota decide o codigo
+      // HTTP com `instanceof CpfDivergenteError`.
+    ).rejects.toThrow(CpfDivergenteError)
 
     const linha = await getDb().selectFrom('clientes')
       .select('cpf').where('id', '=', a.clienteId).executeTakeFirstOrThrow()

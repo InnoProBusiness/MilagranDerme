@@ -1,9 +1,36 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { sql } from 'kysely'
 import { getDb, closeDb } from '@/lib/db'
 import { POST } from '@/app/api/pedidos/route'
 import { assinarAtribuicao } from '@/lib/atribuicao'
 import { MAX_PEDIDOS_POR_JANELA } from '@/lib/rate-limit'
+import { deInteiro } from '@/lib/money'
+
+// Unico ponto mockado deste arquivo, e so a LEITURA do catalogo: e a unica
+// costura por onde da para reproduzir "o preco mudou entre a vitrine e o
+// checkout" de forma deterministica. A rota le kits FORA da transacao e
+// criarPedido le kits DE NOVO DENTRO dela; forcar um preco diferente na
+// primeira leitura faz a segunda divergir — que e exatamente o cenario que a
+// guarda de preco existe para pegar. O throw, a transacao e o mapeamento
+// para HTTP continuam sendo os de producao, sem stub nenhum.
+//
+// Com precoForcadoCentavos em null (o padrao, restaurado no afterEach) a
+// funcao real e chamada e todos os outros testes deste arquivo seguem
+// intactos. vi.hoisted porque vi.mock e icado para o topo do modulo, antes
+// de qualquer const deste arquivo existir.
+const catalogo = vi.hoisted(() => ({ precoForcadoCentavos: null as number | null }))
+
+vi.mock('@/repositories/produtos', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/repositories/produtos')>()
+  return {
+    ...real,
+    buscarKitAtivoPorSlug: async (slug: string) => {
+      const kit = await real.buscarKitAtivoPorSlug(slug)
+      if (!kit || catalogo.precoForcadoCentavos === null) return kit
+      return { ...kit, precoCentavos: deInteiro(catalogo.precoForcadoCentavos) }
+    },
+  }
+})
 
 const SEGREDO = 'a'.repeat(64)
 const COMPRADOR = {
@@ -182,6 +209,7 @@ describe('POST /api/pedidos', () => {
     process.env.ATRIBUICAO_SECRET = SEGREDO
   })
   beforeEach(semear)
+  afterEach(() => { catalogo.precoForcadoCentavos = null })
   afterAll(async () => { await closeDb() })
 
   it('cria o pedido e devolve numero e token', async () => {
@@ -372,6 +400,37 @@ describe('POST /api/pedidos', () => {
     expect(corpo).toEqual({ error: 'dados_invalidos' })
     expect(JSON.stringify(corpo).toLowerCase()).not.toContain('cpf')
     expect(JSON.stringify(corpo).toLowerCase()).not.toContain('divergente')
+  })
+
+  // NAO havia teste de rota para este mapeamento: pedidos.test.ts prova que
+  // criarPedido lanca, e mais nada. Enquanto a rota despachava por
+  // `mensagem.startsWith('preco_divergente')`, reescrever a frase do throw no
+  // repositorio fazia o comprador passar a receber 500 — com a suite inteira
+  // verde. Agora o despacho e por `instanceof PrecoDivergenteError` e este
+  // teste fecha o buraco pelo lado do HTTP.
+  it('DINHEIRO: preco divergente do catalogo vira 422 curado, sem vazar preco nem uuid', async () => {
+    const antes = await contarPedidos()
+    // O que a "vitrine" mostrou (1 centavo) deixou de bater com o catalogo.
+    catalogo.precoForcadoCentavos = 1
+
+    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+    expect(r.status).toBe(422)
+
+    // Corpo INTEIRO, nao so o codigo: a mensagem crua do throw carrega o
+    // uuid do kit, o preco do catalogo e o preco enviado, e nenhum dos tres
+    // pode aparecer aqui. Um toEqual exato quebra se alguem "so acrescentar
+    // um detalhe util" na resposta.
+    expect(await r.json()).toEqual({
+      error: 'dados_invalidos',
+      mensagem: 'O preco do produto mudou. Atualize a pagina e tente novamente.',
+    })
+
+    // E a transacao inteira reverteu: nenhum pedido e nenhum dado pessoal
+    // ficou para tras (salvarClienteComEndereco roda ANTES de criarPedido).
+    expect(await contarPedidos()).toBe(antes)
+    const clientes = await getDb().selectFrom('clientes').select('id')
+      .where(sql<boolean>`lower(email) = lower(${COMPRADOR.email})`).execute()
+    expect(clientes).toHaveLength(0)
   })
 
   it('rejeita quantidade acima do teto', async () => {

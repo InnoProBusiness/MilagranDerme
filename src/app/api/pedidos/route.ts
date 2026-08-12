@@ -1,9 +1,9 @@
 import { z } from 'zod'
 import { getDb } from '@/lib/db'
 import { buscarKitAtivoPorSlug } from '@/repositories/produtos'
-import { salvarClienteComEndereco } from '@/repositories/clientes'
+import { salvarClienteComEndereco, CpfDivergenteError } from '@/repositories/clientes'
 import { resgatarCupom } from '@/repositories/cupons'
-import { criarPedido } from '@/repositories/pedidos'
+import { criarPedido, PrecoDivergenteError } from '@/repositories/pedidos'
 import { resolverAtribuicaoDoPedido } from '@/lib/resolver-pedido'
 import { aplicarPrioridadeDoCupom } from '@/lib/montar-pedido'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
@@ -219,29 +219,36 @@ export async function POST(req: Request) {
 
     const mensagem = mensagemSeguraDoErro(e)
 
-    // cpf_divergente (salvarClienteComEndereco): NUNCA vira uma mensagem
+    // Os dois casos abaixo sao despachados por `instanceof`, nunca pelo
+    // texto da mensagem. Um `mensagem.startsWith('...')` amarra o codigo de
+    // status a uma string repetida em tres arquivos: reescrever a frase no
+    // repositorio faria a rota devolver 500 em vez de 422, em silencio e com
+    // a suite inteira verde. A classe da ao compilador o vinculo que a
+    // string nao dava — mesmo padrao de RecusaDeCupom acima.
+
+    // CpfDivergenteError (salvarClienteComEndereco): NUNCA vira uma mensagem
     // distinta de qualquer outro erro de validacao. Devolver um motivo
     // especifico aqui e um oraculo sem autenticacao — um POST com um e-mail
-    // real e QUALQUER CPF ja revela, pela resposta (422 "cpf_divergente" x
+    // real e QUALQUER CPF ja revela, pela resposta (um 422 especifico x
     // um 201 normal), que aquele e-mail pertence a um cliente cadastrado; e
     // uma segunda tentativa acertando o CPF por tentativa e erro cria um
     // pedido de verdade em nome de outra pessoa, com o endereco de quem
     // estiver atacando. A resposta tem que ser indistinguivel de qualquer
-    // outro 422 generico. O motivo especifico so vai para o log do
-    // servidor, via mensagemSeguraDoErro (nunca error.detail — ver o doc
-    // comment de salvarClienteComEndereco).
-    if (mensagem.startsWith('cpf_divergente')) {
+    // outro 422 generico — sem campo `mensagem`. O motivo especifico so vai
+    // para o log do servidor, via mensagemSeguraDoErro (nunca error.detail —
+    // ver o doc comment de salvarClienteComEndereco).
+    if (e instanceof CpfDivergenteError) {
       console.error('[pedidos] falha ao criar pedido:', mensagem)
       return Response.json({ error: 'dados_invalidos' }, { status: 422 })
     }
 
-    // preco_divergente (criarPedido): a mensagem CRUA do throw carrega o
+    // PrecoDivergenteError (criarPedido): a mensagem CRUA do throw carrega o
     // uuid do kit e os dois precos (o do catalogo e o que o checkout
     // enviou) — nenhum dos dois e seguro de ecoar ao cliente por padrao,
     // mesmo que hoje nenhum dos dois seja segredo por si so. Mensagem
     // curada e fixa, do mesmo jeito que mensagemDeRecusa (src/lib/cupom.ts)
     // ja faz para cupom recusado; a string bruta so vai para o log.
-    if (mensagem.startsWith('preco_divergente')) {
+    if (e instanceof PrecoDivergenteError) {
       console.error('[pedidos] falha ao criar pedido:', mensagem)
       return Response.json({
         error: 'dados_invalidos',

@@ -2,6 +2,28 @@ import { getDb } from '@/lib/db'
 import { sql, type Transaction } from 'kysely'
 import type { DB } from '@/lib/db-types'
 
+/**
+ * O CPF enviado nao bate com o CPF ja gravado para aquele e-mail.
+ *
+ * CLASSE, e nao um prefixo de string: quem trata isto (src/app/api/pedidos/route.ts)
+ * distingue este caso de uma falha de infraestrutura, e a diferenca entre 422
+ * e 500 nao pode depender de as duas pontas continuarem escrevendo a mesma
+ * palavra. Com `mensagem.startsWith('cpf_divergente')`, reescrever a frase
+ * aqui fazia a rota passar a responder 500 sem nenhum teste ficar vermelho.
+ * Mesmo padrao de RecusaDeCupom, que ja usava `instanceof` na rota.
+ *
+ * A mensagem nao carrega digito nenhum de CPF: ela existe para o log do
+ * servidor. A resposta ao cliente e deliberadamente o 422 generico (ver o
+ * comentario na rota — motivo especifico aqui seria um oraculo de existencia
+ * de cliente e de confirmacao de CPF, sem autenticacao nenhuma).
+ */
+export class CpfDivergenteError extends Error {
+  constructor() {
+    super('cpf_divergente: o CPF enviado nao bate com o CPF ja cadastrado para este e-mail')
+    this.name = 'CpfDivergenteError'
+  }
+}
+
 export type EntradaCliente = { nome: string; email: string; cpf: string; whatsapp: string }
 export type EntradaEndereco = {
   cep: string; rua: string; numero: string; complemento: string
@@ -49,9 +71,7 @@ export async function salvarClienteComEndereco(
     let clienteId: string
     if (existente) {
       if (existente.cpf !== c.cpf) {
-        throw new Error(
-          'cpf_divergente: o CPF enviado nao bate com o CPF ja cadastrado para este e-mail',
-        )
+        throw new CpfDivergenteError()
       }
       clienteId = existente.id
       await t.updateTable('clientes')

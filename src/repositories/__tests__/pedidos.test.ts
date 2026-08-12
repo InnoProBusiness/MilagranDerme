@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb, closeDb } from '@/lib/db'
-import { criarPedido, type EntradaPedido } from '@/repositories/pedidos'
+import { criarPedido, PrecoDivergenteError, type EntradaPedido } from '@/repositories/pedidos'
 import { centavos, deInteiro } from '@/lib/money'
 import { sql } from 'kysely'
 
@@ -394,7 +394,10 @@ describe('pedido com itens', () => {
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: precoAdulterado }],
-    })).rejects.toThrow(/preco_divergente/)
+      // O contrato e o TIPO do erro, nao o texto: a rota decide o codigo
+      // HTTP com `instanceof PrecoDivergenteError`, entao reescrever a frase
+      // do throw nao pode mais quebrar o mapeamento em silencio.
+    })).rejects.toThrow(PrecoDivergenteError)
 
     // A rejeicao precisa acontecer DENTRO da transacao, antes do COMMIT:
     // nenhum pedido pode sobrar gravado com um preco que nunca foi
