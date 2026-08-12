@@ -19,6 +19,8 @@ export type PedidoStatus = "aguardando_pagamento" | "cancelado" | "em_preparacao
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export type TipoDesconto = "fixo" | "percentual";
+
 export interface Clientes {
   atualizado_em: Generated<Timestamp>;
   cpf: string;
@@ -27,6 +29,28 @@ export interface Clientes {
   id: Generated<string>;
   nome: string;
   whatsapp: string;
+}
+
+export interface CupomUsos {
+  cliente_id: string;
+  criado_em: Generated<Timestamp>;
+  cupom_id: string;
+  id: Generated<string>;
+  pedido_id: string;
+}
+
+export interface Cupons {
+  ativo: Generated<boolean>;
+  codigo: string;
+  criado_em: Generated<Timestamp>;
+  expira_em: Timestamp | null;
+  id: Generated<string>;
+  inicia_em: Generated<Timestamp>;
+  limite_por_cliente: Generated<number>;
+  limite_total: number | null;
+  representante_id: string | null;
+  tipo: TipoDesconto;
+  valor: number;
 }
 
 export interface Enderecos {
@@ -71,6 +95,7 @@ export interface PedidoItens {
 export interface Pedidos {
   cliente_id: string | null;
   criado_em: Generated<Timestamp>;
+  cupom_id: string | null;
   desconto_centavos: Generated<number>;
   endereco_id: string | null;
   entregue_em: Timestamp | null;
@@ -113,6 +138,8 @@ export interface Representantes {
 
 export interface DB {
   clientes: Clientes;
+  cupom_usos: CupomUsos;
+  cupons: Cupons;
   enderecos: Enderecos;
   kits: Kits;
   pedido_itens: PedidoItens;
