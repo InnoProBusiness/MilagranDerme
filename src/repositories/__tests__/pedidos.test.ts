@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb, closeDb } from '@/lib/db'
 import { criarPedido, type EntradaPedido } from '@/repositories/pedidos'
-import { centavos } from '@/lib/money'
+import { centavos, deInteiro } from '@/lib/money'
+import { sql } from 'kysely'
 
 // Slug proprio deste arquivo, distinto de "maria"/"joao"/"ana"
 // (representantes.test.ts) e "proxy-maria"/"proxy-ana" (proxy.test.ts). O
@@ -15,8 +16,14 @@ const SLUG_MARIA = 'pedido-maria'
 // pela mesma razao do SLUG_MARIA: se um teste falhar entre criar e apagar
 // essas linhas, a proxima rodada nao pode esbarrar num slug ja usado.
 const SLUGS_COADJUVANTES = ['pedido-outro', 'pedido-outro2'] as const
+// Kit proprio deste arquivo, distinto de "kit-1"/"kit-3"/"kit-antigo"/
+// "kit-carimbo"/"kit-gratis" (produtos.test.ts). criarPedido agora exige
+// pelo menos um item, e cada item referencia um kit real — este arquivo nao
+// pode disputar nem apagar as linhas de kits que produtos.test.ts usa.
+const SLUG_KIT = 'pedido-kit-milagran'
 
 let idMaria: string
+let idKit: string
 
 // "pedidos" nao tem uma coluna dona (slug, email...) para escopar um DELETE
 // como nos outros arquivos — em especial os pedidos de origem 'casa' e
@@ -52,11 +59,35 @@ async function semear() {
       db.selectFrom('representantes').select('id').where('slug', '=', SLUG_MARIA),
     )
     .execute()
+  // Mesma logica para o kit deste arquivo: pedido_itens.kit_id tem ON
+  // DELETE RESTRICT, entao qualquer pedido orfao de uma execucao anterior
+  // que ainda aponte (via pedido_itens) para o kit deste arquivo precisa
+  // sumir antes do DELETE do kit mais abaixo. pedidos ON DELETE CASCADE
+  // leva os pedido_itens junto.
+  await db
+    .deleteFrom('pedidos')
+    .where(
+      'id',
+      'in',
+      db
+        .selectFrom('pedido_itens')
+        .select('pedido_id')
+        .where(
+          'kit_id',
+          'in',
+          db.selectFrom('kits').select('id').where('slug', '=', SLUG_KIT),
+        ),
+    )
+    .execute()
   await db.deleteFrom('representantes').where('slug', '=', SLUG_MARIA).execute()
   // Os coadjuvantes nunca ficam presos por ON DELETE RESTRICT: o trigger
   // rejeita a UPDATE antes que qualquer pedido chegue a apontar para eles,
   // entao um DELETE direto por slug basta.
   await db.deleteFrom('representantes').where('slug', 'in', SLUGS_COADJUVANTES).execute()
+  // Apagar so pelo slug deste arquivo — nunca um "DELETE FROM kits" sem
+  // filtro, que colidiria com os kits que produtos.test.ts semeia e le em
+  // paralelo.
+  await db.deleteFrom('kits').where('slug', '=', SLUG_KIT).execute()
 
   const maria = await db
     .insertInto('representantes')
@@ -67,6 +98,16 @@ async function semear() {
     .returning('id')
     .executeTakeFirstOrThrow()
   idMaria = maria.id
+
+  const kit = await db
+    .insertInto('kits')
+    .values({
+      slug: SLUG_KIT, nome: 'Kit Milagran', preco_centavos: 100000,
+      unidades: 1, sku: 'MG-PEDIDO-KIT', ordem: 99, ativo: true,
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+  idKit = kit.id
 }
 
 describe('criacao de pedido com atribuicao congelada', () => {
@@ -78,7 +119,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria,
       percentualComissao: 20,
       utmSource: 'instagram', utmMedium: 'bio', utmCampaign: 'lancamento',
-      subtotal: centavos(599.70), desconto: centavos(59.97), frete: centavos(0),
+      desconto: centavos(59.97), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(599.70) }],
     })
     expect(p.representanteId).toBe(idMaria)
     expect(p.percentualComissaoSnapshot).toBe(20)
@@ -93,7 +135,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
     const p = await criar({
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
-      subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      desconto: centavos(0), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
     })
     await getDb().updateTable('representantes')
       .set({ percentual_comissao: '5.00' }).where('id', '=', idMaria).execute()
@@ -108,7 +151,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
     const p = await criar({
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
-      subtotal: centavos(199.90), desconto: centavos(0), frete: centavos(0),
+      desconto: centavos(0), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(199.90) }],
     })
     expect(p.representanteId).toBeNull()
     expect(p.origem).toBe('casa')
@@ -118,7 +162,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
     const p = await criar({
       origem: 'rep_inativo', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
-      subtotal: centavos(199.90), desconto: centavos(0), frete: centavos(0),
+      desconto: centavos(0), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(199.90) }],
     })
     expect(p.origem).toBe('rep_inativo')
   })
@@ -127,7 +172,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
     await expect(criar({
       origem: 'link', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
-      subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      desconto: centavos(0), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
     })).rejects.toThrow(/pedido_origem_coerente/)
   })
 
@@ -139,7 +185,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
     await expect(criar({
       origem: 'link', representanteId: idMaria, percentualComissao: 500,
       utmSource: null, utmMedium: null, utmCampaign: null,
-      subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      desconto: centavos(0), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
     })).rejects.toThrow(/pedido_percentual_snapshot_valido/)
   })
 
@@ -165,7 +212,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
     await criar({
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
-      subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+      desconto: centavos(0), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
     })
     await expect(
       getDb().deleteFrom('representantes').where('id', '=', idMaria).execute(),
@@ -185,7 +233,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       const p = await criar({
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
-        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+        desconto: centavos(0), frete: centavos(0),
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
       })
       const outro = await getDb().insertInto('representantes').values({
         slug: 'pedido-outro', codigo: 'PEDIDOOUTRO', nome: 'Outro',
@@ -206,7 +255,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       const p = await criar({
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
-        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+        desconto: centavos(0), frete: centavos(0),
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
       })
       await expect(
         getDb().updateTable('pedidos')
@@ -220,7 +270,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       const p = await criar({
         origem: 'casa', representanteId: null, percentualComissao: null,
         utmSource: null, utmMedium: null, utmCampaign: null,
-        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+        desconto: centavos(0), frete: centavos(0),
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
       })
       await expect(
         getDb().updateTable('pedidos')
@@ -234,7 +285,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       const p = await criar({
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
-        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+        desconto: centavos(0), frete: centavos(0),
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
       })
       await getDb().updateTable('pedidos')
         .set({ status: 'pago' })
@@ -251,7 +303,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       const p = await criar({
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
-        subtotal: centavos(100), desconto: centavos(0), frete: centavos(0),
+        desconto: centavos(0), frete: centavos(0),
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
       })
       const outro = await getDb().insertInto('representantes').values({
         slug: 'pedido-outro2', codigo: 'PEDIDOOUTRO2', nome: 'Outro 2',
@@ -276,5 +329,90 @@ describe('criacao de pedido com atribuicao congelada', () => {
 
       await getDb().deleteFrom('representantes').where('id', '=', outro.id).execute()
     })
+  })
+})
+
+describe('pedido com itens', () => {
+  beforeEach(semear)
+  afterAll(async () => { await closeDb() })
+
+  it('deriva o subtotal da soma dos itens', async () => {
+    const p = await criarPedido({
+      origem: 'casa', representanteId: null, percentualComissao: null,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(0), frete: deInteiro(0),
+      itens: [{ kitId: idKit, quantidade: 3, precoUnitarioCentavos: deInteiro(100000) }],
+    })
+    expect(p.subtotalCentavos).toBe(300000)
+    expect(p.totalCentavos).toBe(300000)
+  })
+
+  it('grava o nome e o preco do kit como snapshot', async () => {
+    const p = await criarPedido({
+      origem: 'casa', representanteId: null, percentualComissao: null,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(0), frete: deInteiro(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(100000) }],
+    })
+    const itens = await getDb().selectFrom('pedido_itens')
+      .selectAll().where('pedido_id', '=', p.id).execute()
+    expect(itens).toHaveLength(1)
+    expect(itens[0]!.nome_snapshot).toBe('Kit Milagran')
+    expect(itens[0]!.preco_unitario_centavos).toBe(100000)
+  })
+
+  it('mudar o preco do kit depois NAO altera o pedido', async () => {
+    const p = await criarPedido({
+      origem: 'casa', representanteId: null, percentualComissao: null,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(0), frete: deInteiro(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(100000) }],
+    })
+    await getDb().updateTable('kits')
+      .set({ preco_centavos: 50000 }).where('id', '=', idKit).execute()
+
+    const item = await getDb().selectFrom('pedido_itens')
+      .select('preco_unitario_centavos').where('pedido_id', '=', p.id)
+      .executeTakeFirstOrThrow()
+    expect(item.preco_unitario_centavos).toBe(100000)
+  })
+
+  it('rejeita pedido sem itens', async () => {
+    await expect(criarPedido({
+      origem: 'casa', representanteId: null, percentualComissao: null,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(0), frete: deInteiro(0), itens: [],
+    })).rejects.toThrow(/sem itens|pedido_subtotal_positivo/)
+  })
+
+  it('o banco rejeita um subtotal que nao bate com os itens', async () => {
+    // Insercao crua, ignorando o repositorio: prova que a garantia esta no
+    // banco e nao numa soma que a aplicacao pode errar.
+    await expect(
+      getDb().transaction().execute(async (trx) => {
+        await sql`SET CONSTRAINTS ALL DEFERRED`.execute(trx)
+        const pedido = await trx.insertInto('pedidos').values({
+          origem: 'casa', subtotal_centavos: 999999,
+          desconto_centavos: 0, frete_centavos: 0, total_centavos: 999999,
+        }).returning('id').executeTakeFirstOrThrow()
+        await trx.insertInto('pedido_itens').values({
+          pedido_id: pedido.id, kit_id: idKit, nome_snapshot: 'Kit Milagran',
+          preco_unitario_centavos: 100000, quantidade: 1, total_centavos: 100000,
+        }).execute()
+      }),
+    ).rejects.toThrow(/pedido_subtotal_confere/)
+  })
+
+  it('apagar o pedido leva os itens junto', async () => {
+    const p = await criarPedido({
+      origem: 'casa', representanteId: null, percentualComissao: null,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(0), frete: deInteiro(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(100000) }],
+    })
+    await getDb().deleteFrom('pedidos').where('id', '=', p.id).execute()
+    const restantes = await getDb().selectFrom('pedido_itens')
+      .selectAll().where('pedido_id', '=', p.id).execute()
+    expect(restantes).toHaveLength(0)
   })
 })

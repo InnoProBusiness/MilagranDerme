@@ -34,6 +34,17 @@ export interface Kits {
   unidades: number;
 }
 
+export interface PedidoItens {
+  criado_em: Generated<Timestamp>;
+  id: Generated<string>;
+  kit_id: string;
+  nome_snapshot: string;
+  pedido_id: string;
+  preco_unitario_centavos: number;
+  quantidade: number;
+  total_centavos: number;
+}
+
 export interface Pedidos {
   criado_em: Generated<Timestamp>;
   desconto_centavos: Generated<number>;
@@ -77,6 +88,7 @@ export interface Representantes {
 
 export interface DB {
   kits: Kits;
+  pedido_itens: PedidoItens;
   pedidos: Pedidos;
   pgmigrations: Pgmigrations;
   representantes: Representantes;
