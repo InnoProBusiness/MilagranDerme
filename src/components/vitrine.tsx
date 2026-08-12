@@ -12,6 +12,22 @@ type VitrineProps = {
   representante: Representante | null
 }
 
+/**
+ * Extraidas como funcoes puras (em vez de inline nos onClick) para que o
+ * clamp em si tenha um teste que realmente o exercita. Os botoes tambem
+ * ficam `disabled` no limite (ver abaixo) — o que e a defesa que o usuario
+ * realmente ve e o que os testes de DOM verificam — mas o clamp aritmetico
+ * aqui e a segunda linha de defesa (chamada direta da funcao, sem clique
+ * nenhum) e precisa continuar coberta mesmo que o `disabled` mude amanha.
+ */
+export function diminuirQuantidade(quantidade: number): number {
+  return Math.max(1, quantidade - 1)
+}
+
+export function aumentarQuantidade(quantidade: number): number {
+  return Math.min(QUANTIDADE_MAXIMA, quantidade + 1)
+}
+
 export function Vitrine({ kits, representante }: VitrineProps) {
   const kit = kits[0]
   const [quantidade, setQuantidade] = useState(1)
@@ -62,7 +78,7 @@ export function Vitrine({ kits, representante }: VitrineProps) {
           className="vitrine__stepper-btn"
           aria-label="Diminuir quantidade"
           disabled={quantidade <= 1}
-          onClick={() => setQuantidade((q) => Math.max(1, q - 1))}
+          onClick={() => setQuantidade(diminuirQuantidade)}
         >
           −
         </button>
@@ -74,7 +90,7 @@ export function Vitrine({ kits, representante }: VitrineProps) {
           className="vitrine__stepper-btn"
           aria-label="Aumentar quantidade"
           disabled={quantidade >= QUANTIDADE_MAXIMA}
-          onClick={() => setQuantidade((q) => Math.min(QUANTIDADE_MAXIMA, q + 1))}
+          onClick={() => setQuantidade(aumentarQuantidade)}
         >
           +
         </button>
@@ -106,7 +122,7 @@ export function Vitrine({ kits, representante }: VitrineProps) {
       */}
       <p className="vitrine__anvisa" data-testid="anvisa">
         {kit.anvisaRegistro
-          ? `Registro ANVISA ${kit.anvisaRegistro}`
+          ? `Registro ANVISA: ${kit.anvisaRegistro}`
           : 'Registro ANVISA: em breve'}
       </p>
 
