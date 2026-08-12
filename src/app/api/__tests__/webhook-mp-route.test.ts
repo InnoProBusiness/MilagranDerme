@@ -27,6 +27,16 @@ vi.mock('@/lib/mercadopago', async (importOriginal) => {
   }
 })
 
+// Conta os envios de confirmacao sem tocar na Resend. O e-mail e um efeito
+// externo irreversivel: quantas vezes ele sai importa tanto quanto o saldo.
+const emails = vi.hoisted(() => ({ enviados: [] as string[] }))
+
+vi.mock('@/lib/email-pedido', () => ({
+  enviarConfirmacaoDePedido: async (pedidoId: string) => {
+    emails.enviados.push(pedidoId)
+  },
+}))
+
 const SEGREDO = 'segredo-de-webhook-para-o-teste-de-rota'
 const PRECO = 100000
 const PERCENTUAL = 20
@@ -68,6 +78,7 @@ function requisicao(opcoes: {
 async function semear() {
   provedor.resposta = null
   provedor.erro = false
+  emails.enviados = []
 
   const db = getDb()
   const s = randomUUID().slice(0, 8)
@@ -173,6 +184,28 @@ describe('webhook do Mercado Pago', () => {
     await POST(requisicao({ dataId: idPagamento, requestId: randomUUID() }))
 
     expect((await saldoDoRepresentante(idRep)).totalCreditado).toBe(20000)
+  })
+
+  // O e-mail e efeito externo irreversivel. Reenvio do webhook nao pode
+  // virar um segundo "Pagamento confirmado" na caixa do comprador.
+  it('envia a confirmacao uma vez so, mesmo com reentrega', async () => {
+    const pedido = await novoPedido()
+    const idPagamento = String(Date.now() + 20)
+    provedor.resposta = { status: 'approved', referenciaExterna: pedido.id }
+
+    await POST(requisicao({ dataId: idPagamento, requestId: randomUUID() }))
+    await POST(requisicao({ dataId: idPagamento, requestId: randomUUID() }))
+
+    expect(emails.enviados).toEqual([pedido.id])
+  })
+
+  it('pagamento recusado nao dispara e-mail de confirmacao', async () => {
+    const pedido = await novoPedido()
+    provedor.resposta = { status: 'rejected', referenciaExterna: pedido.id }
+
+    await POST(requisicao({ dataId: String(Date.now() + 21) }))
+
+    expect(emails.enviados).toEqual([])
   })
 
   it('notificacao que nao e de pagamento e ignorada com 200', async () => {

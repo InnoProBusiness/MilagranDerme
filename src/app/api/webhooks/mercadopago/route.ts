@@ -4,6 +4,7 @@ import { buscarPagamentoMP, segredoDoWebhook, ErroMercadoPago } from '@/lib/merc
 import { mapearStatusMP } from '@/lib/pedido-status'
 import { atualizarStatusPorProvedorId } from '@/repositories/pagamentos'
 import { conciliarPagamento } from '@/repositories/conciliacao'
+import { enviarConfirmacaoDePedido } from '@/lib/email-pedido'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -140,12 +141,20 @@ export async function POST(req: Request) {
         .where('id', '=', registrado.id)
         .execute()
 
-      return conciliado
+      return { ...conciliado, pedidoId }
     })
 
     if (resultado === null) {
       console.error('[webhook-mp] pagamento sem pedido correspondente:', pagamento.id)
       return Response.json({ ok: true, semPedido: true }, { status: 200 })
+    }
+
+    // DEPOIS do COMMIT, e so na transicao para 'pago'. Dentro da transacao o
+    // e-mail poderia sair e o banco desfazer tudo em seguida, deixando o
+    // comprador com a confirmacao de um pagamento que nao existe. E `mudou`
+    // garante envio unico: a reentrega da notificacao nao reenvia o e-mail.
+    if (resultado.mudou && resultado.para === 'pago') {
+      await enviarConfirmacaoDePedido(resultado.pedidoId)
     }
 
     return Response.json({ ok: true, mudou: resultado.mudou, status: resultado.para }, { status: 200 })

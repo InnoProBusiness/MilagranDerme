@@ -235,7 +235,18 @@ export type ItemPedido = {
   totalCentavos: Centavos
 }
 
-export type PedidoComItens = Pedido & { itens: ItemPedido[] }
+export type PedidoComItens = Pedido & {
+  itens: ItemPedido[]
+  /**
+   * E-mail do comprador, para prefixar o formulario de cartao na etapa de
+   * pagamento. SO o e-mail: CPF e whatsapp NAO entram aqui, porque esta
+   * pagina e publica (protegida apenas pelo token inadivinhavel) e o CPF vai
+   * do banco direto ao gateway dentro de /api/pagamentos, sem passar pelo
+   * navegador. null em pedidos antigos, criados antes de o checkout exigir
+   * cliente.
+   */
+  clienteEmail: string | null
+}
 
 function paraItemPedido(l: Selectable<PedidoItens>): ItemPedido {
   return {
@@ -245,6 +256,58 @@ function paraItemPedido(l: Selectable<PedidoItens>): ItemPedido {
     precoUnitarioCentavos: deInteiro(l.preco_unitario_centavos),
     quantidade: l.quantidade,
     totalCentavos: deInteiro(l.total_centavos),
+  }
+}
+
+export type PedidoParaEmail = {
+  numero: number
+  token: string
+  totalCentavos: Centavos
+  clienteNome: string
+  clienteEmail: string
+  itens: Array<{ nome: string; quantidade: number; totalCentavos: Centavos }>
+}
+
+/**
+ * Le o necessario para montar o e-mail de confirmacao de pagamento.
+ *
+ * Devolve null quando o pedido nao tem cliente vinculado — pedidos criados
+ * pelos testes de repositorio e pelos fluxos anteriores ao checkout. Sem
+ * e-mail nao ha o que enviar, e isso nao e erro.
+ */
+export async function buscarPedidoParaEmail(pedidoId: string): Promise<PedidoParaEmail | null> {
+  const l = await getDb()
+    .selectFrom('pedidos')
+    .innerJoin('clientes', 'clientes.id', 'pedidos.cliente_id')
+    .select([
+      'pedidos.numero as numero', 'pedidos.token as token',
+      'pedidos.total_centavos as total',
+      'clientes.nome as nome', 'clientes.email as email',
+    ])
+    .where('pedidos.id', '=', pedidoId)
+    .executeTakeFirst()
+
+  if (!l) return null
+
+  const itens = await getDb()
+    .selectFrom('pedido_itens')
+    .select(['nome_snapshot', 'quantidade', 'total_centavos'])
+    .where('pedido_id', '=', pedidoId)
+    .orderBy('criado_em', 'asc')
+    .orderBy('id', 'asc')
+    .execute()
+
+  return {
+    numero: Number(l.numero),
+    token: l.token,
+    totalCentavos: deInteiro(l.total),
+    clienteNome: l.nome,
+    clienteEmail: l.email,
+    itens: itens.map((i) => ({
+      nome: i.nome_snapshot,
+      quantidade: i.quantidade,
+      totalCentavos: deInteiro(i.total_centavos),
+    })),
   }
 }
 
@@ -274,8 +337,13 @@ export async function buscarPedidoComItensPorToken(token: string): Promise<Pedid
 
   const linha = await getDb()
     .selectFrom('pedidos')
-    .selectAll()
-    .where('token', '=', token)
+    // LEFT: pedidos anteriores ao checkout (Tarefas 1 e 5 do Plano 2, e os
+    // testes que ainda criam pedido sem cliente) tem cliente_id NULL. Um
+    // innerJoin faria esta pagina devolver 404 para eles.
+    .leftJoin('clientes', 'clientes.id', 'pedidos.cliente_id')
+    .selectAll('pedidos')
+    .select('clientes.email as cliente_email')
+    .where('pedidos.token', '=', token)
     .executeTakeFirst()
   if (!linha) return null
 
@@ -294,5 +362,9 @@ export async function buscarPedidoComItensPorToken(token: string): Promise<Pedid
     .orderBy('id', 'asc')
     .execute()
 
-  return { ...paraPedido(linha), itens: itens.map(paraItemPedido) }
+  return {
+    ...paraPedido(linha),
+    itens: itens.map(paraItemPedido),
+    clienteEmail: linha.cliente_email,
+  }
 }

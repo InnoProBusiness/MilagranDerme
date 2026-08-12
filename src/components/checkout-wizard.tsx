@@ -309,8 +309,17 @@ export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
             <button type="button" className="btn btn--ghost" onClick={() => setPasso(3)} disabled={enviando}>
               Voltar
             </button>
+            {/*
+              O pedido e criado AQUI, mas a cobranca acontece na proxima tela
+              (/pedido/<token>). A ordem nao e arbitraria: o total so e
+              definitivo depois de o servidor validar o cupom sob trava de
+              linha, e cobrar exige esse valor. Alem disso, uma pagina propria
+              com URL estavel e o que faz o QR do Pix sobreviver a recarregar,
+              fechar e voltar depois — coisa que um passo de wizard em memoria
+              nao faria.
+            */}
             <button type="button" className="btn btn--solid" onClick={confirmar} disabled={enviando}>
-              {enviando ? 'Enviando...' : 'Confirmar pedido'}
+              {enviando ? 'Enviando...' : 'Ir para o pagamento'}
             </button>
           </div>
         </div>

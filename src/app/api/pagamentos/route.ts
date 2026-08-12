@@ -7,6 +7,7 @@ import { conciliarPagamento } from '@/repositories/conciliacao'
 import { criarPagamentoMP, ErroMercadoPago } from '@/lib/mercadopago'
 import { mapearStatusMP } from '@/lib/pedido-status'
 import { mensagemDoPagamento } from '@/lib/pagamento-mensagens'
+import { enviarConfirmacaoDePedido } from '@/lib/email-pedido'
 import {
   criarLimitadorPorIp, ipDoPedido,
   JANELA_RATE_LIMIT_MS, MAX_PEDIDOS_POR_JANELA,
@@ -149,6 +150,13 @@ export async function POST(req: Request) {
     // a forma mais direta de creditar duas vezes.
     return conciliarPagamento(pedido.id, status, trx)
   })
+
+  // Cartao aprovado na hora tambem gera confirmacao — e o mesmo evento de
+  // negocio que o webhook trata, so que sincrono. Depois do COMMIT pela mesma
+  // razao de la: e-mail enviado nao volta atras, rollback volta.
+  if (conciliado.mudou && conciliado.para === 'pago') {
+    await enviarConfirmacaoDePedido(pedido.id)
+  }
 
   if (d.metodo === 'pix') {
     return Response.json({
