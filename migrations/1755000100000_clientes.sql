@@ -19,6 +19,26 @@ CREATE TABLE clientes (
 CREATE UNIQUE INDEX cliente_email_unico ON clientes (lower(email));
 CREATE INDEX cliente_cpf ON clientes (cpf);
 
+-- Mesmo raciocinio de kits_tocar_atualizado_em (migrations/1754900100000_produtos.sql):
+-- sem este trigger, "atualizado_em NOT NULL DEFAULT now()" congela na data
+-- de criacao e a coluna passa a mentir para sempre. clientes guarda CPF,
+-- e-mail, telefone e endereco de uma pessoa real e agora e mutavel por mais
+-- de um caminho (ver salvarClienteComEndereco), entao "quando isso mudou" e
+-- informacao que precisa continuar verdadeira. Ao contrario de
+-- rep_antes_de_atualizar (representantes), nada em clientes e imutavel —
+-- este trigger nao tem a metade de trava de identidade.
+CREATE FUNCTION clientes_tocar_atualizado_em() RETURNS trigger AS $$
+BEGIN
+  NEW.atualizado_em := now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER clientes_atualizado_em_trg
+  BEFORE UPDATE ON clientes
+  FOR EACH ROW
+  EXECUTE FUNCTION clientes_tocar_atualizado_em();
+
 CREATE TABLE enderecos (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   cliente_id  uuid NOT NULL REFERENCES clientes (id) ON DELETE CASCADE,
@@ -44,4 +64,6 @@ ALTER TABLE pedidos ADD COLUMN endereco_id uuid REFERENCES enderecos (id) ON DEL
 ALTER TABLE pedidos DROP COLUMN endereco_id;
 ALTER TABLE pedidos DROP COLUMN cliente_id;
 DROP TABLE enderecos;
+DROP TRIGGER clientes_atualizado_em_trg ON clientes;
+DROP FUNCTION clientes_tocar_atualizado_em();
 DROP TABLE clientes;

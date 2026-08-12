@@ -1,5 +1,6 @@
 import { getDb } from '@/lib/db'
-import { sql } from 'kysely'
+import { sql, type Transaction } from 'kysely'
+import type { DB } from '@/lib/db-types'
 
 export type EntradaCliente = { nome: string; email: string; cpf: string; whatsapp: string }
 export type EntradaEndereco = {
@@ -11,35 +12,66 @@ export type EntradaEndereco = {
  * O cliente e identificado por lower(email). Endereco NAO e atualizado: cada
  * compra grava o endereco daquela compra, porque o pedido antigo tem que
  * continuar mostrando para onde foi entregue.
+ *
+ * Se o e-mail ja pertence a um cliente cadastrado e o CPF enviado agora
+ * diverge do CPF gravado, a funcao LANCA em vez de sobrescrever. CPF e
+ * documento de identidade — uma caixa de e-mail de familia, um endereco
+ * reaproveitado, uma digitacao errada ou uma tentativa de fraude nao podem
+ * apagar o CPF original em silencio, do mesmo jeito que criarPedido
+ * (Tarefa 1) recusa um preco que diverge do catalogo em vez de gravar o
+ * numero errado. nome e whatsapp continuam atualizados livremente: esses
+ * legitimamente mudam entre compras.
+ *
+ * ATENCAO PARA QUEM CHAMA: uma violacao de CHECK do Postgres nesta tabela
+ * carrega a linha inteira — nome, e-mail, CPF, whatsapp — na propriedade
+ * `detail` do erro. So `error.message` (ou `error.constraint`, quando
+ * disponivel) e seguro para logar ou repassar ao cliente; nunca o objeto de
+ * erro cru nem `detail`.
+ *
+ * Aceita uma transacao externa opcional (`trx`): quando presente, a escrita
+ * entra na transacao do chamador em vez de abrir uma propria. Sem isso, um
+ * pedido que falhe depois de gravar o cliente (cupom invalido, preco
+ * divergente, etc.) deixaria nome, CPF, whatsapp e endereco completos
+ * commitados e presos a nenhum pedido — a Tarefa 9 chama esta funcao de
+ * dentro da mesma transacao que cria o pedido e resgata o cupom.
  */
 export async function salvarClienteComEndereco(
   c: EntradaCliente,
   e: EntradaEndereco,
+  trx?: Transaction<DB>,
 ): Promise<{ clienteId: string; enderecoId: string }> {
-  return getDb().transaction().execute(async (trx) => {
-    const existente = await trx.selectFrom('clientes')
-      .select('id')
+  const executar = async (t: Transaction<DB>) => {
+    const existente = await t.selectFrom('clientes')
+      .select(['id', 'cpf'])
       .where(sql<boolean>`lower(email) = lower(${c.email})`)
       .executeTakeFirst()
 
     let clienteId: string
     if (existente) {
+      if (existente.cpf !== c.cpf) {
+        throw new Error(
+          'cpf_divergente: o CPF enviado nao bate com o CPF ja cadastrado para este e-mail',
+        )
+      }
       clienteId = existente.id
-      await trx.updateTable('clientes')
-        .set({ nome: c.nome, whatsapp: c.whatsapp, cpf: c.cpf, atualizado_em: new Date() })
+      await t.updateTable('clientes')
+        .set({ nome: c.nome, whatsapp: c.whatsapp, atualizado_em: new Date() })
         .where('id', '=', clienteId)
         .execute()
     } else {
-      const novo = await trx.insertInto('clientes')
+      const novo = await t.insertInto('clientes')
         .values({ nome: c.nome, email: c.email, cpf: c.cpf, whatsapp: c.whatsapp })
         .returning('id').executeTakeFirstOrThrow()
       clienteId = novo.id
     }
 
-    const endereco = await trx.insertInto('enderecos')
+    const endereco = await t.insertInto('enderecos')
       .values({ cliente_id: clienteId, ...e })
       .returning('id').executeTakeFirstOrThrow()
 
     return { clienteId, enderecoId: endereco.id }
-  })
+  }
+
+  if (trx) return executar(trx)
+  return getDb().transaction().execute(executar)
 }
