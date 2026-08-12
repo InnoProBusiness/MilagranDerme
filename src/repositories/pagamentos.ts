@@ -113,6 +113,53 @@ export async function atualizarStatusPorProvedorId(
   return linha ? paraPagamento(linha) : null
 }
 
+export type PedidoParaPagamento = {
+  id: string
+  numero: number
+  status: string
+  totalCentavos: Centavos
+  clienteNome: string
+  clienteEmail: string
+  clienteCpf: string
+}
+
+/**
+ * Le o pedido pelo token publico junto dos dados do comprador que o Mercado
+ * Pago exige no campo `payer`.
+ *
+ * Existe separada de buscarPedidoComItensPorToken porque carrega CPF e
+ * e-mail: a pagina de confirmacao (publica, sem autenticacao) usa aquela; so
+ * a rota de pagamento, que fala com o gateway, usa esta.
+ */
+export async function buscarPedidoParaPagamento(
+  token: string,
+): Promise<PedidoParaPagamento | null> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token)) return null
+
+  const l = await getDb()
+    .selectFrom('pedidos')
+    .innerJoin('clientes', 'clientes.id', 'pedidos.cliente_id')
+    .select([
+      'pedidos.id as id', 'pedidos.numero as numero', 'pedidos.status as status',
+      'pedidos.total_centavos as total',
+      'clientes.nome as nome', 'clientes.email as email', 'clientes.cpf as cpf',
+    ])
+    .where('pedidos.token', '=', token)
+    .executeTakeFirst()
+
+  if (!l) return null
+
+  return {
+    id: l.id,
+    numero: Number(l.numero),
+    status: l.status,
+    totalCentavos: deInteiro(l.total),
+    clienteNome: l.nome,
+    clienteEmail: l.email,
+    clienteCpf: l.cpf,
+  }
+}
+
 export async function listarPagamentosDoPedido(pedidoId: string): Promise<Pagamento[]> {
   const linhas = await getDb()
     .selectFrom('pagamentos')
