@@ -1,18 +1,70 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { sql } from 'kysely'
 import { getDb, closeDb } from '@/lib/db'
 import { salvarClienteComEndereco } from '@/repositories/clientes'
 
-const CLIENTE = { nome: 'Ana Souza', email: 'Ana@Exemplo.com', cpf: '12345678901', whatsapp: '11988887777' }
+// E-mails PROPRIOS deste arquivo, como slug/codigo em cupons.test.ts e em
+// pedidos-route.test.ts. O Vitest roda os arquivos de teste em paralelo
+// contra o MESMO Postgres real, entao cada arquivo precisa de um espaco de
+// nomes que so ele escreve e so ele apaga.
+//
+// A chave e o E-MAIL, e nao o CPF, porque e o e-mail que `clientes` usa
+// como identidade: o indice unico cliente_email_unico e sobre lower(email)
+// (migrations/1755000100000_clientes.sql) e salvarClienteComEndereco procura
+// o cliente existente por lower(email). CPF nao tem indice unico nenhum —
+// dois clientes distintos podem legitimamente compartilhar o mesmo valor, e
+// foi exatamente isso que aconteceu: este arquivo limpava por
+// cpf = '12345678901', que tambem e o CPF do comprador de
+// pedidos-route.test.ts. Rodando em paralelo, ou a contagem deste arquivo
+// enxergava o cliente do outro, ou — pior — o DELETE do beforeEach esbarrava
+// em pedidos_cliente_id_fkey (ON DELETE RESTRICT) porque o outro arquivo
+// tinha um pedido commitado apontando para aquela linha, e os 11 testes
+// daqui falhavam de uma vez.
+const EMAIL_CLIENTE = 'Clientes-Repo-Ana@Exemplo.com' // caixa mista de proposito
+const EMAIL_CLIENTE_MINUSCULO = EMAIL_CLIENTE.toLowerCase()
+const EMAIL_CARIMBO = 'clientes-repo-carimbo@exemplo.com'
+const EMAILS = [EMAIL_CLIENTE, EMAIL_CARIMBO] as const
+
+// CPF tambem exclusivo deste arquivo. Ele NAO e mais chave de limpeza (ver
+// acima), mas manter um valor compartilhado com outro arquivo convidaria o
+// proximo `where('cpf', ...)` a reintroduzir o mesmo defeito.
+const CPF = '99988877766'
+
+const CLIENTE = { nome: 'Ana Souza', email: EMAIL_CLIENTE, cpf: CPF, whatsapp: '11988887777' }
 const ENDERECO = { cep: '01310100', rua: 'Av Paulista', numero: '1000', complemento: 'ap 51', bairro: 'Bela Vista', cidade: 'Sao Paulo', estado: 'SP' }
 // CPF de um segundo cliente hipotetico, usado so no teste de divergencia.
 // Nunca gravado com sucesso (a funcao lanca antes do INSERT), entao nao
 // precisa de limpeza propria no beforeEach abaixo.
 const CPF_DIVERGENTE = '22222222222'
 
+/**
+ * Limpeza na ordem que o grafo de chaves estrangeiras exige:
+ *
+ *  - pedidos.cliente_id e ON DELETE RESTRICT (migrations/1754900300000_pedidos.sql):
+ *    um pedido apontando para o cliente impede o DELETE dele. Apagar o
+ *    pedido primeiro leva pedido_itens e cupom_usos junto (ON DELETE
+ *    CASCADE). Este arquivo nao cria pedido nenhum hoje, e o espaco de nomes
+ *    de e-mail acima garante que nenhum outro arquivo cria um para estes
+ *    e-mails — o DELETE aqui e seguro contra orfaos de uma execucao
+ *    interrompida e contra um teste futuro deste arquivo que passe a criar
+ *    pedidos.
+ *  - enderecos.cliente_id e ON DELETE CASCADE (migrations/1755000100000_clientes.sql):
+ *    apagar o cliente ja leva os enderecos dele, sem DELETE em separado.
+ */
+async function limpar() {
+  const db = getDb()
+  for (const email of EMAILS) {
+    const donos = db.selectFrom('clientes').select('id')
+      .where(sql<boolean>`lower(email) = lower(${email})`)
+    await db.deleteFrom('pedidos').where('cliente_id', 'in', donos).execute()
+    await db.deleteFrom('cupom_usos').where('cliente_id', 'in', donos).execute()
+    await db.deleteFrom('clientes')
+      .where(sql<boolean>`lower(email) = lower(${email})`).execute()
+  }
+}
+
 describe('clientes', () => {
-  beforeEach(async () => {
-    await getDb().deleteFrom('clientes').where('cpf', '=', '12345678901').execute()
-  })
+  beforeEach(limpar)
   afterAll(async () => { await closeDb() })
 
   it('salva cliente e endereco juntos', async () => {
@@ -23,7 +75,7 @@ describe('clientes', () => {
 
   it('reconhece o mesmo cliente por e-mail, ignorando a caixa', async () => {
     const a = await salvarClienteComEndereco(CLIENTE, ENDERECO)
-    const b = await salvarClienteComEndereco({ ...CLIENTE, email: 'ana@exemplo.com' }, ENDERECO)
+    const b = await salvarClienteComEndereco({ ...CLIENTE, email: EMAIL_CLIENTE_MINUSCULO }, ENDERECO)
     expect(b.clienteId).toBe(a.clienteId)
   })
 
@@ -63,7 +115,7 @@ describe('clientes', () => {
     const a = await salvarClienteComEndereco(CLIENTE, ENDERECO)
     await expect(
       salvarClienteComEndereco(
-        { ...CLIENTE, email: 'ana@exemplo.com', cpf: CPF_DIVERGENTE },
+        { ...CLIENTE, email: EMAIL_CLIENTE_MINUSCULO, cpf: CPF_DIVERGENTE },
         ENDERECO,
       ),
     ).rejects.toThrow(/cpf_divergente/)
@@ -76,7 +128,7 @@ describe('clientes', () => {
   it('mesmo e-mail e mesmo CPF continua atualizando nome e whatsapp livremente', async () => {
     const a = await salvarClienteComEndereco(CLIENTE, ENDERECO)
     await salvarClienteComEndereco(
-      { ...CLIENTE, email: 'ana@exemplo.com', nome: 'Ana Souza Silva', whatsapp: '11999990000' },
+      { ...CLIENTE, email: EMAIL_CLIENTE_MINUSCULO, nome: 'Ana Souza Silva', whatsapp: '11999990000' },
       ENDERECO,
     )
     const linha = await getDb().selectFrom('clientes')
@@ -91,17 +143,17 @@ describe('clientes', () => {
   it('atualiza atualizado_em a cada UPDATE, sem mexer em criado_em', async () => {
     const antigo = new Date('2020-01-01T00:00:00.000Z')
     await getDb().insertInto('clientes').values({
-      nome: 'Carimbo', email: 'carimbo-cliente@exemplo.com', cpf: CLIENTE.cpf,
+      nome: 'Carimbo', email: EMAIL_CARIMBO, cpf: CPF,
       whatsapp: '11900000000', criado_em: antigo, atualizado_em: antigo,
     }).execute()
 
     await getDb().updateTable('clientes')
       // Tenta gravar uma data velha de proposito: o trigger tem que vencer.
       .set({ nome: 'Carimbo 2', atualizado_em: antigo })
-      .where('cpf', '=', CLIENTE.cpf).execute()
+      .where('email', '=', EMAIL_CARIMBO).execute()
 
     const l = await getDb().selectFrom('clientes').select(['criado_em', 'atualizado_em'])
-      .where('cpf', '=', CLIENTE.cpf).executeTakeFirstOrThrow()
+      .where('email', '=', EMAIL_CARIMBO).executeTakeFirstOrThrow()
     expect(l.criado_em.getTime()).toBe(antigo.getTime())
     expect(l.atualizado_em.getTime()).toBeGreaterThan(antigo.getTime())
   })
@@ -126,8 +178,12 @@ describe('clientes', () => {
         }),
       ).rejects.toThrow('falha proposital')
 
+      // Conta pelo E-MAIL deste arquivo (a identidade real da tabela), nao
+      // pelo CPF: um CPF compartilhado com outro arquivo de teste faria esta
+      // contagem enxergar o cliente do vizinho e falhar sem nenhuma relacao
+      // com a atomicidade que o teste alega provar.
       const clientes = await getDb().selectFrom('clientes')
-        .select('id').where('cpf', '=', CLIENTE.cpf).execute()
+        .select('id').where(sql<boolean>`lower(email) = lower(${EMAIL_CLIENTE})`).execute()
       expect(clientes).toHaveLength(0)
 
       expect(enderecoId).toBeDefined()
