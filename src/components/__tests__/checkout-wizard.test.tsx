@@ -69,6 +69,18 @@ describe('CheckoutWizard', () => {
     vi.unstubAllGlobals()
   })
 
+  // O checkout mostra frete em dois passos, e a vitrine e a pagina de
+  // confirmacao em mais dois. As quatro renderizam o MESMO componente
+  // (src/components/linha-frete.tsx) — antes, tres delas tinham o texto
+  // escrito na mao e so a vitrine consultava a flag do carrinho, entao virar
+  // a flag deixaria as telas discordando sobre o frete da mesma compra.
+  it('mostra "a definir" no frete, nunca R$ 0,00', () => {
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    const frete = screen.getByTestId('frete')
+    expect(frete).toHaveTextContent(/a definir/i)
+    expect(frete).not.toHaveTextContent('R$ 0,00')
+  })
+
   it('DINHEIRO: o corpo do POST nao contem nenhum campo monetario', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,

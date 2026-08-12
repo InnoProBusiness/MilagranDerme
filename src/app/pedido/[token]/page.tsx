@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { buscarPedidoComItensPorToken } from '@/repositories/pedidos'
 import { formatarBRL } from '@/lib/money'
+import { LinhaFrete } from '@/components/linha-frete'
 
 // O pedido e mutavel (status muda ao longo da maquina de estados do Plano
 // 3), entao esta pagina nao pode ser um snapshot congelado no build.
@@ -42,12 +43,14 @@ export default async function PaginaPedido({ params }: Props) {
             <p className="vitrine__linha">Desconto: −{formatarBRL(pedido.descontoCentavos)}</p>
           )}
           {/*
-            DIVIDA DELIBERADA (nao "consertar"): mesma razao da vitrine —
-            frete_centavos e sempre 0 hoje porque a politica ainda nao foi
-            definida (ver montarCarrinho em src/lib/carrinho.ts). Mostrar
-            "R$ 0,00" prometeria frete gratis que ninguem decidiu.
+            Mesmo componente da vitrine e dos dois passos do checkout — as
+            quatro telas que falam de frete do mesmo pedido renderizam o
+            mesmo no, por construcao. pedido.freteCentavos existe e e sempre
+            0 hoje, e continua DELIBERADAMENTE nao exibido: a politica de
+            frete nao foi definida, e "R$ 0,00" prometeria frete gratis que
+            ninguem decidiu. Ver src/components/linha-frete.tsx.
           */}
-          <p className="vitrine__linha">Frete: A definir — em breve</p>
+          <LinhaFrete />
           <p className="vitrine__linha vitrine__linha--total">
             Total: {formatarBRL(pedido.totalCentavos)}
           </p>

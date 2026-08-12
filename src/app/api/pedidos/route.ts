@@ -179,7 +179,14 @@ export async function POST(req: Request) {
         utmMedium: atribuicao.utmMedium,
         utmCampaign: atribuicao.utmCampaign,
         desconto,
-        frete: carrinho.frete,
+        // PLACEHOLDER DE POLITICA INDEFINIDA, nao "frete gratis". A coluna
+        // pedidos.frete_centavos e NOT NULL e precisa de um valor; a
+        // politica de frete ainda nao foi decidida, entao o pedido nasce com
+        // zero e nenhuma tela mostra esse zero (ver
+        // src/components/linha-frete.tsx). O ResumoCarrinho de proposito NAO
+        // tem campo de frete para este ponto ler — quando o frete for real,
+        // e aqui que o valor calculado entra.
+        frete: deInteiro(0),
         itens: carrinho.linhas.map((l) => ({
           kitId: l.kitId,
           quantidade: l.quantidade,

@@ -11,10 +11,17 @@ describe('montarCarrinho', () => {
     expect(r.total).toBe(300000)
   })
 
-  it('frete e zero e marcado como a definir', () => {
+  // Enquanto a politica de frete nao existir, o resumo nao devolve frete
+  // nenhum: nem um valor que alguma tela possa imprimir como "R$ 0,00", nem
+  // uma flag booleana que alguem possa virar achando que com isso o frete
+  // passou a funcionar. O texto que as telas mostram no lugar vive em
+  // src/components/linha-frete.tsx, num componente so.
+  it('nao expoe frete nenhum: nem valor para imprimir, nem flag para virar', () => {
     const r = montarCarrinho([{ ...KIT, quantidade: 1 }])
-    expect(r.frete).toBe(0)
-    expect(r.freteADefinir).toBe(true)
+    expect(r).not.toHaveProperty('frete')
+    expect(r).not.toHaveProperty('freteADefinir')
+    // E o total nao ganha nem perde nada por conta de frete.
+    expect(r.total).toBe(r.subtotal)
   })
 
   it('desconto sai do subtotal e nao do frete', () => {

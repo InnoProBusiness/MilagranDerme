@@ -4,6 +4,7 @@ import { useState } from 'react'
 import type { Kit } from '@/repositories/produtos'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { formatarBRL } from '@/lib/money'
+import { LinhaFrete } from '@/components/linha-frete'
 
 type Representante = { nome: string; slug: string }
 
@@ -100,16 +101,9 @@ export function Vitrine({ kits, representante }: VitrineProps) {
         <p className="vitrine__linha" data-testid="subtotal">
           Subtotal: {formatarBRL(resumo.subtotal)}
         </p>
-        {/*
-          DIVIDA DELIBERADA (nao "consertar"): a politica de frete ainda
-          nao foi decidida pelo cliente. montarCarrinho() devolve
-          freteADefinir: true precisamente para que a interface diga "a
-          definir" em vez de "R$ 0,00" — que seria uma promessa de frete
-          gratis que ninguem fez, e o cliente poderia agir em cima dela.
-        */}
-        <p className="vitrine__linha" data-testid="frete">
-          Frete: {resumo.freteADefinir ? 'A definir — em breve' : formatarBRL(resumo.frete)}
-        </p>
+        {/* Frete: componente unico compartilhado pelas quatro telas que
+            falam de frete — ver src/components/linha-frete.tsx. */}
+        <LinhaFrete />
         <p className="vitrine__linha vitrine__linha--total" data-testid="total">
           Total: {formatarBRL(resumo.total)}
         </p>

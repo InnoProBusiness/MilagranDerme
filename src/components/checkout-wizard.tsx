@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import type { Kit } from '@/repositories/produtos'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { formatarBRL } from '@/lib/money'
+import { LinhaFrete } from '@/components/linha-frete'
 
 type Props = {
   kit: Kit
@@ -147,7 +148,7 @@ export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
 
           <div className="vitrine__resumo">
             <p className="vitrine__linha">Subtotal: {formatarBRL(resumo.subtotal)}</p>
-            <p className="vitrine__linha">Frete: A definir — em breve</p>
+            <LinhaFrete />
           </div>
 
           <div className="checkout__nav">
@@ -287,7 +288,7 @@ export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
               cliente para um cupom ainda nao verificado seria inventar um
               desconto que pode nao existir.
             */}
-            <p className="vitrine__linha">Frete: A definir — em breve</p>
+            <LinhaFrete />
             <p className="vitrine__linha vitrine__linha--total">
               Total: {formatarBRL(resumo.total)}
               {cupom.trim() && ' (antes do cupom, verificado na confirmação)'}
