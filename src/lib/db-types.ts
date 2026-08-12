@@ -108,6 +108,7 @@ export interface Pedidos {
   representante_id: string | null;
   status: Generated<PedidoStatus>;
   subtotal_centavos: number;
+  token: Generated<string>;
   total_centavos: number;
   utm_campaign: string | null;
   utm_medium: string | null;

@@ -1,5 +1,5 @@
 import { notFound } from 'next/navigation'
-import { buscarPedidoComItensPorNumero } from '@/repositories/pedidos'
+import { buscarPedidoComItensPorToken } from '@/repositories/pedidos'
 import { formatarBRL } from '@/lib/money'
 
 // O pedido e mutavel (status muda ao longo da maquina de estados do Plano
@@ -7,19 +7,19 @@ import { formatarBRL } from '@/lib/money'
 export const dynamic = 'force-dynamic'
 
 type Props = {
-  params: Promise<{ numero: string }>
+  params: Promise<{ token: string }>
 }
 
 export default async function PaginaPedido({ params }: Props) {
-  const { numero: numeroBruto } = await params
+  const { token } = await params
 
-  // pedidos.numero e a chave publica desta URL (nao o uuid interno). Um
-  // valor que nem parece numero — /pedido/abc, /pedido/1.5 — nunca bate
-  // contra a coluna e so desperdicaria uma consulta; 404 direto.
-  const numero = Number(numeroBruto)
-  if (!Number.isInteger(numero) || numero <= 0) notFound()
-
-  const pedido = await buscarPedidoComItensPorNumero(numero)
+  // A URL e a chave publica (token, um uuid — ver
+  // migrations/1755100000000_pedido_token.sql), NAO o numero sequencial:
+  // esta pagina nao tem autenticacao, e um numero previsivel deixaria
+  // qualquer visitante andar /pedido/1, /pedido/2... e ler a contagem e o
+  // faturamento de todos os pedidos da empresa. buscarPedidoComItensPorToken
+  // ja descarta um token que nem parece uuid antes de consultar o banco.
+  const pedido = await buscarPedidoComItensPorToken(token)
   if (!pedido) notFound()
 
   return (

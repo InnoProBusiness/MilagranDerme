@@ -94,15 +94,20 @@ export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
         return
       }
 
-      const numero = corpo && typeof corpo === 'object' && 'numero' in corpo
-        ? (corpo as { numero: unknown }).numero
+      // Navega pelo TOKEN, nunca pelo numero: numero e um bigint
+      // sequencial e a pagina de confirmacao e publica sem autenticacao —
+      // uma URL previsivel deixaria qualquer visitante andar /pedido/1,
+      // /pedido/2... (ver migrations/1755100000000_pedido_token.sql e
+      // src/app/pedido/[token]/page.tsx).
+      const token = corpo && typeof corpo === 'object' && 'token' in corpo
+        ? (corpo as { token: unknown }).token
         : null
-      if (typeof numero !== 'number') {
+      if (typeof token !== 'string') {
         setErro('Pedido criado, mas a confirmacao veio incompleta. Entre em contato com o suporte.')
         setEnviando(false)
         return
       }
-      router.push(`/pedido/${numero}`)
+      router.push(`/pedido/${token}`)
     } catch {
       setErro('Falha de conexao. Tente novamente.')
       setEnviando(false)

@@ -1,4 +1,4 @@
-import { sql, type Selectable, type Transaction } from 'kysely'
+import type { Selectable, Transaction } from 'kysely'
 import { getDb } from '@/lib/db'
 import type { DB, Pedidos, PedidoItens, OrigemAtribuicao, PedidoStatus } from '@/lib/db-types'
 import { deInteiro, type Centavos } from '@/lib/money'
@@ -42,6 +42,14 @@ export type EntradaPedido = {
 export type Pedido = {
   id: string
   numero: number
+  /**
+   * Chave publica da URL de confirmacao (/pedido/<token> — ver
+   * migrations/1755100000000_pedido_token.sql). NAO expor `numero` na URL:
+   * ele e um bigint sequencial e a pagina e publica sem autenticacao, entao
+   * uma chave previsivel deixaria qualquer visitante andar /pedido/1,
+   * /pedido/2... e ler a contagem e o faturamento de todos os pedidos.
+   */
+  token: string
   status: PedidoStatus
   origem: OrigemAtribuicao
   representanteId: string | null
@@ -60,6 +68,7 @@ function paraPedido(l: Selectable<Pedidos>): Pedido {
   return {
     id: l.id,
     numero: Number(l.numero),
+    token: l.token,
     status: l.status,
     origem: l.origem,
     representanteId: l.representante_id,
@@ -211,30 +220,50 @@ function paraItemPedido(l: Selectable<PedidoItens>): ItemPedido {
   }
 }
 
+// Formato de uuid, sem validar a versao/variante especifica — so o
+// suficiente para descartar lixo obvio (uma palavra, um numero, uma URL
+// meio digitada) ANTES de consultar o banco. Sem isto, um token que nao
+// parece uuid vira "invalid input syntax for type uuid" do Postgres — um
+// 500 — em vez do 404 que a pagina de confirmacao espera para uma URL
+// invalida.
+const FORMATO_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /**
- * Le um pedido pelo numero publico (o que aparece na URL de confirmacao,
- * /pedido/<numero>) junto dos seus itens. Usada pela pagina de confirmacao
- * (Tarefa 9) — nunca pelo fluxo de criacao, que ja tem a linha inteira em
- * maos a partir de criarPedido.
+ * Le um pedido pelo token publico (a chave da URL de confirmacao,
+ * /pedido/<token> — ver migrations/1755100000000_pedido_token.sql) junto
+ * dos seus itens. Usada pela pagina de confirmacao (Tarefa 9) — nunca pelo
+ * fluxo de criacao, que ja tem a linha inteira em maos a partir de
+ * criarPedido.
+ *
+ * DELIBERADAMENTE nao busca por `numero`: numero e um bigint sequencial e a
+ * pagina e publica sem autenticacao nenhuma. Buscar por ele deixaria
+ * qualquer visitante andar /pedido/1, /pedido/2, /pedido/3... e ler a
+ * contagem de pedidos e o faturamento inteiro da empresa. token e um uuid
+ * v4 (gen_random_uuid() no banco) — nao adivinhavel por enumeracao.
  */
-export async function buscarPedidoComItensPorNumero(numero: number): Promise<PedidoComItens | null> {
+export async function buscarPedidoComItensPorToken(token: string): Promise<PedidoComItens | null> {
+  if (!FORMATO_UUID.test(token)) return null
+
   const linha = await getDb()
     .selectFrom('pedidos')
     .selectAll()
-    // pedidos.numero e int8: o tipo gerado (Int8 = ColumnType<string, ...>)
-    // torna `.where('numero', '=', numero)` com um `number` cru um erro de
-    // tipo — o select type e string mesmo o driver devolvendo number em
-    // runtime (ver o setTypeParser de INT8 em src/lib/db.ts). sql`` evita a
-    // fricao sem introduzir `as` nenhum.
-    .where(sql<boolean>`numero = ${numero}`)
+    .where('token', '=', token)
     .executeTakeFirst()
   if (!linha) return null
 
   const itens = await getDb()
     .selectFrom('pedido_itens')
     .selectAll()
+    // criado_em sozinho nao ordena de forma deterministica: e o instante de
+    // INICIO da transacao (now() dentro de uma unica transacao devolve o
+    // mesmo valor em todo INSERT), entao todo item de UM pedido carrega o
+    // MESMO timestamp — dois itens do mesmo pedido podem trocar de ordem
+    // entre uma leitura e outra. `id` como desempate torna o resultado
+    // estavel, mesmo raciocinio do desempate por slug em listarKitsAtivos
+    // (src/repositories/produtos.ts).
     .where('pedido_id', '=', linha.id)
     .orderBy('criado_em', 'asc')
+    .orderBy('id', 'asc')
     .execute()
 
   return { ...paraPedido(linha), itens: itens.map(paraItemPedido) }

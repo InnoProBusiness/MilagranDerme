@@ -30,6 +30,13 @@ const Corpo = z.object({
   cidade: z.string().trim().min(1),
   estado: z.string().regex(/^[A-Z]{2}$/),
 })
+  // .strict() rejeita qualquer campo fora desta lista em vez de descarta-lo
+  // em silencio. Sem isto, um teste que manda precoUnitarioCentavos/total
+  // no corpo so provava que esses campos eram IGNORADOS — o mesmo corpo com
+  // um campo desconhecido continuava valendo 200/201. Com .strict(), mandar
+  // dinheiro no corpo e um 422 explicito: a API recusa a tentativa de
+  // manipulacao, nao so a ignora.
+  .strict()
 
 /**
  * Sinaliza um cupom recusado (ResultadoCupom.ok === false) sem confundir
@@ -74,13 +81,19 @@ export async function POST(req: Request) {
   }])
 
   const segredo = segredoDeAtribuicao()
+  // O header Cookie separa pares por "; " (ponto-e-virgula + um espaco) na
+  // maioria dos navegadores, mas RFC 6265 so exige o ponto-e-virgula — um
+  // proxy, um cliente de teste ou um navegador antigo pode mandar "cookie1;cookie2"
+  // sem o espaco. Um split('; ') literal ali perderia o cookie de
+  // atribuicao em silencio: a venda vira 'casa' sem erro nenhum, sem log,
+  // sem 4xx — so comissao que deixa de ser paga. /;\s*/ cobre os dois casos.
   const cookie = req.headers.get('cookie')
-    ?.split('; ').find((c) => c.startsWith(`${NOME_COOKIE_ATRIBUICAO}=`))
+    ?.split(/;\s*/).find((c) => c.startsWith(`${NOME_COOKIE_ATRIBUICAO}=`))
     ?.slice(NOME_COOKIE_ATRIBUICAO.length + 1) ?? null
   const doCookie = await resolverAtribuicaoDoPedido(cookie, segredo)
 
   try {
-    const numero = await getDb().transaction().execute(async (trx) => {
+    const criado = await getDb().transaction().execute(async (trx) => {
       // Cliente e endereco entram na MESMA transacao que o resgate do cupom
       // e a criacao do pedido: se qualquer passo seguinte falhar, o rollback
       // tem que levar nome, CPF, telefone e endereco junto — nunca deixar
@@ -150,21 +163,50 @@ export async function POST(req: Request) {
           .execute()
       }
 
-      return pedido.numero
+      // numero e a referencia humana (mostrada NA pagina de confirmacao);
+      // token e a chave publica da URL (/pedido/<token>) — numero sozinho
+      // e um bigint sequencial previsivel e a pagina nao tem autenticacao
+      // nenhuma (ver migrations/1755100000000_pedido_token.sql). O wizard
+      // (src/components/checkout-wizard.tsx) navega pelo token, nunca pelo
+      // numero.
+      return { numero: pedido.numero, token: pedido.token }
     })
-    return Response.json({ numero }, { status: 201 })
+    return Response.json(criado, { status: 201 })
   } catch (e) {
     if (e instanceof RecusaDeCupom) {
       return Response.json({ error: 'cupom_recusado', mensagem: mensagemDeRecusa(e.motivo) }, { status: 422 })
     }
 
     const mensagem = mensagemSeguraDoErro(e)
-    // cpf_divergente (salvarClienteComEndereco) e preco_divergente
-    // (criarPedido) sao recusas de negocio, nao falhas de infraestrutura —
-    // a mensagem que elas lancam ja e segura de expor (nunca contem CPF,
-    // e-mail ou o valor divergente em si).
-    if (mensagem.startsWith('cpf_divergente') || mensagem.startsWith('preco_divergente')) {
-      return Response.json({ error: 'dados_invalidos', mensagem }, { status: 422 })
+
+    // cpf_divergente (salvarClienteComEndereco): NUNCA vira uma mensagem
+    // distinta de qualquer outro erro de validacao. Devolver um motivo
+    // especifico aqui e um oraculo sem autenticacao — um POST com um e-mail
+    // real e QUALQUER CPF ja revela, pela resposta (422 "cpf_divergente" x
+    // um 201 normal), que aquele e-mail pertence a um cliente cadastrado; e
+    // uma segunda tentativa acertando o CPF por tentativa e erro cria um
+    // pedido de verdade em nome de outra pessoa, com o endereco de quem
+    // estiver atacando. A resposta tem que ser indistinguivel de qualquer
+    // outro 422 generico. O motivo especifico so vai para o log do
+    // servidor, via mensagemSeguraDoErro (nunca error.detail — ver o doc
+    // comment de salvarClienteComEndereco).
+    if (mensagem.startsWith('cpf_divergente')) {
+      console.error('[pedidos] falha ao criar pedido:', mensagem)
+      return Response.json({ error: 'dados_invalidos' }, { status: 422 })
+    }
+
+    // preco_divergente (criarPedido): a mensagem CRUA do throw carrega o
+    // uuid do kit e os dois precos (o do catalogo e o que o checkout
+    // enviou) — nenhum dos dois e seguro de ecoar ao cliente por padrao,
+    // mesmo que hoje nenhum dos dois seja segredo por si so. Mensagem
+    // curada e fixa, do mesmo jeito que mensagemDeRecusa (src/lib/cupom.ts)
+    // ja faz para cupom recusado; a string bruta so vai para o log.
+    if (mensagem.startsWith('preco_divergente')) {
+      console.error('[pedidos] falha ao criar pedido:', mensagem)
+      return Response.json({
+        error: 'dados_invalidos',
+        mensagem: 'O preco do produto mudou. Atualize a pagina e tente novamente.',
+      }, { status: 422 })
     }
 
     // Qualquer outra falha (inclusive uma violacao de CHECK do Postgres, cujo
