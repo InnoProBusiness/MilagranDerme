@@ -19,6 +19,29 @@ export type PedidoStatus = "aguardando_pagamento" | "cancelado" | "em_preparacao
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
+export interface Clientes {
+  atualizado_em: Generated<Timestamp>;
+  cpf: string;
+  criado_em: Generated<Timestamp>;
+  email: string;
+  id: Generated<string>;
+  nome: string;
+  whatsapp: string;
+}
+
+export interface Enderecos {
+  bairro: string;
+  cep: string;
+  cidade: string;
+  cliente_id: string;
+  complemento: Generated<string>;
+  criado_em: Generated<Timestamp>;
+  estado: string;
+  id: Generated<string>;
+  numero: string;
+  rua: string;
+}
+
 export interface Kits {
   anvisa_registro: string | null;
   ativo: Generated<boolean>;
@@ -46,8 +69,10 @@ export interface PedidoItens {
 }
 
 export interface Pedidos {
+  cliente_id: string | null;
   criado_em: Generated<Timestamp>;
   desconto_centavos: Generated<number>;
+  endereco_id: string | null;
   entregue_em: Timestamp | null;
   frete_centavos: Generated<number>;
   id: Generated<string>;
@@ -87,6 +112,8 @@ export interface Representantes {
 }
 
 export interface DB {
+  clientes: Clientes;
+  enderecos: Enderecos;
   kits: Kits;
   pedido_itens: PedidoItens;
   pedidos: Pedidos;
