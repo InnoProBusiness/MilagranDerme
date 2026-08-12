@@ -11,9 +11,27 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
+export type Json = JsonValue;
+
+export type JsonArray = JsonValue[];
+
+export type JsonObject = {
+  [x: string]: JsonValue | undefined;
+};
+
+export type JsonPrimitive = boolean | number | string | null;
+
+export type JsonValue = JsonArray | JsonObject | JsonPrimitive;
+
+export type LancamentoComissao = "ajuste" | "credito" | "estorno" | "saque";
+
+export type MetodoPagamento = "cartao" | "pix";
+
 export type Numeric = ColumnType<string, number | string, number | string>;
 
 export type OrigemAtribuicao = "casa" | "cupom" | "link" | "rep_inativo";
+
+export type PagamentoStatus = "aprovado" | "cancelado" | "em_analise" | "estornado" | "pendente" | "recusado";
 
 export type PedidoStatus = "aguardando_pagamento" | "cancelado" | "em_preparacao" | "entregue" | "enviado" | "pago" | "pendente" | "reembolsado";
 
@@ -29,6 +47,17 @@ export interface Clientes {
   id: Generated<string>;
   nome: string;
   whatsapp: string;
+}
+
+export interface Comissoes {
+  criado_em: Generated<Timestamp>;
+  descricao: Generated<string>;
+  disponivel_em: Timestamp;
+  id: Generated<string>;
+  pedido_id: string | null;
+  representante_id: string;
+  tipo: LancamentoComissao;
+  valor_centavos: number;
 }
 
 export interface CupomUsos {
@@ -79,6 +108,19 @@ export interface Kits {
   sku: string;
   slug: string;
   unidades: number;
+}
+
+export interface Pagamentos {
+  atualizado_em: Generated<Timestamp>;
+  criado_em: Generated<Timestamp>;
+  id: Generated<string>;
+  metodo: MetodoPagamento;
+  parcelas: Generated<number>;
+  pedido_id: string;
+  provedor: Generated<string>;
+  provedor_id: string | null;
+  status: Generated<PagamentoStatus>;
+  valor_centavos: number;
 }
 
 export interface PedidoItens {
@@ -137,14 +179,28 @@ export interface Representantes {
   whatsapp: Generated<string>;
 }
 
+export interface WebhookEventos {
+  evento_id: string;
+  id: Generated<string>;
+  payload: Json;
+  processado_em: Timestamp | null;
+  provedor: Generated<string>;
+  recebido_em: Generated<Timestamp>;
+  recurso_id: string | null;
+  tipo: string;
+}
+
 export interface DB {
   clientes: Clientes;
+  comissoes: Comissoes;
   cupom_usos: CupomUsos;
   cupons: Cupons;
   enderecos: Enderecos;
   kits: Kits;
+  pagamentos: Pagamentos;
   pedido_itens: PedidoItens;
   pedidos: Pedidos;
   pgmigrations: Pgmigrations;
   representantes: Representantes;
+  webhook_eventos: WebhookEventos;
 }
