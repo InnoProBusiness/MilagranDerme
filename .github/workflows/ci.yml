@@ -1,0 +1,121 @@
+name: CI/CD
+
+# Push na main: roda o portao de qualidade e, se passar, faz deploy na VPS.
+# Pull request: so o portao de qualidade.
+#
+# Repositorio publico. Duas consequencias que a estrutura abaixo respeita:
+#   1. Segredo nao chega em workflow disparado por PR de fork (o GitHub nao
+#      injeta), e o job de deploy so roda em `push` na main de qualquer jeito.
+#   2. Nenhum dado de infraestrutura (IP, porta, usuario) fica no arquivo —
+#      tudo vem de secrets, inclusive o known_hosts.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gate:
+    runs-on: ubuntu-latest
+
+    # Postgres 14, a mesma versao de producao. Nao e detalhe: as garantias
+    # que mais importam aqui (unicidade, CHECK, triggers de imutabilidade)
+    # sao do banco, e a suite roda contra Postgres real, nao contra mock.
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: milagran
+          POSTGRES_PASSWORD: milagran
+          POSTGRES_DB: milagran
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgres://milagran:milagran@localhost:5432/milagran
+      DIRECT_URL: postgres://milagran:milagran@localhost:5432/milagran
+      ATRIBUICAO_SECRET: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22 e o da imagem Docker. Manter igual evita o caso em que a
+      # suite passa no CI e o `next build` quebra no build da imagem.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Migrations
+        run: npm run db:migrate
+
+      - name: Testes
+        run: npm test
+
+      # Roda o mesmo `next build` que o Dockerfile roda, com os mesmos
+      # placeholders. Um erro de build pego aqui custa dois minutos de
+      # runner; pego na VPS, custa cinco minutos de build e o disco de uma
+      # maquina que opera perto do limite.
+      - name: Build
+        run: npm run build
+        env:
+          DATABASE_URL: postgres://build:build@localhost:5432/build
+          ATRIBUICAO_SECRET: placeholder-de-build-sem-valor-real-0123456789
+
+  deploy:
+    needs: quality-gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    # Dois merges seguidos na main nao podem virar dois deploys simultaneos.
+    # cancel-in-progress: false de proposito — cancelar no meio deixaria o
+    # stack file e as migrations num estado intermediario. O deploy da VPS
+    # tambem tem flock proprio, como segunda linha.
+    concurrency:
+      group: deploy-milagran
+      cancel-in-progress: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configura a chave de deploy
+        env:
+          CHAVE: ${{ secrets.VPS_SSH_KEY }}
+          HOSTS_CONHECIDOS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$CHAVE" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Host key fixada por secret, nao aceita na primeira conexao:
+          # StrictHostKeyChecking=accept-new confiaria em quem responder no
+          # IP, e um deploy carrega o codigo inteiro da aplicacao.
+          printf '%s\n' "$HOSTS_CONHECIDOS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      # A chave da VPS e forced-command: a conexao executa
+      # /root/milagran-ci-deploy.sh e nada mais. O sha vai como
+      # SSH_ORIGINAL_COMMAND e a arvore do repo vai pelo stdin.
+      - name: Deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          tar -czf - --exclude=.git . \
+            | ssh -i ~/.ssh/deploy_key \
+                  -o BatchMode=yes \
+                  -o StrictHostKeyChecking=yes \
+                  -p "$VPS_PORT" \
+                  "root@$VPS_HOST" "${{ github.sha }}"

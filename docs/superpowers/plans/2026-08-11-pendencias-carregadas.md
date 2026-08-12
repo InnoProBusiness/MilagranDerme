@@ -50,10 +50,18 @@ para não repetir isso.
 - **`produtos.test.ts`** ainda faz `deleteFrom('kits')` sem escopo — o último arquivo que limpa uma tabela inteira. Inofensivo hoje; vira armadilha quando o Plano 2 escrever os testes da vitrine.
 - **Estouro de `int4`** (acima de ~R$ 21,4 milhões) aparece como erro cru `22003` do Postgres em vez de erro de domínio. O banco falha seguro; é lacuna de mensagem.
 - **`centavos()`** usa tolerância de 1e-6, que só se comporta mal em valores acima de dezenas de milhões de reais. Irrelevante por pedido; documentar se for reusado para agregados.
-- **Sem CI.** 109 testes que protegem aritmética de comissão rodam só quando alguém lembra, e precisam de um container Postgres.
+- ~~**Sem CI.**~~ **Resolvido.** `.github/workflows/ci.yml` roda typecheck, migrations, os 127 testes
+  e o `next build` contra um Postgres 14 de serviço, em todo push e todo PR para a main. Push na
+  main que passe no portão faz deploy automático na VPS. Ver [`DEPLOY.md`](../../../DEPLOY.md).
 
 ## Ponto em aberto fora do código
 
-A branch de produção da Vercel e o que serve `/` depois do merge estão registrados em
-[`DEPLOY.md`](../../../DEPLOY.md). Enquanto isso não for confirmado, o site no ar continua
-sendo o commit inicial — não a landing page de recrutamento.
+**Resolvido:** a dúvida sobre a Production Branch da Vercel deixou de existir. O projeto
+passou a ter um alvo único de deploy — VPS em Docker Swarm — e a Serverless Function
+`api/candidatura.js` virou `src/app/api/candidatura/route.ts`. O mapa de URLs está em
+[`DEPLOY.md`](../../../DEPLOY.md).
+
+**Ainda aberto:** `milagranoficial.com.br` está registrado no registro.br mas sem
+delegação de zona (só NS placeholder, nenhum registro A). Enquanto o domínio não apontar
+para o IP da VPS, o Traefik não emite o certificado — o Let's Encrypt valida por
+HTTP-01 — e o site não é alcançável pelo domínio. É bloqueio de painel, não de código.

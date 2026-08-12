@@ -3,10 +3,7 @@
 .env.local
 .env.*.local
 
-# Vercel
-.vercel
-
-# Dependencies (in case a package.json is added later)
+# Dependencies
 node_modules
 
 # OS/editor cruft

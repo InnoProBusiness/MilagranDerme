@@ -1,6 +1,20 @@
+# Postgres LOCAL de desenvolvimento. Producao roda em outro lugar: o
+# Postgres compartilhado da VPS, gerido pela stack `postgres` do Swarm.
+#
+# A versao 14 acompanha a de producao de proposito. Ela e compartilhada com
+# outros projetos da maquina e nao vai subir de versao por causa deste, e
+# desenvolver contra o 17 deixa passar recurso que producao nao tem — o erro
+# so apareceria depois do deploy.
+#
+# ATENCAO ao trocar de versao: um volume inicializado pelo 17 nao e legivel
+# pelo 14, e o container sobe reclamando de "database files are incompatible
+# with server". Se cair nisso, o banco local e descartavel -- `-v` apaga o
+# volume declarado aqui, sem precisar adivinhar o nome que o Compose deriva
+# do diretorio do projeto:
+#   docker compose down -v && npm run db:up && npm run db:migrate
 services:
   db:
-    image: postgres:17-alpine
+    image: postgres:14-alpine
     environment:
       POSTGRES_USER: milagran
       POSTGRES_PASSWORD: milagran

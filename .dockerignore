@@ -1,0 +1,32 @@
+# Reinstalado dentro da imagem por `npm ci` — copiar o node_modules do host
+# traria binarios compilados para outra plataforma (o desenvolvimento e em
+# Windows, a imagem e Linux/musl).
+node_modules
+.next
+.git
+.github
+
+# Segredos: o stack injeta as variaveis em runtime. Um .env copiado para a
+# imagem ficaria gravado na camada para sempre, legivel por qualquer um que
+# rode `docker history`.
+.env
+.env.local
+.env.*.local
+
+# Nao entram no build da imagem
+docs
+*.md
+!README.md
+docker-compose.yml
+docker-compose.override.yml
+milagran-stack*.yml
+
+# Scripts que rodam NO host da VPS, nunca dentro do container. Fora daqui
+# eles seriam copiados pelo `COPY . .`, e ai editar um deles invalidaria a
+# camada e forcaria `npm ci` + `next build` inteiros de novo.
+deploy
+
+.DS_Store
+Thumbs.db
+*.tsbuildinfo
+.superpowers

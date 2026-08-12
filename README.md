@@ -9,7 +9,8 @@ puro escritas a mao.
 ## Pre-requisitos
 
 - **Node 20.9+** (ambiente de referencia: 24.x)
-- **Docker** — o Postgres 17 local sobe por `docker compose`
+- **Docker** — o Postgres local sobe por `docker compose`, na **versao 14**,
+  a mesma de producao (ver `docker-compose.yml`)
 - **npm** (o `package-lock.json` versionado e o do npm)
 
 ## Setup
@@ -27,8 +28,8 @@ O `.env` precisa de tres variaveis para os testes passarem:
 
 | Variavel | Para que serve |
 |---|---|
-| `DATABASE_URL` | Conexao da aplicacao e dos testes. Em producao, a string **com pooling**. |
-| `DIRECT_URL` | Conexao **sem pooler**, usada so pelas migrations. |
+| `DATABASE_URL` | Conexao da aplicacao e dos testes. |
+| `DIRECT_URL` | Conexao usada so pelas migrations (**nunca** via pooler). |
 | `ATRIBUICAO_SECRET` | Chave HMAC do cookie de atribuicao. **Minimo 32 caracteres.** |
 
 Gerar o segredo:
@@ -78,12 +79,17 @@ precisam ter rodado antes.
 | `src/proxy.ts` | Grava o cookie em `/r/<slug>` (Next 16 renomeou `middleware`) |
 | `src/repositories/*` | Acesso ao banco por entidade |
 | `public/` | LP de recrutamento, politica de privacidade e estaticos |
-| `api/candidatura.js` | Serverless Function da Vercel, fora do build do Next |
+| `src/lib/candidatura.ts` | Validacao, PDF e envio da candidatura (Resend) |
+| `src/app/api/*` | Route handlers: `candidatura` (POST) e `health` |
+| `Dockerfile`, `milagran-stack.example.yml`, `deploy/` | Deploy em Docker Swarm |
 
 Regras que valem para todo o codigo (dinheiro sempre em centavos inteiros,
 fuso `America/Sao_Paulo`, migrations a mao, atribuicao autoritativa no
 pedido) estao em `docs/superpowers/plans/` — secao **Global Constraints**.
 
-Quem serve o que depois do deploy esta em [`DEPLOY.md`](./DEPLOY.md). Leia
-antes de mexer em `public/`, em `index.html` ou na Production Branch da
-Vercel.
+## Deploy
+
+Alvo unico: **VPS em Docker Swarm**, atras do Traefik. Nao ha Vercel nem
+Serverless Function. O ciclo completo, o mapa de URLs e as armadilhas da
+maquina estao em [`DEPLOY.md`](./DEPLOY.md) — leia antes de mexer em
+`public/`, no `Dockerfile` ou no stack.

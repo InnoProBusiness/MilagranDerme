@@ -1,0 +1,99 @@
+version: "3.8"
+
+# Milagran - plataforma (Next.js 16 + Kysely/Postgres), deploy em Docker
+# Swarm na VPS. Segue o padrao das outras stacks da maquina: rede
+# netInnotalk, placement no manager, limites de recurso explicitos e
+# roteamento pelo Traefik com certificado do Let's Encrypt.
+#
+# Este arquivo e o MODELO, versionado e sem segredo. O arquivo real vive em
+# /opt/milagran/milagran-stack.yml na VPS, com chmod 600, e e gerado por
+# /root/make-milagran-stack.sh a partir dos segredos em /root/.milagran-*.
+# Nao commite o arquivo gerado.
+#
+# Sem `ports`: o acesso e exclusivamente pelo Traefik. Publicar a 3000 no
+# host abriria um caminho paralelo em HTTP puro -- e o cookie de atribuicao
+# usa o prefixo __Host-, que o navegador so aceita sob HTTPS.
+
+services:
+  app:
+    image: milagran:TAG
+    networks:
+      - netInnotalk
+    environment:
+      # O Postgres do swarm nao publica porta no host -- so e alcancavel
+      # pelo alias `postgres` dentro da netInnotalk.
+      #
+      # Aqui DATABASE_URL aponta direto para o Postgres, sem pooler. O aviso
+      # do .env.example ("use a string COM POOLING") vale para provedor
+      # serverless, onde cada request pode abrir uma conexao nova; neste
+      # deploy a aplicacao e um processo Node de vida longa com pool proprio
+      # de 5 conexoes (src/lib/db.ts) contra um Postgres com
+      # max_connections=500. O pooler externo nao teria o que fazer.
+      - DATABASE_URL=postgres://milagran:SENHA_DO_BANCO@postgres:5432/milagran
+      # Minimo 32 caracteres -- a aplicacao recusa iniciar o fluxo de
+      # atribuicao com segredo mais curto. Trocar este valor invalida o
+      # cookie de TODOS os visitantes em atribuicao aberta: 30 dias de
+      # comissao em risco. Rotacione so com motivo.
+      - ATRIBUICAO_SECRET=SEGREDO_DE_ATRIBUICAO
+      # Resend (POST /api/candidatura). Com estes tres vazios o site sobe
+      # normalmente e so o envio do formulario responde 500
+      # server_not_configured -- de proposito: e melhor a LP no ar sem
+      # formulario do que a stack inteira fora.
+      - RESEND_API_KEY=
+      - EMAIL_FROM=
+      - EMAIL_TO=
+      - ENVIAR_CONFIRMACAO=false
+      - NODE_ENV=production
+      - PORT=3000
+      - TZ=America/Sao_Paulo
+    deploy:
+      mode: replicated
+      # Uma replica de proposito: o rate limit de /api/candidatura conta em
+      # memoria do processo (src/lib/candidatura.ts). Com N replicas o
+      # limite efetivo vira N x 5 por janela. Antes de escalar, mover o
+      # contador para Redis.
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          memory: 128M
+      restart_policy:
+        condition: any
+        delay: 5s
+      labels:
+        - traefik.enable=true
+        - traefik.docker.network=netInnotalk
+        - traefik.http.routers.milagran.rule=Host(`milagranoficial.com.br`)
+        - traefik.http.routers.milagran.entrypoints=websecure
+        - traefik.http.routers.milagran.priority=1
+        - traefik.http.routers.milagran.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.milagran.service=milagran
+        - traefik.http.services.milagran.loadbalancer.server.port=3000
+        - traefik.http.services.milagran.loadbalancer.passHostHeader=true
+
+        # www -> apex, 301. Nao e SEO: o cookie de atribuicao usa o prefixo
+        # __Host-, que proibe o atributo Domain, entao o cookie gravado em
+        # www.milagranoficial.com.br NAO e enviado para milagranoficial.com.br.
+        # Sem este redirect, quem entra por www/r/<slug> e compra no apex
+        # perde a atribuicao e o representante nao recebe a comissao.
+        # O $$ escapa a interpolacao do `docker stack deploy` -- com um $ so,
+        # ${1} viraria string vazia e todo /caminho cairia na home.
+        - traefik.http.routers.milagran-www.rule=Host(`www.milagranoficial.com.br`)
+        - traefik.http.routers.milagran-www.entrypoints=websecure
+        - traefik.http.routers.milagran-www.priority=1
+        - traefik.http.routers.milagran-www.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.milagran-www.service=milagran
+        - traefik.http.routers.milagran-www.middlewares=milagran-www-apex
+        - traefik.http.middlewares.milagran-www-apex.redirectregex.regex=^https?://www\.milagranoficial\.com\.br/(.*)
+        - traefik.http.middlewares.milagran-www-apex.redirectregex.replacement=https://milagranoficial.com.br/$${1}
+        - traefik.http.middlewares.milagran-www-apex.redirectregex.permanent=true
+
+networks:
+  netInnotalk:
+    external: true
+    name: netInnotalk
