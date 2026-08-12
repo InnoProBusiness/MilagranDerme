@@ -1,0 +1,45 @@
+import { buscarKitAtivoPorSlug, listarKitsAtivos } from '@/repositories/produtos'
+import { QUANTIDADE_MAXIMA } from '@/lib/carrinho'
+import { CheckoutWizard } from '@/components/checkout-wizard'
+
+// Preco e disponibilidade vem do banco a cada acesso — mesmo raciocinio de
+// src/app/comprar/page.tsx e src/app/r/[slug]/page.tsx: um snapshot
+// congelado no build serviria um kit desativado ou um preco velho.
+export const dynamic = 'force-dynamic'
+
+type Props = {
+  searchParams: Promise<{ kit?: string; q?: string }>
+}
+
+export default async function PaginaCheckout({ searchParams }: Props) {
+  const sp = await searchParams
+
+  // O slug vem da URL que a Vitrine monta (/checkout?kit=<slug>&q=<qtd>).
+  // Se ele nao resolver para um kit ativo — link velho, kit desativado
+  // entre o clique e o load, ou acesso direto sem query string — cai para o
+  // primeiro kit ativo do catalogo, o mesmo que /comprar mostra.
+  const kitPedido = sp.kit ? await buscarKitAtivoPorSlug(sp.kit) : null
+  const kit = kitPedido ?? (await listarKitsAtivos())[0] ?? null
+
+  if (!kit) {
+    return (
+      <main>
+        <section className="section checkout">
+          <p className="kicker">Checkout</p>
+          <p>Nenhum kit disponivel no momento.</p>
+        </section>
+      </main>
+    )
+  }
+
+  const quantidadeBruta = Number(sp.q)
+  const quantidadeInicial = Number.isInteger(quantidadeBruta)
+    ? Math.max(1, Math.min(QUANTIDADE_MAXIMA, quantidadeBruta))
+    : 1
+
+  return (
+    <main>
+      <CheckoutWizard kit={kit} quantidadeInicial={quantidadeInicial} />
+    </main>
+  )
+}

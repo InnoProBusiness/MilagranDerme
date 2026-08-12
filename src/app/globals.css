@@ -714,6 +714,31 @@ main{position:relative;z-index:1;}
 
 .vitrine__cta{width:100%;text-align:center;}
 
+/* CHECKOUT (4 passos) */
+.checkout{max-width:640px;}
+.checkout__passo h1{font-size:clamp(26px,4vw,36px);margin-bottom:14px;}
+.checkout__passo h2{font-size:22px;margin-bottom:22px;}
+.checkout__nav{
+  display:flex;
+  justify-content:space-between;
+  gap:16px;
+  margin-top:26px;
+}
+.checkout__nav .btn:only-child{margin-left:auto;}
+
+/* CONFIRMACAO DO PEDIDO */
+.confirmacao{max-width:640px;}
+.confirmacao h1{font-size:clamp(26px,4vw,36px);margin-bottom:26px;}
+.confirmacao__itens{margin-bottom:22px;}
+.confirmacao__aviso{
+  color:var(--ink-muted);
+  font-size:14px;
+  line-height:1.7;
+  border-top:1px solid var(--line);
+  padding-top:20px;
+  margin-top:26px;
+}
+
 /* RESPONSIVE */
 @media (max-width: 900px){
   .story-grid{grid-template-columns:1fr;}

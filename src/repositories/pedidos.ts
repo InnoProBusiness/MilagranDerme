@@ -1,6 +1,6 @@
-import type { Selectable } from 'kysely'
+import { sql, type Selectable, type Transaction } from 'kysely'
 import { getDb } from '@/lib/db'
-import type { Pedidos, OrigemAtribuicao, PedidoStatus } from '@/lib/db-types'
+import type { DB, Pedidos, PedidoItens, OrigemAtribuicao, PedidoStatus } from '@/lib/db-types'
 import { deInteiro, type Centavos } from '@/lib/money'
 
 // kysely-codegen ja gera unions literais a partir dos ENUMs do Postgres
@@ -27,6 +27,16 @@ export type EntradaPedido = {
   desconto: Centavos
   frete: Centavos
   itens: ItemDoPedido[]
+  /**
+   * Opcionais e sempre null quando ausentes: os testes existentes (Tarefas
+   * 1 e 5) chamam criarPedido sem cliente, endereco ou cupom nenhum, e
+   * continuam validos. A Tarefa 9 (checkout) e quem sempre preenche os
+   * tres — sao o elo entre o pedido e quem comprou, e entre o pedido e o
+   * cupom_usos gravado na mesma transacao.
+   */
+  clienteId?: string | null
+  enderecoId?: string | null
+  cupomId?: string | null
 }
 
 export type Pedido = {
@@ -95,8 +105,16 @@ function paraPedido(l: Selectable<Pedidos>): Pedido {
  * e validado contra kits.preco_centavos dentro desta mesma transacao antes de
  * gravar o item, e uma divergencia lanca em vez de gravar em silencio — ver o
  * comentario no loop abaixo.
+ *
+ * Aceita uma transacao externa opcional (`trx`), no mesmo formato de
+ * salvarClienteComEndereco (src/repositories/clientes.ts): quando presente,
+ * a escrita entra na transacao do chamador em vez de abrir uma propria. O
+ * checkout (Tarefa 9) chama esta funcao de dentro da mesma transacao que
+ * salva cliente/endereco e resgata o cupom — sem isso, o resgate do cupom e
+ * a criacao do pedido ficariam em transacoes diferentes, e um dos dois
+ * podia commitar sem o outro.
  */
-export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
+export async function criarPedido(e: EntradaPedido, trx?: Transaction<DB>): Promise<Pedido> {
   if (e.itens.length === 0) {
     throw new Error('Pedido sem itens nao pode ser criado')
   }
@@ -107,8 +125,8 @@ export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
   ) as Centavos
   const total = (subtotal - e.desconto + e.frete) as Centavos
 
-  return getDb().transaction().execute(async (trx) => {
-    const linha = await trx
+  const executar = async (t: Transaction<DB>) => {
+    const linha = await t
       .insertInto('pedidos')
       .values({
         origem: e.origem,
@@ -121,6 +139,9 @@ export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
         desconto_centavos: e.desconto,
         frete_centavos: e.frete,
         total_centavos: total,
+        cliente_id: e.clienteId ?? null,
+        endereco_id: e.enderecoId ?? null,
+        cupom_id: e.cupomId ?? null,
       })
       .returningAll()
       .executeTakeFirstOrThrow()
@@ -129,7 +150,7 @@ export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
     // se o preco do kit mudar amanha, o pedido de hoje continua valendo o
     // que valia hoje — mesmo principio do percentual_comissao_snapshot.
     for (const item of e.itens) {
-      const kit = await trx
+      const kit = await t
         .selectFrom('kits')
         .select(['nome', 'preco_centavos'])
         .where('id', '=', item.kitId)
@@ -148,7 +169,7 @@ export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
         )
       }
 
-      await trx
+      await t
         .insertInto('pedido_itens')
         .values({
           pedido_id: linha.id,
@@ -162,5 +183,59 @@ export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
     }
 
     return paraPedido(linha)
-  })
+  }
+
+  if (trx) return executar(trx)
+  return getDb().transaction().execute(executar)
+}
+
+export type ItemPedido = {
+  id: string
+  kitId: string
+  nomeSnapshot: string
+  precoUnitarioCentavos: Centavos
+  quantidade: number
+  totalCentavos: Centavos
+}
+
+export type PedidoComItens = Pedido & { itens: ItemPedido[] }
+
+function paraItemPedido(l: Selectable<PedidoItens>): ItemPedido {
+  return {
+    id: l.id,
+    kitId: l.kit_id,
+    nomeSnapshot: l.nome_snapshot,
+    precoUnitarioCentavos: deInteiro(l.preco_unitario_centavos),
+    quantidade: l.quantidade,
+    totalCentavos: deInteiro(l.total_centavos),
+  }
+}
+
+/**
+ * Le um pedido pelo numero publico (o que aparece na URL de confirmacao,
+ * /pedido/<numero>) junto dos seus itens. Usada pela pagina de confirmacao
+ * (Tarefa 9) — nunca pelo fluxo de criacao, que ja tem a linha inteira em
+ * maos a partir de criarPedido.
+ */
+export async function buscarPedidoComItensPorNumero(numero: number): Promise<PedidoComItens | null> {
+  const linha = await getDb()
+    .selectFrom('pedidos')
+    .selectAll()
+    // pedidos.numero e int8: o tipo gerado (Int8 = ColumnType<string, ...>)
+    // torna `.where('numero', '=', numero)` com um `number` cru um erro de
+    // tipo — o select type e string mesmo o driver devolvendo number em
+    // runtime (ver o setTypeParser de INT8 em src/lib/db.ts). sql`` evita a
+    // fricao sem introduzir `as` nenhum.
+    .where(sql<boolean>`numero = ${numero}`)
+    .executeTakeFirst()
+  if (!linha) return null
+
+  const itens = await getDb()
+    .selectFrom('pedido_itens')
+    .selectAll()
+    .where('pedido_id', '=', linha.id)
+    .orderBy('criado_em', 'asc')
+    .execute()
+
+  return { ...paraPedido(linha), itens: itens.map(paraItemPedido) }
 }
