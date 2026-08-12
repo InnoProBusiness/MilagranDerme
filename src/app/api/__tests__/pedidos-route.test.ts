@@ -243,6 +243,7 @@ describe('POST /api/pedidos', () => {
       { kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR },
       cookieDe(SLUG_MARIA),
     ))
+    expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await pedidoPorNumero(numero)
     expect(pedido.origem).toBe('link')
@@ -257,6 +258,7 @@ describe('POST /api/pedidos', () => {
 
   it('sem cookie, a venda e da casa', async () => {
     const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+    expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await getDb().selectFrom('pedidos').select('origem')
       .where('numero', '=', numero).executeTakeFirstOrThrow()
@@ -274,6 +276,7 @@ describe('POST /api/pedidos', () => {
       { kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR },
       cookieDe(SLUG_INATIVA, { utmSource: 'facebook', utmMedium: 'ads', utmCampaign: 'inverno' }),
     ))
+    expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await pedidoPorNumero(numero)
     expect(pedido.origem).toBe('rep_inativo')
@@ -287,6 +290,7 @@ describe('POST /api/pedidos', () => {
     const r = await POST(requisicao({
       kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM, ...COMPRADOR,
     }))
+    expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await pedidoPorNumero(numero)
     expect(pedido.desconto_centavos).toBe(10000)
@@ -308,6 +312,7 @@ describe('POST /api/pedidos', () => {
       { kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM_JOANA, ...COMPRADOR },
       cookieDe(SLUG_MARIA),
     ))
+    expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await pedidoPorNumero(numero)
     expect(pedido.origem).toBe('cupom')
@@ -323,6 +328,7 @@ describe('POST /api/pedidos', () => {
       { kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM_CASA, ...COMPRADOR },
       cookieDe(SLUG_MARIA),
     ))
+    expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await pedidoPorNumero(numero)
     expect(pedido.origem).toBe('link')
