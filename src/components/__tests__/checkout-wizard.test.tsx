@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CheckoutWizard } from '@/components/checkout-wizard'
 import type { Kit } from '@/repositories/produtos'
+import { deInteiro } from '@/lib/money'
 
 // useRouter() exige um App Router montado — inexistente neste ambiente de
 // teste (jsdom puro, sem servidor Next). Mockar e o padrao recomendado pela
@@ -12,10 +13,14 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push }),
 }))
 
+// deInteiro(), nunca `100000 as never`: `as never` desliga o construtor de
+// Centavos e com ele a validacao de runtime. Este preco alimenta a assercao
+// de dinheiro do resumo, entao um fixture fracionado passaria calado
+// formatando o valor errado em vez de estourar na construcao.
 const KIT: Kit = {
   id: 'k1', slug: 'kit-milagran', nome: 'Kit Milagran',
   descricao: 'Kit de limpeza de pele instantanea.',
-  precoCentavos: 100000 as never, unidades: 1, sku: 'MG-KIT-001',
+  precoCentavos: deInteiro(100000), unidades: 1, sku: 'MG-KIT-001',
   anvisaRegistro: null, ativo: true, ordem: 1,
 }
 

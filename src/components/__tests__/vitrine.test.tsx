@@ -3,11 +3,17 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Vitrine, diminuirQuantidade, aumentarQuantidade } from '@/components/vitrine'
 import { QUANTIDADE_MAXIMA } from '@/lib/carrinho'
+import { deInteiro } from '@/lib/money'
 
+// deInteiro(), nunca `100000 as never`. Este preco alimenta as assercoes de
+// dinheiro abaixo (R$ 1.000,00 unitario, R$ 3.000,00 no subtotal e no
+// total): `as never` desliga o construtor de Centavos e com ele toda a
+// validacao de runtime, entao um fixture com 19.9 renderizaria R$ 0,20 em
+// vez de estourar — um erro de 100x que o tipo existe justamente para pegar.
 const KITS = [{
   id: 'k1', slug: 'kit-milagran', nome: 'Kit Milagran',
   descricao: 'Kit de limpeza de pele instantanea.',
-  precoCentavos: 100000 as never, unidades: 1, sku: 'MG-KIT-001',
+  precoCentavos: deInteiro(100000), unidades: 1, sku: 'MG-KIT-001',
   anvisaRegistro: null, ativo: true, ordem: 1,
 }]
 
