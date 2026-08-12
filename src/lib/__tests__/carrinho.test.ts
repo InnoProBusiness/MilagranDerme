@@ -39,6 +39,10 @@ describe('montarCarrinho', () => {
     expect(() => montarCarrinho([{ ...KIT, quantidade: -1 }])).toThrow(/quantidade/i)
   })
 
+  it('rejeita quantidade fracionada', () => {
+    expect(() => montarCarrinho([{ ...KIT, quantidade: 1.5 }])).toThrow(/quantidade/i)
+  })
+
   it('rejeita quantidade acima do teto', () => {
     expect(() => montarCarrinho([{ ...KIT, quantidade: QUANTIDADE_MAXIMA + 1 }]))
       .toThrow(/maxima/i)
@@ -57,5 +61,17 @@ describe('montarCarrinho', () => {
     expect(r.subtotal).toBe(380000)
     expect(r.linhas).toHaveLength(2)
     expect(r.linhas[0]!.total).toBe(200000)
+  })
+
+  it('rejeita carrinho com subtotal acima do teto (overflow de integer)', () => {
+    // Cada linha com QUANTIDADE_MAXIMA e precoUnitario de 100000 totaliza 2.000.000.
+    // 1074 linhas excedem o integer limit de Postgres (2.147.483.647).
+    const linhas = Array.from({ length: 1074 }, (_, i) => ({
+      kitId: `k${i}`,
+      nome: `Kit ${i}`,
+      precoUnitario: deInteiro(100000),
+      quantidade: QUANTIDADE_MAXIMA,
+    }))
+    expect(() => montarCarrinho(linhas)).toThrow(/carrinho total nao pode exceder/i)
   })
 })

@@ -1,11 +1,21 @@
 import { deInteiro, multiplicar, type Centavos } from '@/lib/money'
 
 /**
- * Teto por pedido. Existe para que um erro de digitacao ou um bot nao gere
- * um pedido de R$ 2 milhoes que estoura o int4 do banco e aparece como erro
- * cru do Postgres em vez de mensagem de validacao.
+ * Teto por linha: quantidade maxima de unidades de um kit por pedido.
+ * Existe para que um erro de digitacao ou um bot nao gere uma linha de
+ * R$ 2 milhoes que estoura o int4 do banco e aparece como erro cru do
+ * Postgres em vez de mensagem de validacao. O subtotal do carrinho inteiro
+ * e limitado por SUBTOTAL_MAXIMO_CENTAVOS.
  */
 export const QUANTIDADE_MAXIMA = 20
+
+/**
+ * Teto do subtotal: limita do carrinho total para nao estouro integer.
+ * Este e o limite do Postgres `integer` type usado em pedidos.subtotal_centavos
+ * e pedido_itens.total_centavos. A constraint do banco rejeitaria mesmo assim,
+ * mas aqui validamos mais cedo com mensagem clara.
+ */
+export const SUBTOTAL_MAXIMO_CENTAVOS = 2_147_483_647
 
 export type EntradaLinha = {
   kitId: string
@@ -51,6 +61,10 @@ export function montarCarrinho(
   })
 
   const subtotal = linhas.reduce((acc, l) => acc + l.total, 0) as Centavos
+  if (subtotal > SUBTOTAL_MAXIMO_CENTAVOS) {
+    throw new Error(`Carrinho total nao pode exceder ${SUBTOTAL_MAXIMO_CENTAVOS} centavos, recebido ${subtotal}`)
+  }
+
   // O desconto nunca ultrapassa o subtotal: a constraint
   // pedido_desconto_nao_excede rejeitaria, e um total negativo nao existe.
   const descontoAplicado = Math.min(desconto, subtotal) as Centavos
