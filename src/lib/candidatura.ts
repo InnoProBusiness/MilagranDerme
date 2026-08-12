@@ -1,4 +1,8 @@
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
+import {
+  criarLimitadorPorIp, ipDoPedido,
+  JANELA_RATE_LIMIT_MS, MAX_CANDIDATURAS_POR_JANELA,
+} from '@/lib/rate-limit'
 
 /**
  * Nucleo do fluxo de candidatura de representante: valida, gera o PDF e
@@ -25,54 +29,21 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export type DadosCandidatura = Record<string, unknown>
 
 // ---- Rate limit por IP ----
-// Estado em memoria do processo. Com uma replica unica no Swarm o contador
-// cobre todo o trafego de verdade. Se um dia `replicas` passar de 1, vira
-// aproximacao — cada replica conta o seu pedaco, e o limite efetivo vira
-// N x 5 por janela. Nesse dia o certo e mover o contador para Redis (a
-// stack `evolution` da VPS ja tem um), nao aumentar o limite.
-const JANELA_RATE_LIMIT_MS = 10 * 60 * 1000
-const MAX_POR_JANELA = 5
-const contadorPorIp = new Map<string, { inicioJanela: number; total: number }>()
+// O mecanismo (contador em memoria do processo, janela deslizante, poda dos
+// IPs vencidos) vive em src/lib/rate-limit.ts, compartilhado com
+// POST /api/pedidos — inclusive o aviso honesto de que isto e um freio
+// contra bot ingenuo, e nao rate limiting distribuido nem controle de
+// acesso. Aqui ficam so o contador PROPRIO deste endpoint (Map separado, sem
+// orcamento compartilhado com o checkout) e o teto historico de 5 por
+// janela.
+export const excedeuRateLimit = criarLimitadorPorIp({
+  janelaMs: JANELA_RATE_LIMIT_MS,
+  maxPorJanela: MAX_CANDIDATURAS_POR_JANELA,
+})
 
-/**
- * Sem esta poda o Map cresce para sempre: cada IP visto uma unica vez fica
- * residente ate o container reiniciar. Num processo de vida longa (o
- * container do Swarm roda por semanas, ao contrario de um Lambda) isso e um
- * vazamento de memoria lento contra o limite de 512M da stack.
- */
-function podarExpirados(agora: number): void {
-  for (const [ip, entrada] of contadorPorIp) {
-    if (agora - entrada.inicioJanela > JANELA_RATE_LIMIT_MS) contadorPorIp.delete(ip)
-  }
-}
-
-export function excedeuRateLimit(ip: string, agora: number = Date.now()): boolean {
-  const entrada = contadorPorIp.get(ip)
-
-  if (!entrada || agora - entrada.inicioJanela > JANELA_RATE_LIMIT_MS) {
-    podarExpirados(agora)
-    contadorPorIp.set(ip, { inicioJanela: agora, total: 1 })
-    return false
-  }
-
-  entrada.total += 1
-  return entrada.total > MAX_POR_JANELA
-}
-
-/**
- * O IP real chega em X-Forwarded-For porque o Traefik esta na frente
- * (`passHostHeader=true` na stack). O primeiro elemento da lista e o
- * cliente; os seguintes sao os proxies. Um cliente pode forjar o header,
- * entao isto vale como freio para bot ingenuo, nao como controle de acesso.
- */
-export function ipDoPedido(headers: Headers): string {
-  const encaminhado = headers.get('x-forwarded-for')
-  if (encaminhado) {
-    const primeiro = encaminhado.split(',')[0].trim()
-    if (primeiro) return primeiro
-  }
-  return headers.get('x-real-ip')?.trim() || 'desconhecido'
-}
+// Reexportado no lugar onde o route handler e os testes ja o importavam,
+// para que mover a funcao nao vire um churn de imports sem ganho nenhum.
+export { ipDoPedido }
 
 function escaparHtml(valor: unknown): string {
   return String(valor)

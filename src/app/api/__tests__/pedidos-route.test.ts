@@ -3,6 +3,7 @@ import { sql } from 'kysely'
 import { getDb, closeDb } from '@/lib/db'
 import { POST } from '@/app/api/pedidos/route'
 import { assinarAtribuicao } from '@/lib/atribuicao'
+import { MAX_PEDIDOS_POR_JANELA } from '@/lib/rate-limit'
 
 const SEGREDO = 'a'.repeat(64)
 const COMPRADOR = {
@@ -12,11 +13,27 @@ const COMPRADOR = {
   complemento: '', bairro: 'Bela Vista', cidade: 'Sao Paulo', estado: 'SP',
 }
 
-function requisicao(body: unknown, cookie?: string) {
+// E-mail usado SO na requisicao que o rate limit barra, para que "nenhuma
+// linha foi criada" possa ser afirmado sobre um e-mail que nunca teve linha
+// nenhuma — em vez de tentar provar ausencia num e-mail que os testes de
+// sucesso ja povoaram.
+const EMAIL_BLOQUEADO = 'ana.bloqueada@exemplo.com'
+
+// Cada requisicao sai de um IP proprio: POST /api/pedidos agora tem rate
+// limit por IP (src/lib/rate-limit.ts) e o contador e estado de modulo, que
+// vive por todo o arquivo. Sem isto, o teto de MAX_PEDIDOS_POR_JANELA seria
+// consumido pelo conjunto dos testes e os ultimos veriam 429 sem nenhuma
+// relacao com o que alegam provar. Mesma tecnica de ipUnico() em
+// src/lib/__tests__/candidatura.test.ts.
+let contadorIp = 0
+const ipUnico = () => `10.0.0.${++contadorIp}`
+
+function requisicao(body: unknown, cookie?: string, ip: string = ipUnico()) {
   return new Request('http://localhost/api/pedidos', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'x-forwarded-for': ip,
       ...(cookie ? { cookie: `__Host-mg_attr=${cookie}` } : {}),
     },
     body: JSON.stringify(body),
@@ -50,24 +67,26 @@ let idJoana: string
 async function semear() {
   const db = getDb()
 
-  // pedidos primeiro: cliente_id/endereco_id/cupom_id sao ON DELETE
-  // RESTRICT, e apagar o pedido leva pedido_itens e cupom_usos junto (ON
-  // DELETE CASCADE) — ver migrations/1755000000000_pedido_itens.sql e
-  // 1755000200000_cupons.sql.
-  await db.deleteFrom('pedidos').where('cliente_id', 'in',
-    db.selectFrom('clientes').select('id')
-      .where(sql<boolean>`lower(email) = lower(${COMPRADOR.email})`),
-  ).execute()
-  // Orfaos de uma execucao anterior interrompida antes de limpar.
-  await db.deleteFrom('cupom_usos').where('cliente_id', 'in',
-    db.selectFrom('clientes').select('id')
-      .where(sql<boolean>`lower(email) = lower(${COMPRADOR.email})`),
-  ).execute()
-  // enderecos.cliente_id e ON DELETE CASCADE (migrations/1755000100000_clientes.sql):
-  // apagar o cliente abaixo leva o(s) endereco(s) dele junto, sem precisar
-  // de um DELETE FROM enderecos em separado.
-  await db.deleteFrom('clientes')
-    .where(sql<boolean>`lower(email) = lower(${COMPRADOR.email})`).execute()
+  for (const email of [COMPRADOR.email, EMAIL_BLOQUEADO]) {
+    // pedidos primeiro: cliente_id/endereco_id/cupom_id sao ON DELETE
+    // RESTRICT, e apagar o pedido leva pedido_itens e cupom_usos junto (ON
+    // DELETE CASCADE) — ver migrations/1755000000000_pedido_itens.sql e
+    // 1755000200000_cupons.sql.
+    await db.deleteFrom('pedidos').where('cliente_id', 'in',
+      db.selectFrom('clientes').select('id')
+        .where(sql<boolean>`lower(email) = lower(${email})`),
+    ).execute()
+    // Orfaos de uma execucao anterior interrompida antes de limpar.
+    await db.deleteFrom('cupom_usos').where('cliente_id', 'in',
+      db.selectFrom('clientes').select('id')
+        .where(sql<boolean>`lower(email) = lower(${email})`),
+    ).execute()
+    // enderecos.cliente_id e ON DELETE CASCADE (migrations/1755000100000_clientes.sql):
+    // apagar o cliente abaixo leva o(s) endereco(s) dele junto, sem precisar
+    // de um DELETE FROM enderecos em separado.
+    await db.deleteFrom('clientes')
+      .where(sql<boolean>`lower(email) = lower(${email})`).execute()
+  }
   // cupons.representante_id e ON DELETE RESTRICT: os cupons deste arquivo
   // tem que sumir antes dos representantes poderem ser apagados.
   await db.deleteFrom('cupons').where('codigo', 'in', CODIGOS_CUPOM).execute()
@@ -131,12 +150,12 @@ async function semear() {
 // prova exatamente a alegacao do teste (nenhum PEDIDO NOVO DESTE
 // COMPRADOR), sem depender da ordem ou do timing de arquivos que nao tem
 // nada a ver com este.
-async function contarPedidos(): Promise<number> {
+async function contarPedidos(email: string = COMPRADOR.email): Promise<number> {
   const { total } = await getDb().selectFrom('pedidos')
     .select(sql<number>`count(*)::int`.as('total'))
     .where('cliente_id', 'in',
       getDb().selectFrom('clientes').select('id')
-        .where(sql<boolean>`lower(email) = lower(${COMPRADOR.email})`),
+        .where(sql<boolean>`lower(email) = lower(${email})`),
     )
     .executeTakeFirstOrThrow()
   return total
@@ -363,5 +382,69 @@ describe('POST /api/pedidos', () => {
   it('rejeita corpo sem os campos do comprador', async () => {
     const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1 }))
     expect(r.status).toBe(422)
+  })
+
+  // O endpoint nao tem autenticacao e escreve CPF, nome completo, telefone e
+  // endereco residencial. O freio e o mesmo mecanismo por IP que o
+  // formulario de candidatura ja usava (src/lib/rate-limit.ts) — em memoria
+  // do processo, quebra-molas contra abuso ingenuo, nao rate limiting
+  // distribuido.
+  describe('rate limit por IP', () => {
+    it('permite MAX_PEDIDOS_POR_JANELA pedidos do mesmo IP e barra o seguinte com 429', async () => {
+      const ip = ipUnico()
+      for (let i = 0; i < MAX_PEDIDOS_POR_JANELA; i++) {
+        const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }, undefined, ip))
+        // O teto nao pode cortar trafego legitimo ANTES de ser atingido:
+        // todas as MAX primeiras precisam passar de verdade.
+        expect(r.status).toBe(201)
+      }
+      expect(await contarPedidos()).toBe(MAX_PEDIDOS_POR_JANELA)
+
+      const bloqueado = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }, undefined, ip))
+      expect(bloqueado.status).toBe(429)
+      expect(await bloqueado.json()).toEqual({ error: 'rate_limited' })
+      expect(await contarPedidos()).toBe(MAX_PEDIDOS_POR_JANELA)
+    })
+
+    // Um IP DIFERENTE nao herda o contador do teste acima: o limite e por
+    // IP, e um comprador legitimo nao pode ser barrado porque outro
+    // exagerou.
+    it('o teto e por IP: outro IP continua criando pedido normalmente', async () => {
+      const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+      expect(r.status).toBe(201)
+    })
+
+    it('RATE LIMIT/LGPD: a requisicao barrada nao cria cliente, endereco nem pedido', async () => {
+      const ip = ipUnico()
+      // Esgota a janela com corpos que o Zod recusa: o contador soma
+      // TENTATIVAS, nao sucessos — se contasse so os 201, um bot mandando
+      // lixo ficaria sem freio nenhum. Alem disso, um 422 nao escreve nada,
+      // entao o estado do banco na hora do 429 e conhecido.
+      for (let i = 0; i < MAX_PEDIDOS_POR_JANELA; i++) {
+        const r = await POST(requisicao({ kitSlug: 'kit-milagran' }, undefined, ip))
+        expect(r.status).toBe(422)
+      }
+
+      // A barrada leva um corpo COMPLETO e valido, com um e-mail que nunca
+      // teve linha nenhuma: se o 429 fosse decidido depois de qualquer
+      // escrita, o cliente e o endereco deste e-mail apareceriam.
+      const bloqueado = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR, email: EMAIL_BLOQUEADO,
+      }, undefined, ip))
+      expect(bloqueado.status).toBe(429)
+
+      const clientes = await getDb().selectFrom('clientes').select('id')
+        .where(sql<boolean>`lower(email) = lower(${EMAIL_BLOQUEADO})`).execute()
+      expect(clientes).toHaveLength(0)
+
+      const enderecos = await getDb().selectFrom('enderecos')
+        .innerJoin('clientes', 'clientes.id', 'enderecos.cliente_id')
+        .select('enderecos.id')
+        .where(sql<boolean>`lower(clientes.email) = lower(${EMAIL_BLOQUEADO})`)
+        .execute()
+      expect(enderecos).toHaveLength(0)
+
+      expect(await contarPedidos(EMAIL_BLOQUEADO)).toBe(0)
+    })
   })
 })

@@ -10,9 +10,35 @@ import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { segredoDeAtribuicao, NOME_COOKIE_ATRIBUICAO } from '@/lib/atribuicao'
 import { mensagemDeRecusa, type MotivoRecusa } from '@/lib/cupom'
 import { deInteiro } from '@/lib/money'
+import {
+  criarLimitadorPorIp, ipDoPedido,
+  JANELA_RATE_LIMIT_MS, MAX_PEDIDOS_POR_JANELA,
+} from '@/lib/rate-limit'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
+
+/**
+ * Este endpoint nao tem autenticacao nenhuma e escreve em cinco tabelas —
+ * incluindo CPF, nome completo, telefone e endereco residencial. Sem freio,
+ * um script enche o banco de dado pessoal de terceiros (ou de lixo) na
+ * velocidade da rede, e ainda serve para tentar cupom atras de cupom ate
+ * achar um codigo valido.
+ *
+ * ATENCAO, honestamente: o contador e EM MEMORIA, por processo — ver o
+ * cabecalho de src/lib/rate-limit.ts. Isto e um quebra-molas contra abuso
+ * ingenuo, NAO rate limiting distribuido e NAO controle de acesso: com mais
+ * de uma replica cada uma conta o seu pedaco, e o IP vem de um header que o
+ * cliente pode forjar. Quem realmente protege o dado sao o Zod, as
+ * constraints e os triggers — nao esta linha.
+ *
+ * Contador proprio (criarLimitadorPorIp devolve um Map novo a cada chamada):
+ * o teto do checkout e independente do teto do formulario de candidatura.
+ */
+const excedeuRateLimit = criarLimitadorPorIp({
+  janelaMs: JANELA_RATE_LIMIT_MS,
+  maxPorJanela: MAX_PEDIDOS_POR_JANELA,
+})
 
 const Corpo = z.object({
   kitSlug: z.string().min(1),
@@ -63,6 +89,13 @@ function mensagemSeguraDoErro(e: unknown): string {
 }
 
 export async function POST(req: Request) {
+  // Antes de qualquer leitura de corpo ou toque no banco: um pedido barrado
+  // nao chega a abrir transacao, entao um 429 nao pode deixar cliente,
+  // endereco ou pedido gravado.
+  if (excedeuRateLimit(ipDoPedido(req.headers))) {
+    return Response.json({ error: 'rate_limited' }, { status: 429 })
+  }
+
   const parsed = Corpo.safeParse(await req.json().catch(() => null))
   if (!parsed.success) {
     return Response.json({ error: 'dados_invalidos' }, { status: 422 })
