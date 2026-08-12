@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import { getDb, closeDb } from '@/lib/db'
 import { listarKitsAtivos, buscarKitAtivoPorSlug } from '@/repositories/produtos'
+import { formatarBRL } from '@/lib/money'
 
 // Todo slug que este arquivo ja semeia ou cria dentro de um teste. Um
 // "DELETE FROM kits" sem filtro (como este arquivo fazia antes) colide com
@@ -43,9 +44,15 @@ describe('repositorio de produtos', () => {
   })
 
   it('devolve preco como Centavos inteiro, nunca string', async () => {
-    const [primeiro] = await listarKitsAtivos()
-    expect(primeiro!.precoCentavos).toBe(19990)
-    expect(typeof primeiro!.precoCentavos).toBe('number')
+    // Buscar por slug em vez de pegar o [0] da lista inteira: a semeadura
+    // de producao (kit-milagran, Task 7) tambem usa ordem = 1, e uma vez
+    // que a ordenacao empata em `ordem`, o Postgres nao garante qual das
+    // duas linhas volta primeiro. Filtrar pelo slug deste arquivo remove a
+    // dependencia de ordem entre a semeadura de producao e a de teste.
+    const kits = await listarKitsAtivos()
+    const kit1 = kits.find((k) => k.slug === 'kit-1')
+    expect(kit1!.precoCentavos).toBe(19990)
+    expect(typeof kit1!.precoCentavos).toBe('number')
   })
 
   it('busca por slug', async () => {
@@ -103,5 +110,19 @@ describe('repositorio de produtos', () => {
         unidades: 1, sku: 'MG-FREE', ordem: 9, ativo: true,
       }).execute(),
     ).rejects.toThrow(/kits_preco_positivo/)
+  })
+})
+
+describe('kit de producao', () => {
+  it('existe um kit ativo a R$ 1.000,00', async () => {
+    const kit = await buscarKitAtivoPorSlug('kit-milagran')
+    expect(kit).not.toBeNull()
+    expect(kit!.precoCentavos).toBe(100000)
+    expect(formatarBRL(kit!.precoCentavos)).toBe('R$ 1.000,00')
+  })
+
+  it('o registro ANVISA ainda nao foi preenchido — divida conhecida', async () => {
+    const kit = await buscarKitAtivoPorSlug('kit-milagran')
+    expect(kit!.anvisaRegistro).toBeNull()
   })
 })
