@@ -2,13 +2,31 @@ import { notFound } from 'next/navigation'
 import { buscarPedidoComItensPorToken } from '@/repositories/pedidos'
 import { formatarBRL } from '@/lib/money'
 import { LinhaFrete } from '@/components/linha-frete'
+import { Pagamento } from '@/components/pagamento'
+import type { PedidoStatus } from '@/lib/db-types'
 
-// O pedido e mutavel (status muda ao longo da maquina de estados do Plano
-// 3), entao esta pagina nao pode ser um snapshot congelado no build.
+// O pedido e mutavel (o webhook do gateway move o status), entao esta pagina
+// nao pode ser um snapshot congelado no build.
 export const dynamic = 'force-dynamic'
 
 type Props = {
   params: Promise<{ token: string }>
+}
+
+/** Estados em que ainda cabe cobrar. Espelha a guarda de /api/pagamentos. */
+function aceitaPagamento(status: PedidoStatus): boolean {
+  return status === 'pendente' || status === 'aguardando_pagamento'
+}
+
+const ROTULOS: Record<PedidoStatus, string> = {
+  pendente: 'Aguardando pagamento',
+  aguardando_pagamento: 'Aguardando confirmação do pagamento',
+  pago: 'Pagamento confirmado',
+  em_preparacao: 'Em preparação',
+  enviado: 'Enviado',
+  entregue: 'Entregue',
+  cancelado: 'Cancelado',
+  reembolsado: 'Reembolsado',
 }
 
 export default async function PaginaPedido({ params }: Props) {
@@ -23,10 +41,16 @@ export default async function PaginaPedido({ params }: Props) {
   const pedido = await buscarPedidoComItensPorToken(token)
   if (!pedido) notFound()
 
+  const podePagar = aceitaPagamento(pedido.status)
+  // A chave PUBLICA do Mercado Pago e feita para viver no navegador — ela so
+  // tokeniza cartao. O access token, que autoriza cobrar, nunca sai do
+  // servidor e nao e lido aqui.
+  const chavePublica = process.env.MERCADOPAGO_PUBLIC_KEY ?? ''
+
   return (
     <main>
       <section className="section confirmacao">
-        <p className="kicker">Pedido confirmado</p>
+        <p className="kicker">{ROTULOS[pedido.status]}</p>
         <h1>Pedido nº {pedido.numero}</h1>
 
         <ul className="confirmacao__itens">
@@ -56,17 +80,40 @@ export default async function PaginaPedido({ params }: Props) {
           </p>
         </div>
 
+        {podePagar && chavePublica && (
+          <Pagamento
+            pedidoToken={token}
+            totalCentavos={pedido.totalCentavos}
+            chavePublica={chavePublica}
+            emailComprador={pedido.clienteEmail ?? ''}
+          />
+        )}
+
         {/*
-          DIVIDA DELIBERADA (nao "consertar"): o gateway de pagamento e o
-          Plano 3 inteiro (Mercado Pago, KYC de CNPJ pendente). Todo pedido
-          nasce 'pendente' e fica assim ate o Plano 3 ligar o pagamento — a
-          pagina precisa dizer isso, nunca fingir que o pagamento ja
-          aconteceu ou que o proximo passo e imediato.
+          Sem chave publica configurada o Brick nao carrega e o Pix nao e
+          gerado. Dizer isso e melhor do que mostrar botoes que falham em
+          silencio — e melhor ainda do que fingir que o pedido esta resolvido.
         */}
-        <p className="confirmacao__aviso">
-          Pagamento: próximo passo. Em breve enviaremos as instruções de
-          pagamento para o e-mail e o WhatsApp informados no checkout.
-        </p>
+        {podePagar && !chavePublica && (
+          <p className="confirmacao__aviso">
+            O pagamento online ainda está sendo liberado. Entraremos em contato
+            pelo e-mail e pelo WhatsApp informados no checkout com as instruções.
+          </p>
+        )}
+
+        {pedido.status === 'pago' && (
+          <p className="confirmacao__aviso">
+            Pagamento confirmado. Você receberá um e-mail com os detalhes e
+            avisaremos assim que o pedido for enviado.
+          </p>
+        )}
+
+        {pedido.status === 'reembolsado' && (
+          <p className="confirmacao__aviso">
+            Este pedido foi reembolsado. O valor volta para a mesma forma de
+            pagamento usada na compra, no prazo do seu banco.
+          </p>
+        )}
       </section>
     </main>
   )

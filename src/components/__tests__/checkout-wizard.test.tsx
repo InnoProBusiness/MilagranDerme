@@ -59,8 +59,10 @@ async function preencherAteRevisao() {
   await userEvent.type(screen.getByLabelText(/cidade/i), 'Sao Paulo')
   await userEvent.click(screen.getByRole('button', { name: /continuar/i }))
 
-  // Passo 4: revisao — onde o "Confirmar pedido" dispara o POST unico.
-  expect(await screen.findByRole('button', { name: /confirmar pedido/i })).toBeInTheDocument()
+  // Passo 4: revisao — onde "Ir para o pagamento" dispara o POST unico que
+  // cria o pedido. A cobranca acontece na proxima tela (/pedido/<token>),
+  // porque o total so e definitivo depois de o servidor validar o cupom.
+  expect(await screen.findByRole('button', { name: /ir para o pagamento/i })).toBeInTheDocument()
 }
 
 describe('CheckoutWizard', () => {
@@ -89,7 +91,7 @@ describe('CheckoutWizard', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await preencherAteRevisao()
-    await userEvent.click(screen.getByRole('button', { name: /confirmar pedido/i }))
+    await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
 
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
@@ -131,7 +133,7 @@ describe('CheckoutWizard', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await preencherAteRevisao()
-    await userEvent.click(screen.getByRole('button', { name: /confirmar pedido/i }))
+    await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
 
     expect(await screen.findByText('Cupom nao encontrado. Confira o codigo.')).toBeInTheDocument()
     expect(push).not.toHaveBeenCalled()
