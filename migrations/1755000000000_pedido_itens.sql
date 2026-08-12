@@ -64,7 +64,33 @@ CREATE CONSTRAINT TRIGGER pedido_subtotal_confere_trg
   DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION pedido_conferir_subtotal();
 
+-- pedido_subtotal_confere_trg so dispara quando algo MUDA em pedido_itens.
+-- Uma transacao que insere um pedido e nunca toca pedido_itens nao aciona
+-- aquele trigger — nada no banco impedia um pedido fantasma, com um
+-- subtotal_centavos fabricado e nenhum item por tras (a comissao incide
+-- exatamente sobre essa coluna). Este segundo trigger fecha essa lacuna:
+-- toda linha de pedidos, ao ser inserida ou atualizada, precisa ter pelo
+-- menos um item em pedido_itens no COMMIT. Tambem DEFERRABLE INITIALLY
+-- DEFERRED pela mesma razao do trigger acima — senao o INSERT do pedido
+-- falharia antes de existir chance de inserir os itens dele.
+CREATE FUNCTION pedido_exigir_itens() RETURNS trigger AS $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pedido_itens WHERE pedido_id = NEW.id) THEN
+    RAISE EXCEPTION
+      'pedido_itens_obrigatorios: pedido % nao tem nenhum item', NEW.id;
+  END IF;
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER pedido_itens_obrigatorios_trg
+  AFTER INSERT OR UPDATE ON pedidos
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION pedido_exigir_itens();
+
 -- Down Migration
+DROP TRIGGER pedido_itens_obrigatorios_trg ON pedidos;
+DROP FUNCTION pedido_exigir_itens();
 DROP TRIGGER pedido_subtotal_confere_trg ON pedido_itens;
 DROP FUNCTION pedido_conferir_subtotal();
 ALTER TABLE pedidos DROP CONSTRAINT pedido_subtotal_positivo;

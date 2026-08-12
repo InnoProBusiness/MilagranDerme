@@ -21,6 +21,14 @@ const SLUGS_COADJUVANTES = ['pedido-outro', 'pedido-outro2'] as const
 // pelo menos um item, e cada item referencia um kit real — este arquivo nao
 // pode disputar nem apagar as linhas de kits que produtos.test.ts usa.
 const SLUG_KIT = 'pedido-kit-milagran'
+const NOME_KIT = 'Kit Milagran'
+// O preco que o catalogo tem AGORA para SLUG_KIT (semeado abaixo). Os
+// testes de snapshot usam esta constante — nunca um literal solto — tanto
+// para semear a linha de kits quanto para montar o item de EntradaPedido e
+// para as asserções, deixando explicito que o valor gravado em
+// pedido_itens veio de conferir contra ESTE numero, nao de coincidencia
+// entre dois literais escritos a mao.
+const PRECO_KIT_CENTAVOS = 100000
 
 let idMaria: string
 let idKit: string
@@ -102,7 +110,7 @@ async function semear() {
   const kit = await db
     .insertInto('kits')
     .values({
-      slug: SLUG_KIT, nome: 'Kit Milagran', preco_centavos: 100000,
+      slug: SLUG_KIT, nome: NOME_KIT, preco_centavos: PRECO_KIT_CENTAVOS,
       unidades: 1, sku: 'MG-PEDIDO-KIT', ordem: 99, ativo: true,
     })
     .returning('id')
@@ -115,12 +123,17 @@ describe('criacao de pedido com atribuicao congelada', () => {
   afterAll(async () => { await closeDb() })
 
   it('congela representante, percentual e UTM na criacao', async () => {
+    // O item precisa bater com o preco do catalogo (criarPedido valida
+    // isso agora — ver 'pedido com itens'), entao o subtotal fica preso em
+    // PRECO_KIT_CENTAVOS. O desconto abaixo e escolhido so para chegar no
+    // mesmo totalCentavos de sempre (53973): o valor esperado da asserção
+    // nao mudou, so o desconto que precisa ser somado para chegar nele.
     const p = await criar({
       origem: 'link', representanteId: idMaria,
       percentualComissao: 20,
       utmSource: 'instagram', utmMedium: 'bio', utmCampaign: 'lancamento',
-      desconto: centavos(59.97), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(599.70) }],
+      desconto: deInteiro(PRECO_KIT_CENTAVOS - 53973), frete: centavos(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.representanteId).toBe(idMaria)
     expect(p.percentualComissaoSnapshot).toBe(20)
@@ -136,7 +149,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().updateTable('representantes')
       .set({ percentual_comissao: '5.00' }).where('id', '=', idMaria).execute()
@@ -152,7 +165,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(199.90) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.representanteId).toBeNull()
     expect(p.origem).toBe('casa')
@@ -163,7 +176,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'rep_inativo', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(199.90) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.origem).toBe('rep_inativo')
   })
@@ -173,7 +186,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })).rejects.toThrow(/pedido_origem_coerente/)
   })
 
@@ -186,7 +199,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 500,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })).rejects.toThrow(/pedido_percentual_snapshot_valido/)
   })
 
@@ -213,7 +226,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await expect(
       getDb().deleteFrom('representantes').where('id', '=', idMaria).execute(),
@@ -234,7 +247,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       const outro = await getDb().insertInto('representantes').values({
         slug: 'pedido-outro', codigo: 'PEDIDOOUTRO', nome: 'Outro',
@@ -256,7 +269,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await expect(
         getDb().updateTable('pedidos')
@@ -271,7 +284,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'casa', representanteId: null, percentualComissao: null,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await expect(
         getDb().updateTable('pedidos')
@@ -286,7 +299,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await getDb().updateTable('pedidos')
         .set({ status: 'pago' })
@@ -304,7 +317,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: centavos(100) }],
+        itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       const outro = await getDb().insertInto('representantes').values({
         slug: 'pedido-outro2', codigo: 'PEDIDOOUTRO2', nome: 'Outro 2',
@@ -341,24 +354,54 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      itens: [{ kitId: idKit, quantidade: 3, precoUnitarioCentavos: deInteiro(100000) }],
+      itens: [{ kitId: idKit, quantidade: 3, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
-    expect(p.subtotalCentavos).toBe(300000)
-    expect(p.totalCentavos).toBe(300000)
+    expect(p.subtotalCentavos).toBe(PRECO_KIT_CENTAVOS * 3)
+    expect(p.totalCentavos).toBe(PRECO_KIT_CENTAVOS * 3)
   })
 
   it('grava o nome e o preco do kit como snapshot', async () => {
+    // precoUnitarioCentavos aqui bate de proposito com PRECO_KIT_CENTAVOS
+    // (o preco que o catalogo tem AGORA, semeado acima): criarPedido
+    // confere os dois dentro da transacao e so grava o item se conferirem
+    // (ver 'rejeita quando o preco enviado diverge do catalogo' logo
+    // abaixo). O valor gravado no item nao e "o que o chamador mandou, sem
+    // pergunta" — e o que o catalogo validou.
     const p = await criarPedido({
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(100000) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     const itens = await getDb().selectFrom('pedido_itens')
       .selectAll().where('pedido_id', '=', p.id).execute()
     expect(itens).toHaveLength(1)
-    expect(itens[0]!.nome_snapshot).toBe('Kit Milagran')
-    expect(itens[0]!.preco_unitario_centavos).toBe(100000)
+    expect(itens[0]!.nome_snapshot).toBe(NOME_KIT)
+    expect(itens[0]!.preco_unitario_centavos).toBe(PRECO_KIT_CENTAVOS)
+  })
+
+  it('rejeita quando o preco enviado diverge do catalogo', async () => {
+    // O preco NAO e confiado ao chamador: se o carrinho (ou um cliente
+    // adulterado) manda um precoUnitarioCentavos diferente do que
+    // kits.preco_centavos tem AGORA, criarPedido tem que recusar em vez de
+    // gravar o valor errado — e o vetor de manipulacao de preco que a
+    // Finding 2 do round 1 apontou. PRECO_KIT_CENTAVOS - 1 garante uma
+    // divergencia de exatamente 1 centavo, sem depender de nenhum outro
+    // numero magico.
+    const precoAdulterado = deInteiro(PRECO_KIT_CENTAVOS - 1)
+    await expect(criarPedido({
+      origem: 'casa', representanteId: null, percentualComissao: null,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(0), frete: deInteiro(0),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: precoAdulterado }],
+    })).rejects.toThrow(/preco_divergente/)
+
+    // A rejeicao precisa acontecer DENTRO da transacao, antes do COMMIT:
+    // nenhum pedido pode sobrar gravado com um preco que nunca foi
+    // validado.
+    const pedidos = await getDb().selectFrom('pedidos')
+      .select('id').where('subtotal_centavos', '=', precoAdulterado).execute()
+    expect(pedidos).toHaveLength(0)
   })
 
   it('mudar o preco do kit depois NAO altera o pedido', async () => {
@@ -366,7 +409,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(100000) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().updateTable('kits')
       .set({ preco_centavos: 50000 }).where('id', '=', idKit).execute()
@@ -374,7 +417,7 @@ describe('pedido com itens', () => {
     const item = await getDb().selectFrom('pedido_itens')
       .select('preco_unitario_centavos').where('pedido_id', '=', p.id)
       .executeTakeFirstOrThrow()
-    expect(item.preco_unitario_centavos).toBe(100000)
+    expect(item.preco_unitario_centavos).toBe(PRECO_KIT_CENTAVOS)
   })
 
   it('rejeita pedido sem itens', async () => {
@@ -383,6 +426,24 @@ describe('pedido com itens', () => {
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0), itens: [],
     })).rejects.toThrow(/sem itens|pedido_subtotal_positivo/)
+  })
+
+  it('o banco rejeita um pedido sem nenhum item, mesmo inserindo direto', async () => {
+    // Insercao crua, ignorando o repositorio e a guarda itens.length === 0
+    // de criarPedido: prova que exigir ao menos um item e uma garantia do
+    // BANCO (pedido_itens_obrigatorios_trg), nao so uma promessa da
+    // aplicacao que um caminho de escrita diferente poderia furar — o
+    // mesmo raciocinio do teste de subtotal logo abaixo, aplicado a
+    // "pedido sem item nenhum" em vez de "soma errada".
+    await expect(
+      getDb().transaction().execute(async (trx) => {
+        await sql`SET CONSTRAINTS ALL DEFERRED`.execute(trx)
+        await trx.insertInto('pedidos').values({
+          origem: 'casa', subtotal_centavos: 123456,
+          desconto_centavos: 0, frete_centavos: 0, total_centavos: 123456,
+        }).execute()
+      }),
+    ).rejects.toThrow(/pedido_itens_obrigatorios/)
   })
 
   it('o banco rejeita um subtotal que nao bate com os itens', async () => {
@@ -396,8 +457,9 @@ describe('pedido com itens', () => {
           desconto_centavos: 0, frete_centavos: 0, total_centavos: 999999,
         }).returning('id').executeTakeFirstOrThrow()
         await trx.insertInto('pedido_itens').values({
-          pedido_id: pedido.id, kit_id: idKit, nome_snapshot: 'Kit Milagran',
-          preco_unitario_centavos: 100000, quantidade: 1, total_centavos: 100000,
+          pedido_id: pedido.id, kit_id: idKit, nome_snapshot: NOME_KIT,
+          preco_unitario_centavos: PRECO_KIT_CENTAVOS, quantidade: 1,
+          total_centavos: PRECO_KIT_CENTAVOS,
         }).execute()
       }),
     ).rejects.toThrow(/pedido_subtotal_confere/)
@@ -408,7 +470,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(100000) }],
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().deleteFrom('pedidos').where('id', '=', p.id).execute()
     const restantes = await getDb().selectFrom('pedido_itens')

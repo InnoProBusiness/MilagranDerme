@@ -86,7 +86,15 @@ function paraPedido(l: Selectable<Pedidos>): Pedido {
  * a cada INSERT. A soma calculada aqui em JS e so o valor a gravar em
  * subtotal_centavos; se ela nao bater com a soma real dos itens que o banco
  * ve, o COMMIT falha. A comissao do representante incide sobre esse valor
- * amarrado ao banco, nao sobre uma soma que a aplicacao poderia errar.
+ * amarrado ao banco, nao sobre uma soma que a aplicacao poderia errar. Um
+ * segundo trigger deferido, pedido_itens_obrigatorios_trg, garante que todo
+ * pedido tem ao menos um item — o guard de itens.length abaixo e so uma
+ * mensagem melhor antes do round trip, nao a garantia de verdade.
+ *
+ * O preco de cada item TAMBEM nao e confiado ao chamador: precoUnitarioCentavos
+ * e validado contra kits.preco_centavos dentro desta mesma transacao antes de
+ * gravar o item, e uma divergencia lanca em vez de gravar em silencio — ver o
+ * comentario no loop abaixo.
  */
 export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
   if (e.itens.length === 0) {
@@ -126,6 +134,19 @@ export async function criarPedido(e: EntradaPedido): Promise<Pedido> {
         .select(['nome', 'preco_centavos'])
         .where('id', '=', item.kitId)
         .executeTakeFirstOrThrow()
+
+      // O preco vem do CHAMADOR (o carrinho, que leu a vitrine em algum
+      // momento antes do checkout) mas nunca e confiado as cegas: se
+      // divergir do catalogo agora, o preco mudou entre a vitrine e o
+      // checkout — cobrar um valor diferente do que foi mostrado e um
+      // defeito por si so, entao isto lanca em vez de sobrescrever em
+      // silencio com o valor do catalogo ou com o valor do chamador.
+      if (item.precoUnitarioCentavos !== kit.preco_centavos) {
+        throw new Error(
+          `preco_divergente: catalogo do kit ${item.kitId} tem ${kit.preco_centavos} ` +
+            `centavos, mas o checkout enviou ${item.precoUnitarioCentavos}`,
+        )
+      }
 
       await trx
         .insertInto('pedido_itens')
