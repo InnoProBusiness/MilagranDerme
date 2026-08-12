@@ -13,6 +13,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Permite reexecutar o deploy sem precisar de um commit novo — o caso em
+  # que a run falhou porque um secret ainda nao estava cadastrado.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -90,6 +93,50 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # Sem esta checagem, um secret vazio ou com nome errado produz o pior
+      # tipo de falha: o job morre em 3 segundos com um erro de uso do `ssh`
+      # (`Bad port ''`, `Could not resolve hostname`) que nao diz o que
+      # fazer, e o servidor nao registra nada — parece problema de rede ou
+      # de chave quando e so um campo em branco. Aconteceu na primeira run.
+      - name: Confere os secrets
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          faltando=""
+          [ -n "$VPS_HOST" ]        || faltando="$faltando VPS_HOST"
+          [ -n "$VPS_PORT" ]        || faltando="$faltando VPS_PORT"
+          [ -n "$VPS_SSH_KEY" ]     || faltando="$faltando VPS_SSH_KEY"
+          [ -n "$VPS_KNOWN_HOSTS" ] || faltando="$faltando VPS_KNOWN_HOSTS"
+          if [ -n "$faltando" ]; then
+            echo "::error::Secrets ausentes ou vazios:$faltando"
+            echo "Cadastre em Settings > Secrets and variables > Actions (ver DEPLOY.md)."
+            exit 1
+          fi
+
+          # Erro classico: colar a chave PUBLICA no lugar da privada. Sem
+          # esta checagem, o sintoma seria "Permission denied (publickey)",
+          # que manda investigar o authorized_keys da VPS — lugar errado.
+          case "$VPS_SSH_KEY" in
+            *"BEGIN OPENSSH PRIVATE KEY"*) ;;
+            *) echo "::error::VPS_SSH_KEY nao contem uma chave privada OpenSSH. Cole o arquivo inteiro, com as linhas BEGIN/END."; exit 1 ;;
+          esac
+
+          printf '%s' "$VPS_PORT" | grep -qE '^[0-9]+$' \
+            || { echo "::error::VPS_PORT deve ser so o numero da porta."; exit 1; }
+
+          # Alcancabilidade de host/porta antes de envolver SSH. Nao usa a
+          # chave de proposito: ela e forced-command e qualquer conexao
+          # dispararia um deploy de verdade.
+          if timeout 15 bash -c "cat < /dev/null > /dev/tcp/$VPS_HOST/$VPS_PORT" 2>/dev/null; then
+            echo "host e porta alcancaveis"
+          else
+            echo "::error::Nao foi possivel abrir TCP em VPS_HOST:VPS_PORT. Confira os dois valores."
+            exit 1
+          fi
 
       - name: Configura a chave de deploy
         env:

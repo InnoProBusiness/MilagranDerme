@@ -17,8 +17,8 @@ estatico, rotas do App Router e a API — e um processo `node server.js`
 
 | URL | Origem |
 |---|---|
-| `/` | `src/app/page.tsx` → redirect 307 para `/seja-representante.html` |
-| `/seja-representante.html` | `public/seja-representante.html` (HTML estatico, sem build) |
+| `/` | **rewrite** para `public/seja-representante.html` (`next.config.ts`) |
+| `/seja-representante.html` | `public/seja-representante.html` — mesmo conteudo, 200 |
 | `/privacidade.html` | `public/privacidade.html` — **URL nao pode mudar** |
 | `/styles.css`, `/script.js`, `/assets/*` | `public/` |
 | `/r/<slug>` | `src/app/r/[slug]/page.tsx` + `src/proxy.ts` (cookie de atribuicao) |
@@ -28,10 +28,20 @@ estatico, rotas do App Router e a API — e um processo `node server.js`
 - **`/privacidade.html` e um compromisso de LGPD.** A URL esta linkada no
   rodape da LP e no consentimento do formulario de candidatura. Nao mova,
   nao renomeie, nao troque por rota do App Router sem redirect.
-- **O redirect de `/` e 307 (temporario) de proposito.** Quando o Plano 2
-  entregar a vitrine, `/` passa a ser a loja. Um 308 permanente ficaria em
-  cache no navegador de quem ja visitou e continuaria mandando essas
-  pessoas para a LP depois da troca.
+- **`/` e rewrite, nao redirect.** Antes havia um `src/app/page.tsx` com
+  `redirect('/seja-representante.html')`: funcionava, mas empurrava a URL
+  com `.html` para a barra de endereco, para o link copiado e para o
+  compartilhamento no WhatsApp. O rewrite serve o mesmo arquivo mantendo
+  `milagranoficial.com.br` na barra. **Nao existe mais `app/page.tsx`** — no
+  `next build`, `/` nao aparece na lista de rotas, e isso e o esperado.
+- **As duas URLs respondem 200 de proposito.** `/seja-representante.html`
+  continua valendo porque pode haver link e campanha em circulacao. O
+  `<link rel="canonical">` da pagina aponta para `/`, que e quem os
+  buscadores devem indexar. Se um dia for preciso consolidar de vez, o
+  caminho e um `redirects()` do `.html` para `/` — mas note que redirect e
+  rewrite na mesma dupla de URLs pede teste, pelo risco de laco.
+- **Quando o Plano 2 entregar a vitrine**, o rewrite sai do `next.config.ts`
+  e a LP volta a viver so em `/seja-representante.html`. E uma linha.
 - **`src/app/globals.css` e uma copia de `public/styles.css`.** A LP
   estatica usa `public/styles.css`; o App Router usa `globals.css`. As duas
   copias so convergem quando a vitrine do Plano 2 substituir a LP.
