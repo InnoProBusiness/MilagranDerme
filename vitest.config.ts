@@ -10,12 +10,35 @@ try {
   // .env ausente: segue sem ele.
 }
 
+const alias = { '@': fileURLToPath(new URL('./src', import.meta.url)) }
+
 export default defineConfig({
+  resolve: { alias },
   test: {
-    environment: 'node',
-    include: ['src/**/__tests__/**/*.test.ts'],
-  },
-  resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+    // Dois projetos, um runner. Os testes de banco (repositorios, lib/*)
+    // continuam em 'node' — mais rapido e mais proximo do runtime real de
+    // producao. Os testes de componente (Task 8 em diante) precisam de DOM
+    // para render() e userEvent, entao rodam em 'jsdom'. A extensao do
+    // arquivo decide o projeto: .test.ts vai para node, .test.tsx vai para
+    // jsdom. Nao existe overlap possivel entre os dois globs.
+    projects: [
+      {
+        resolve: { alias },
+        test: {
+          name: 'node',
+          environment: 'node',
+          include: ['src/**/__tests__/**/*.test.ts'],
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
+          name: 'jsdom',
+          environment: 'jsdom',
+          include: ['src/**/__tests__/**/*.test.tsx'],
+          setupFiles: ['./vitest.setup.ts'],
+        },
+      },
+    ],
   },
 })

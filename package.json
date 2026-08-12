@@ -18,22 +18,26 @@
     "db:types": "kysely-codegen --out-file src/lib/db-types.ts"
   },
   "dependencies": {
+    "kysely": "^0.28.0",
     "next": "16.3.0",
+    "pdf-lib": "^1.17.1",
+    "pg": "^8.13.0",
     "react": "19.2.0",
     "react-dom": "19.2.0",
-    "kysely": "^0.28.0",
-    "pg": "^8.13.0",
-    "zod": "^4.4.3",
-    "pdf-lib": "^1.17.1"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.4",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
+    "jsdom": "^29.1.1",
+    "kysely-codegen": "^0.18.0",
     "node-pg-migrate": "^7.9.0",
-    "kysely-codegen": "^0.18.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
   }
 }
