@@ -36,7 +36,14 @@ export async function listarKitsAtivos(): Promise<Kit[]> {
     .selectFrom('kits')
     .selectAll()
     .where('ativo', '=', true)
+    // `ordem` nao e unica (kits_ativos_ordem e um indice btree comum, nao
+    // um indice unico) e nada no schema impede dois kits ativos com o
+    // mesmo valor. Sem uma segunda chave de ordenacao, um empate em `ordem`
+    // fica decidido pela ordem de varredura do Postgres, que nao e
+    // garantida — e a storefront (Task 8) le kits[0]. Desempatar por slug
+    // torna o resultado deterministico em vez de acidentalmente estavel.
     .orderBy('ordem', 'asc')
+    .orderBy('slug', 'asc')
     .execute()
   return linhas.map((l) => paraKit(l))
 }

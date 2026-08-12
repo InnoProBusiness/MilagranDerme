@@ -11,7 +11,7 @@ import { formatarBRL } from '@/lib/money'
 // DELETE aqui pode apagar o kit de baixo do pedidos.test.ts no meio de uma
 // insercao. Escopar por slug, como os outros arquivos ja fazem, evita as
 // duas colisoes.
-const SLUGS = ['kit-1', 'kit-3', 'kit-antigo', 'kit-carimbo', 'kit-gratis'] as const
+const SLUGS = ['kit-1', 'kit-3', 'kit-antigo', 'kit-carimbo', 'kit-gratis', 'kit-empate-a', 'kit-empate-z'] as const
 
 async function semear() {
   const db = getDb()
@@ -41,6 +41,25 @@ describe('repositorio de produtos', () => {
     // Postgres.
     const slugsDesteArquivo = kits.map((k) => k.slug).filter((s) => (SLUGS as readonly string[]).includes(s))
     expect(slugsDesteArquivo).toEqual(['kit-1', 'kit-3'])
+  })
+
+  it('desempata kits com mesma ordem por slug', async () => {
+    // Nada no schema impede dois kits ativos com o mesmo `ordem`:
+    // kits_ativos_ordem e um indice btree comum, nao unico, e nao pode
+    // virar um indice unico porque pedidos.test.ts e cupons.test.ts ja
+    // semeiam kits ativos em ordem = 99 cada um. Sem um desempate
+    // deterministico, listarKitsAtivos() fica a merce da ordem de
+    // varredura do Postgres — que nao e garantida. Insere fora de ordem
+    // alfabetica (Z antes de A) de proposito, para provar que o resultado
+    // vem do ORDER BY e nao da ordem de insercao.
+    await getDb().insertInto('kits').values([
+      { slug: 'kit-empate-z', nome: 'Empate Z', preco_centavos: 1000, unidades: 1, sku: 'MG-EZ', ordem: 50, ativo: true },
+      { slug: 'kit-empate-a', nome: 'Empate A', preco_centavos: 1000, unidades: 1, sku: 'MG-EA', ordem: 50, ativo: true },
+    ]).execute()
+
+    const kits = await listarKitsAtivos()
+    const empatados = kits.map((k) => k.slug).filter((s) => s.startsWith('kit-empate-'))
+    expect(empatados).toEqual(['kit-empate-a', 'kit-empate-z'])
   })
 
   it('devolve preco como Centavos inteiro, nunca string', async () => {

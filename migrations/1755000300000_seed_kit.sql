@@ -23,4 +23,13 @@ VALUES (
 ON CONFLICT (slug) DO NOTHING;
 
 -- Down Migration
+--
+-- Isto so roda limpo antes da primeira venda real. pedido_itens.kit_id
+-- referencia kits sem CASCADE, entao assim que existir um pedido com este
+-- kit, este DELETE levanta uma violacao de chave estrangeira e o rollback
+-- inteiro falha aqui. Isso e o comportamento correto (apagar um kit vendido
+-- silenciosamente destruiria o historico do pedido) — se voce esta lendo
+-- isto durante um rollback as 2h da manha, o erro nao e uma migration
+-- quebrada: e o sistema recusando apagar um produto que ja foi vendido.
+-- A saida nesse caso e desativar o kit (ativo = false), nao apagar a linha.
 DELETE FROM kits WHERE slug = 'kit-milagran';
