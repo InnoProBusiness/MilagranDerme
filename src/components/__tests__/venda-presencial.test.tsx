@@ -655,4 +655,27 @@ describe('interpretarResposta', () => {
     expect(semSessao.podeTentarDeNovo).toBe(true)
     expect(semSessao.frase).toMatch(/NÃO foi registrada/i)
   })
+
+  /**
+   * Sessao caida e o UNICO desfecho que pede reautenticacao — e por isso o
+   * unico que mostra o link de login.
+   *
+   * A frase promete que os dados digitados continuam na tela. Sem o link, o
+   * vendedor tinha que sair para /login pelo menu, o componente desmontava e
+   * os dados sumiam exatamente ao seguir a instrucao. O link abre em aba nova
+   * justamente para a promessa ser verdadeira.
+   */
+  it('so a sessao encerrada pede reautenticacao', () => {
+    expect(interpretarResposta(401, { error: 'nao_autenticado' }).reautenticar).toBe(true)
+    expect(interpretarResposta(403, { error: 'acesso_negado' }).reautenticar).toBe(true)
+
+    for (const outro of [
+      interpretarResposta(201, APROVADA),
+      interpretarResposta(402, PAGAMENTO_RECUSADO),
+      interpretarResposta(409, ESTOQUE_ESGOTADO),
+      interpretarResposta(502, null),
+    ]) {
+      expect(outro.reautenticar).toBe(false)
+    }
+  })
 })

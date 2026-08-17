@@ -264,14 +264,19 @@ export function Vitrine({ kits, representante, escassez }: VitrineProps) {
         */}
         <LinhaFrete valor={null} />
         {/*
-          O total desta tela e subtotal - desconto + frete com frete = 0
-          (default de montarCarrinho) porque ainda NAO HA frete cotado, e nao
-          porque ele seja gratis. E o mesmo motivo de a linha acima dizer "a
-          calcular": o numero fechado do pedido nasce no checkout, depois do
-          CEP.
+          "+ frete" NAO E ENFEITE: e o que impede esta linha de mentir.
+          O numero e subtotal - desconto + frete com frete = 0 (default de
+          montarCarrinho) porque ainda NAO HA frete cotado — a vitrine nao
+          conhece o CEP do visitante. Sem o sufixo, a palavra "Total" logo
+          abaixo de "Frete: calculado no checkout" prometia um valor final que
+          a proxima tela desmentia: quem lesse "Total: R$ 1.000,00" e pagasse
+          R$ 1.023,50 teria sido enganado, ainda que por pouco, na superficie
+          principal de compra.
+          Mesma disciplina de LinhaFrete, que traduz `null` em "a calcular" e
+          nunca em "R$ 0,00" (ver src/components/linha-frete.tsx).
         */}
         <p className="vitrine__linha vitrine__linha--total" data-testid="total">
-          Total: {formatarBRL(resumo.total)}
+          Total: {formatarBRL(resumo.total)} + frete
         </p>
       </div>
 

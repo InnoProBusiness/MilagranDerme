@@ -160,6 +160,14 @@ export type Desfecho = {
   pix: { copiaECola: string; qrBase64: string } | null
   /** Saldo real informado pelo servidor no 409 — mais confiavel que o local. */
   disponivelInformado: number | null
+  /**
+   * A sessao caiu e o vendedor precisa entrar de novo.
+   *
+   * Existe como CAMPO, e nao como uma comparacao de `titulo` no JSX, porque e
+   * ele que decide renderizar o link de login em aba nova — e o texto do
+   * titulo e copy, que muda sem ninguem lembrar do link.
+   */
+  reautenticar: boolean
 }
 
 const SEM_CORPO: Record<string, unknown> = {}
@@ -219,6 +227,7 @@ function desfechoIncerto(motivo: string): Desfecho {
     token: null,
     pix: null,
     disponivelInformado: null,
+    reautenticar: false,
   }
 }
 
@@ -266,6 +275,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
         token,
         pix: null,
         disponivelInformado: null,
+        reautenticar: false,
       }
     }
 
@@ -285,6 +295,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
         token,
         pix: copiaECola && qrBase64 ? { copiaECola, qrBase64 } : null,
         disponivelInformado: null,
+        reautenticar: false,
       }
     }
 
@@ -317,6 +328,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
         token,
         pix: null,
         disponivelInformado: null,
+        reautenticar: false,
       }
     }
 
@@ -338,6 +350,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
       token,
       pix: null,
       disponivelInformado: null,
+      reautenticar: false,
     }
   }
 
@@ -368,6 +381,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
       // confiavel que o contador local, que e um retrato do carregamento da
       // pagina e nao viu as vendas dos outros aparelhos do evento.
       disponivelInformado: inteiro(c.disponivel),
+      reautenticar: false,
     }
   }
 
@@ -385,6 +399,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
       token: null,
       pix: null,
       disponivelInformado: null,
+      reautenticar: false,
     }
   }
 
@@ -395,13 +410,16 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
       podeTentarDeNovo: true,
       titulo: 'Sessão encerrada',
       frase:
-        'A venda NÃO foi registrada e nenhum kit saiu da caixa. Entre de novo para continuar '
-        + 'vendendo — os dados digitados continuam na tela.',
+        'A venda NÃO foi registrada e nenhum kit saiu da caixa. Abra o login na aba nova abaixo, '
+        + 'entre de novo e volte para esta aba — os dados digitados continuam aqui.',
       detalhe: mensagem,
       numero: null,
       token: null,
       pix: null,
       disponivelInformado: null,
+      // A UNICA ocorrencia de `true` no arquivo: e o que faz o link de login
+      // aparecer. Ver o comentario do campo em Desfecho.
+      reautenticar: true,
     }
   }
 
@@ -416,6 +434,7 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
     token: null,
     pix: null,
     disponivelInformado: null,
+    reautenticar: false,
   }
 }
 
@@ -907,6 +926,30 @@ function BlocoDeDesfecho({
             rel="noopener noreferrer"
           >
             Abrir a página do pedido
+          </a>
+        </div>
+      )}
+
+      {/*
+        ABA NOVA E O QUE TORNA A FRASE VERDADEIRA.
+        A mensagem de sessao encerrada promete que os dados digitados
+        continuam na tela — e continuam, porque estao em estado do React. Mas
+        ate aqui nao havia link nenhum: o vendedor tinha que sair para /login
+        pelo menu, o componente desmontava e os dados sumiam no exato momento
+        em que ele seguia a instrucao. Com target="_blank" a aba do balcao nao
+        se mexe; ele entra na aba nova, fecha, volta e clica em "Confirmar
+        venda" — o cookie de sessao ja vale, porque e compartilhado entre abas.
+        Mesmo raciocinio do link da pagina do pedido, logo acima.
+      */}
+      {desfecho.reautenticar && (
+        <div className="venda__acoes">
+          <a
+            className="btn btn--solid"
+            href="/login"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Entrar de novo (abre em outra aba)
           </a>
         </div>
       )}

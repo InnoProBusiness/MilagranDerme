@@ -190,7 +190,25 @@ describe('Vitrine', () => {
     render(<Vitrine kits={KITS} representante={null} escassez={null} />)
     expect(screen.getByTestId('valor-unitario')).toHaveTextContent('Valor unitário: R$ 1.000,00')
     expect(screen.getByTestId('subtotal')).toHaveTextContent('Subtotal: R$ 1.000,00')
-    expect(screen.getByTestId('total')).toHaveTextContent('Total: R$ 1.000,00')
+    expect(screen.getByTestId('total')).toHaveTextContent('Total: R$ 1.000,00 + frete')
+  })
+
+  /**
+   * A palavra "Total" nao pode fechar uma conta que ainda nao fechou.
+   *
+   * A vitrine nao conhece o CEP, entao o frete e desconhecido nesta tela — a
+   * linha logo acima diz isso. Ate 17/08/2026 a linha de total imprimia so o
+   * numero do produto, e quem lesse "Total: R$ 1.000,00" pagaria R$ 1.023,50
+   * no checkout. Pouco dinheiro, superficie errada: e a tela principal de
+   * compra.
+   */
+  it('o total da vitrine nunca se apresenta como valor final', () => {
+    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+
+    const total = screen.getByTestId('total')
+    expect(total).toHaveTextContent('+ frete')
+    // E continua coerente com a linha de frete, que diz de onde vem o resto.
+    expect(screen.getByTestId('frete')).toHaveTextContent(TEXTO_FRETE_A_COTAR)
   })
 
   // ---------- §5 e §11: escassez do lote presencial ----------
