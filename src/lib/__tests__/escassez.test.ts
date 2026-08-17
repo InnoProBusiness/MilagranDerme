@@ -84,8 +84,28 @@ describe('mensagens exatas do documento do cliente', () => {
       .toBe('Restam apenas 7 kits disponíveis para levar hoje.')
   })
 
-  it('normal anuncia o tamanho do lote', () => {
+  /**
+   * MUDANCA DE 17/08/2026: a faixa 'normal' passou a citar o SALDO VIVO, e nao
+   * o tamanho do lote.
+   *
+   * O contador desenha `disponivel` num numero grande ao lado desta frase
+   * (src/components/contador-estoque.tsx), entao a versao antiga punha "42" e
+   * "Apenas 50 kits disponiveis" lado a lado na home — numa pagina cujo
+   * mecanismo e escassez. E o numero grande e aria-hidden sob o argumento de
+   * que a frase ja o repete: com a frase falando do lote, quem usa leitor de
+   * tela nunca ficava sabendo quantos kits restavam.
+   *
+   * A manchete de lote ("APENAS 50 KITS...") e copy do hero, §6, e continua la.
+   */
+  it('normal conta o saldo vivo, para nao contradizer o numero ao lado', () => {
     expect(avisoDeEscassez(42, LOTE).mensagem)
+      .toBe('Apenas 42 kits disponíveis para levar na hora.')
+  })
+
+  // No inicio do evento os dois numeros coincidem, que e quando a frase bate
+  // com a manchete de §6 — a divergencia so nasce da primeira venda em diante.
+  it('com o lote intacto a frase anuncia os 50', () => {
+    expect(avisoDeEscassez(LOTE, LOTE).mensagem)
       .toBe('Apenas 50 kits disponíveis para levar na hora.')
   })
 
@@ -103,7 +123,10 @@ describe('numeros que a operacao consegue produzir', () => {
   it('disponivel maior que total nao quebra', () => {
     const aviso = avisoDeEscassez(60, LOTE)
     expect(aviso.nivel).toBe('normal')
-    expect(aviso.mensagem).toBe('Apenas 50 kits disponíveis para levar na hora.')
+    // Depois de 17/08 a frase segue o saldo, entao aqui ela anuncia 60 — que e
+    // exatamente o que o contador desenha e o que a caixa tem depois do
+    // ajuste. Anunciar 50 seria esconder dez kits que existem.
+    expect(aviso.mensagem).toBe('Apenas 60 kits disponíveis para levar na hora.')
   })
 
   it('disponivel maior que total tambem vale nas faixas de contagem', () => {

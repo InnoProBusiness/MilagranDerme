@@ -61,10 +61,36 @@ describe('ContadorEstoque', () => {
 
     expect(screen.getByTestId('kits-disponiveis')).toHaveTextContent('42')
     expect(screen.getByTestId('contador-estoque'))
-      .toHaveTextContent('Apenas 50 kits disponíveis para levar na hora.')
+      .toHaveTextContent('Apenas 42 kits disponíveis para levar na hora.')
     // A primeira pintura NAO depende de rede: quem chega pelo QR Code do evento
     // ve o numero certo no primeiro frame, nao 15 segundos depois.
     expect(espia).not.toHaveBeenCalled()
+  })
+
+  /**
+   * REGRESSAO DE 17/08/2026 — o numero e a frase nao podem discordar.
+   *
+   * Ate esta data o teste acima afirmava "42" no numero e "Apenas 50 kits" na
+   * frase, ou seja, codificava a contradicao como comportamento esperado. Na
+   * home isso aparecia lado a lado, numa pagina cujo mecanismo inteiro e
+   * escassez.
+   *
+   * O detalhe que torna isso mais que estetico: o numero grande e
+   * `aria-hidden` de proposito, sob o argumento de que a frase ja o repete.
+   * Enquanto a frase falava do lote, o saldo vivo simplesmente nao existia
+   * para quem usa leitor de tela.
+   */
+  it('o numero grande e a frase falam do MESMO saldo', () => {
+    instalarFetch(async () => respostaOk(37))
+
+    render(<ContadorEstoque inicial={{ disponivel: 37, total: 50 }} />)
+
+    expect(screen.getByTestId('kits-disponiveis')).toHaveTextContent('37')
+    const caixa = screen.getByTestId('contador-estoque')
+    expect(caixa).toHaveTextContent('Apenas 37 kits disponíveis para levar na hora.')
+    // O tamanho do lote nao aparece nesta caixa enquanto ha kit em pe: ele e
+    // manchete do hero (§6) e volta na frase de esgotamento (§11).
+    expect(caixa).not.toHaveTextContent('50 kits')
   })
 
   it('atualiza o numero quando o polling responde', async () => {

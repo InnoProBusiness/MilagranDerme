@@ -64,12 +64,30 @@ function inteiroSeguro(valor: number): number {
  * `disponivel` e o saldo vivo (SUM de todos os movimentos); `total` e o
  * tamanho do lote que entrou (SUM das entradas, 50 no lancamento).
  *
- * POR QUE 'esgotado' e 'normal' falam de `total` e as duas faixas do meio
- * falam de `disponivel`: e a copy do cliente, nao descuido. As pontas
- * anunciam o LOTE ("os 50 kits foram esgotados", "apenas 50 kits para levar
- * na hora") e o meio faz contagem regressiva do que sobrou. O numero vivo
- * cru continua sendo mostrado a parte, na linha "Kits disponíveis: N" da
- * vitrine — este texto e a leitura editorial do saldo, nao o contador.
+ * 'esgotado' fala do LOTE; todas as faixas com kit em pe falam do SALDO VIVO.
+ *
+ * A frase de esgotamento cita o lote porque e o texto literal de §11 ("Os 50
+ * kits disponiveis para compra presencial foram esgotados") e porque ali o
+ * saldo e zero — anunciar "0 kits foram esgotados" nao diz nada.
+ *
+ * CORRIGIDO EM 17/08/2026. Ate aqui a faixa 'normal' tambem citava o lote, e
+ * isso produzia uma contradicao na tela: src/components/contador-estoque.tsx
+ * mostra `disponivel` no numero grande, entao depois da primeira venda a home
+ * exibia "42" ao lado de "Apenas 50 kits disponiveis para levar na hora". Numa
+ * pagina cujo mecanismo inteiro e escassez, o visitante que nota a divergencia
+ * para de acreditar no contador.
+ *
+ * E havia um segundo efeito, pior: aquele numero e `aria-hidden` justamente
+ * sob o argumento de que a frase ja o repete. Com a frase citando o lote, quem
+ * usa leitor de tela ouvia "Apenas 50 kits disponiveis" e NUNCA ficava sabendo
+ * que restavam 42 — a informacao viva simplesmente nao existia para essa
+ * pessoa.
+ *
+ * §5 do documento do cliente pede a contagem viva na propria pagina ("50
+ * disponiveis / 40 disponiveis / 25 disponiveis / 10 disponiveis / 5
+ * disponiveis"). A manchete de lote ("APENAS 50 KITS DISPONIVEIS PARA LEVAR NA
+ * HORA") e copy de §6, do hero, e continua sendo escrita la — nao e este
+ * contador.
  *
  * `disponivel` MAIOR que `total` e um estado legitimo, nao um bug a barrar:
  * um movimento de 'ajuste' positivo (correcao de contagem no evento) sobe o
@@ -112,6 +130,8 @@ export function avisoDeEscassez(disponivel: number, total: number): AvisoEscasse
 
   return {
     nivel: 'normal',
-    mensagem: `Apenas ${lote} kits disponíveis para levar na hora.`,
+    // `saldo`, e nao `lote`: e o mesmo numero que o contador desenha grande ao
+    // lado desta frase. Ver a nota de 17/08 no cabecalho.
+    mensagem: `Apenas ${saldo} kits disponíveis para levar na hora.`,
   }
 }

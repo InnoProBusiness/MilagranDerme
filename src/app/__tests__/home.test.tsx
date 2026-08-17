@@ -153,8 +153,11 @@ describe('Home da loja de lancamento', () => {
   it('mostra o contador ao vivo com o saldo lido no servidor', async () => {
     await renderizarHome()
 
+    // Os dois leem o MESMO saldo. Ate 17/08/2026 esta asserção esperava "42"
+    // no numero e "Apenas 50 kits" na frase — a contradicao que a home exibia
+    // lado a lado. Ver a nota no cabecalho de src/lib/escassez.ts.
     expect(screen.getByTestId('contador-estoque'))
-      .toHaveTextContent('Apenas 50 kits disponíveis para levar na hora.')
+      .toHaveTextContent('Apenas 42 kits disponíveis para levar na hora.')
     expect(screen.getByTestId('kits-disponiveis')).toHaveTextContent('42')
   })
 
