@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getDb, closeDb } from '@/lib/db'
-import { criarPedido } from '@/repositories/pedidos'
+import { criarPedido, avancarStatusDoPedido } from '@/repositories/pedidos'
 import { conciliarPagamento } from '@/repositories/conciliacao'
 import { saldoDoRepresentante, listarLancamentos } from '@/repositories/comissoes'
 import { baixarEstoque, saldoDoEstoque, type CanalVenda } from '@/repositories/estoque'
@@ -642,6 +642,68 @@ describe('conciliacao de pagamento e livro-razao de estoque', () => {
  * reenvia ate receber 2xx, entao o pedido ficava em laco de reentrega — pago
  * no provedor, eternamente 'pendente' aqui, com o estoque nunca baixado.
  */
+/**
+ * CANCELAR PELO PAINEL TEM QUE DEVOLVER O KIT A CAIXA.
+ *
+ * Vive neste arquivo, e nao em pedidos.test.ts, pela mesma razao registrada no
+ * cabecalho: estoque_movimentos e append-only e referencia o pedido com ON
+ * DELETE RESTRICT, entao um teste que grave movimento nao pode morar num
+ * arquivo que apaga os proprios fixtures a cada rodada.
+ *
+ * O CENARIO E DO DIA 25/08, nao hipotetico: no balcao a unidade sai da caixa na
+ * CRIACAO do pedido (§10), antes de qualquer confirmacao, porque o comprador
+ * esta na frente do vendedor. Se essa pessoa gera o Pix e vai embora sem pagar,
+ * alguem cancela o pedido no painel — e o kit volta fisicamente para a caixa.
+ * Sem estorno, o sistema segue contando a unidade como vendida: com teto rigido
+ * de 50, cada desistencia encolhe o lote de verdade e o contador da home passa a
+ * mentir para baixo.
+ */
+describe('cancelamento pelo painel devolve o estoque', () => {
+  beforeEach(semear)
+
+  it('cancelar venda de balcao nao paga estorna a unidade', async () => {
+    const pedido = await novoPedido(true, 'presencial')
+    await baixarNaCriacao(pedido.id)
+    expect((await saldoDoEstoque(idKit, 'presencial'))!.disponivel).toBe(ENTRADA_PRESENCIAL - 1)
+
+    await getDb().transaction().execute((trx) =>
+      avancarStatusDoPedido(pedido.id, 'cancelado', trx))
+
+    expect(await statusNoBanco(pedido.id)).toBe('cancelado')
+    expect(await movimentosDoPedido(pedido.id, 'estorno')).toHaveLength(1)
+    expect((await saldoDoEstoque(idKit, 'presencial'))!.disponivel).toBe(ENTRADA_PRESENCIAL)
+  })
+
+  // Idempotencia: o painel tem botao, e botao recebe clique duplo. O segundo
+  // cancelamento e um no-op (`de === novo`) e nao pode inventar uma unidade.
+  it('cancelar duas vezes nao devolve duas unidades', async () => {
+    const pedido = await novoPedido(true, 'presencial')
+    await baixarNaCriacao(pedido.id)
+
+    const cancelar = () => getDb().transaction().execute((trx) =>
+      avancarStatusDoPedido(pedido.id, 'cancelado', trx))
+    await cancelar()
+    await cancelar()
+
+    expect(await movimentosDoPedido(pedido.id, 'estorno')).toHaveLength(1)
+    expect((await saldoDoEstoque(idKit, 'presencial'))!.disponivel).toBe(ENTRADA_PRESENCIAL)
+  })
+
+  // No online a baixa acontece no PAGAMENTO, nao na criacao: um pedido que
+  // nunca foi pago nao tem baixa nenhuma para estornar. estornarEstoque
+  // devolve false e o cancelamento segue — nao pode virar erro nem inventar
+  // uma entrada.
+  it('cancelar pedido online nao pago nao mexe no estoque', async () => {
+    const pedido = await novoPedido(true, 'online')
+
+    await getDb().transaction().execute((trx) =>
+      avancarStatusDoPedido(pedido.id, 'cancelado', trx))
+
+    expect(await statusNoBanco(pedido.id)).toBe('cancelado')
+    expect(await movimentosDoPedido(pedido.id, 'estorno')).toHaveLength(0)
+  })
+})
+
 describe('cupom que zera o subtotal', () => {
   beforeEach(semear)
 

@@ -5,6 +5,7 @@ import type {
   DB, Pedidos, PedidoItens, CanalVenda, MetodoPagamento, OrigemAtribuicao, PedidoStatus,
 } from '@/lib/db-types'
 import { deInteiro, type Centavos } from '@/lib/money'
+import { estornarEstoque } from '@/repositories/estoque'
 import {
   transicaoPermitida, geraCreditoDeComissao, geraEstornoDeComissao,
 } from '@/lib/pedido-status'
@@ -640,6 +641,41 @@ export async function avancarStatusDoPedido(
     .set({ status: novo, enviado_em: enviadoEm, entregue_em: entregueEm })
     .where('id', '=', pedidoId)
     .execute()
+
+  // CANCELAR DEVOLVE O KIT A CAIXA.
+  //
+  // Na venda de balcao a unidade sai do estoque na CRIACAO do pedido
+  // (src/app/api/vendas-presenciais/route.ts, §10), antes de qualquer
+  // confirmacao — o comprador esta na frente do vendedor. Quando essa pessoa
+  // gera o Pix e vai embora sem pagar, alguem cancela o pedido no painel e o
+  // kit volta fisicamente para a caixa. Sem esta linha o sistema continuava
+  // contando a unidade como vendida: com o teto rigido de 50 (§4), cada
+  // desistencia encolhia o lote de verdade e o contador da home passava a
+  // mentir para baixo — mostrando menos kits do que existem, no dia em que a
+  // escassez e o argumento de venda.
+  //
+  // NA MESMA TRANSACAO E SOB O MESMO LOCK do UPDATE acima, de proposito: um
+  // cancelamento que mudasse o status e falhasse ao devolver a unidade
+  // gravaria exatamente a divergencia que isto existe para impedir.
+  //
+  // ORDEM DE LOCK preservada: esta funcao ja segurou `pedidos` no FOR UPDATE
+  // do inicio, e estornarEstoque trava `estoques` depois — a mesma ordem
+  // pedidos -> estoques que conciliarPagamento usa. Inverter em um dos dois
+  // caminhos e a receita de deadlock entre um cancelamento no painel e um
+  // webhook chegando no mesmo instante.
+  //
+  // Sem ramificar por canal: estornarEstoque procura as baixas DAQUELE pedido
+  // e devolve `false` quando nao ha nenhuma. Pedido online nao pago nunca
+  // baixou (no online a baixa mora na conciliacao do pagamento), entao cai
+  // sozinho no no-op. E o estorno e idempotente, o que cobre o clique duplo.
+  //
+  // 'reembolsado' NAO passa por aqui: geraEstornoDeComissao barra essa
+  // transicao com TransicaoFinanceiraError bem acima, porque devolver dinheiro
+  // e do webhook do gateway (conciliarPagamento), que ja estorna o estoque no
+  // mesmo movimento.
+  if (novo === 'cancelado') {
+    await estornarEstoque(pedidoId, trx)
+  }
 
   return { mudou: true, de, para: novo }
 }
