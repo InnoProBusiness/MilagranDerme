@@ -1,174 +1,159 @@
 # Pendencias do Plano 4 — loja de lancamento (25/08/2026)
 
-Sessao de 16/08/2026, interrompida deliberadamente. Este documento e o handoff:
-o que foi entregue, o que foi verificado, e o que falta.
+Handoff de 16/08, **atualizado em 17/08/2026**. As secoes marcadas RESOLVIDO
+ficam registradas de proposito: elas explicam por que uma decisao mudou.
 
 O plano de referencia e `docs/superpowers/plans/2026-08-16-milagran-lancamento-25-08.md`.
-Ele tem os contratos completos (assinaturas, colunas, mensagens) e continua valendo.
-
-**Nada foi commitado.** Todo o trabalho esta na arvore, sem stage.
 
 ---
 
 ## 1. Estado verificavel agora
 
-| Gate | Resultado |
+| Gate | Resultado em 17/08 |
 |---|---|
-| `npm run typecheck` | **passa** |
-| `npx vitest run --project jsdom` (componentes) | **139 passam** |
-| Testes puros de `src/lib` (sem banco) | **247 passam** |
-| `npm run build` | **passa**, 29 rotas emitidas |
-| Testes de repositorio / rota (exigem Postgres) | **NAO RODARAM** — ver abaixo |
+| `npm run typecheck` | passa |
+| `npm run db:migrate` | **19 migrations aplicadas** contra Postgres real |
+| `npx vitest run` | **763 passam**, 45 arquivos, COM banco |
+| `npm run build` | passa |
+| CI + deploy na VPS | verdes, `main` em producao |
 
-### O que NAO foi possivel verificar nesta maquina
+### RESOLVIDO — o que o handoff de 16/08 pedia como primeira tarefa
 
-Nao ha Docker nem Postgres aqui. Toda a suite que toca o banco (repositorios,
-rotas, `resolver-pedido`, `db`) so roda no CI. Duas consequencias:
-
-1. **`src/lib/db-types.ts` foi editado A MAO.** `npm run db:types`
-   (kysely-codegen) exige banco vivo. O cabecalho do arquivo registra a excecao.
-   **PRIMEIRA COISA A FAZER AMANHA:**
-   ```
-   npm run db:up && npm run db:migrate && npm run db:types && git diff src/lib/db-types.ts
-   ```
-   Qualquer linha nesse diff e um erro meu que o typecheck local nao pegou.
-2. **Nenhuma migration foi executada de verdade.** Elas foram conferidas contra
-   o parser do `node-pg-migrate`, nao contra o Postgres. `npm run db:migrate`
-   e o teste real.
-
-Ordem sugerida amanha: subir o banco, migrar, regenerar tipos, `npm test`
-inteiro. So depois mexer em qualquer outra coisa desta lista.
+1. **`src/lib/db-types.ts` escrito a mao.** Regenerado com `npm run db:types`
+   contra o banco real: as declaracoes sao **identicas, linha por linha**, as
+   que tinham sido escritas a mao. Zero divergencia. O aviso de excecao saiu do
+   cabecalho porque a excecao deixou de existir.
+2. **Migrations nunca executadas.** As 19 aplicam limpo.
+3. **Suite de banco nunca rodada.** Rodou e achou exatamente um defeito que
+   nenhuma checagem estatica pegaria: `pedido_online_tem_endereco` recusava o
+   `INSERT` cru do teste de concorrencia de cupom, escrito antes da constraint
+   existir. Corrigido no teste, que agora carrega `cliente_id`/`endereco_id`
+   como o resto do arquivo — e nao driblando a regra pelo canal.
 
 ---
 
-## 2. O que foi entregue
+## 2. Achados da revisao adversarial — RESOLVIDOS
 
-### Schema — 8 migrations novas, bloco `1755300000000`
-- `..._canal_e_estoque.sql` — tipos `canal_venda` e `movimento_estoque`; tabelas
-  `estoques` e `estoque_movimentos` (livro-razao append-only assinado, molde de
-  `comissoes`); dois indices unicos parciais que sao a idempotencia real contra
-  reenvio de webhook.
-- `..._pedidos_canal_logistica.sql` — `canal`, `rastreio_codigo`,
-  `rastreio_transportadora`, `enviado_em`, `prazo_dias_estimado`; `canal` entra
-  na lista de colunas congeladas do trigger de imutabilidade.
-- `..._status_em_transito.sql` — `ALTER TYPE ... ADD VALUE`, sozinha de proposito.
-- `..._usuarios_sessoes.sql` — `usuarios`, `sessoes`, `pedidos.vendedor_id`;
-  trigger reescrito de novo, agora com `canal` e `vendedor_id`.
-- `..._leads.sql` — persiste candidaturas e interessados, com consentimento LGPD
-  carimbado (ate agora o aceite era coletado e nao gravado).
-- `..._pagamentos_atualizado_em.sql` — corrige o desvio de convencao.
-- `..._kit_dimensoes.sql` — peso e medidas para a cotacao de frete.
-- `..._seed_estoque.sql` — 50 kits presenciais (teto rigido) + linha online ilimitada.
+Os quatro sustentados e as quatro suspeitas nao verificadas foram todos
+tratados em 17/08.
 
-### Aplicacao
-- **Estoque** (`src/repositories/estoque.ts`): baixa/estorno/ajuste sob
-  `FOR UPDATE`, ordem de lock `pedidos` -> `estoques` documentada, idempotencia
-  por indice unico parcial. Baixa entra na conciliacao de pagamento para o canal
-  online e na criacao da venda para o presencial.
-- **Autenticacao**: `usuarios` + `sessoes` com scrypt (`src/lib/senha.ts`, sem
-  dependencia nova) e cookie `__Host-`. `src/lib/guarda.ts` protege rotas e
-  Server Components. `npm run usuario:criar` semeia operadores.
-- **Frete real**: `src/lib/frete.ts` (Clube Envios) + `src/lib/cep.ts` (ViaCEP).
-  `LinhaFrete` deixou de ser texto fixo e passou a receber o valor. O checkout
-  cota, o comprador escolhe o servico, e o servidor **recota** antes do INSERT
-  (a coluna e congelada pelo trigger; nao ha UPDATE depois).
-- **Venda presencial**: `POST /api/vendas-presenciais` (autenticada) + tela de
-  balcao, com PIX/cartao pelo mesmo Mercado Pago.
-- **Painel administrativo**: `/admin` com vendas, estoque, logistica e leads.
-- **Loja em `/`**: `src/app/page.tsx` nova, rewrite removido, canonical da LP de
-  recrutamento repontado, chrome de marca (header/footer/fontes/metadata).
-- **Deploy**: `MERCADOPAGO_*` e `APP_URL` **passaram a chegar ao container** —
-  ate hoje nao chegavam, e pagamento estava morto no ar em producao sem erro em
-  log nenhum. O gerador de stack agora imprime um relatorio de prontidao.
+### Corrigidos
+
+1. **[ALTO] Bloco pos-COMMIT fora do `try`** (`vendas-presenciais/route.ts`).
+   Confirmado e corrigido. A rota devolvia 500 sem corpo, e a tela do balcao
+   caia no desfecho "nao da para saber" — o mais caro, com fila na frente e a
+   unidade ja baixada. Agora devolve `vendaRegistrada`, `numero`, `token` e um
+   campo novo, **`cobrancaCriada`**, que separa dois 500 que pedem acoes
+   OPOSTAS: sem cobranca criada, "cobre de novo" e certo; com cobranca criada,
+   cobrar de novo debita o comprador duas vezes pelo mesmo kit.
+2. **[ALTO] Cupom de 100% travava a conciliacao.** Confirmado, e pior do que o
+   relatado: base de comissao zero fazia `creditarComissao` lancar, a transacao
+   inteira rolava para tras e o webhook devolvia 503 — que o Mercado Pago
+   reenvia em laco. O pedido ficava pago no provedor e eternamente `pendente`
+   aqui, com o estoque nunca baixado. `pedido_desconto_nao_excede` e `<=`, entao
+   o banco aceita o pedido; so virou alcancavel quando o frete passou a ser
+   real. Comissao zero agora e desfecho, nao erro. O `throw` de
+   `creditarComissao` continua como guarda contra chamada indevida.
+3. **[MEDIO] Tela descartava opcao de frete sem nome de transportadora.**
+   Confirmado. `src/lib/frete.ts` diz que o nome e cosmetico e nao derruba a
+   cotacao; a tela era mais estrita. Como a resposta de sucesso do Clube Envios
+   **nao esta documentada** e o nome e lido por lista de apelidos, um apelido
+   nao previsto esvaziaria TODAS as opcoes e travaria o checkout online no dia
+   do lancamento por causa de um rotulo. Opcao sem nome agora aparece como
+   "Envio".
+4. **[ALTO] Cancelar pedido presencial nao estornava estoque.** Confirmado.
+   No balcao a unidade sai na CRIACAO; quem gera Pix e vai embora tem o pedido
+   cancelado no painel e o kit volta para a caixa — mas o sistema seguia
+   contando como vendido. Com teto de 50, cada desistencia encolhia o lote de
+   verdade. `avancarStatusDoPedido` agora estorna, na mesma transacao e sob o
+   mesmo lock, na ordem `pedidos -> estoques`.
+5. **[MEDIO] Contador da home contradizia a si mesmo.** Confirmado. A frase
+   citava o lote e o numero grande ao lado mostrava o saldo vivo: depois da
+   primeira venda a home exibia "42" ao lado de "Apenas 50 kits disponiveis".
+   Pior, o numero e `aria-hidden` sob o argumento de que a frase o repete —
+   entao o saldo vivo nao existia para leitor de tela. §5 pede a contagem viva
+   na pagina; a manchete de lote e copy do hero (§6) e continua la.
+6. **[MEDIO] Sessao expirada no balcao.** Confirmado. A frase prometia que os
+   dados digitados continuavam na tela (e continuam — sao estado do React), mas
+   nao havia link de login: seguir a instrucao significava sair pela navegacao,
+   desmontar o componente e perder tudo. Agora ha link que **abre em aba nova**,
+   entao a aba do balcao nao se mexe.
+7. **[BAIXO] "Total" da vitrine.** Confirmado. Imprimia "Total: R$ 1.000,00"
+   logo abaixo de "Frete: calculado no checkout" — fechando uma conta que nao
+   fechou. Agora le "+ frete".
+
+### Verificado e SEM defeito
+
+- **[BAIXO] Classificacao do 500 na tela do balcao.** A revisao marcou como
+  sustentado por 2 de 3, mas o codigo atual ja esta certo:
+  `ERROS_ANTES_DO_COMMIT` e lista FECHADA, entao qualquer 500 fora dela ja cai
+  em "incerto", nunca em "venda nao registrada". Nada a mudar.
+
+### Refutados pelos ceticos (mantidos como estao)
+- Ordem de lock divergente entre baixa e estorno (`estoque.ts`).
+- Teto do stepper da vitrine aplicando saldo presencial a compra online.
+- Um achado sobre o rotulo 'Em preparacao'.
 
 ---
 
-## 3. Achados da revisao adversarial — TRIAGEM PENDENTE
+## 3. BLOQUEIO REAL — a plataforma nao fecha uma venda hoje
 
-Rodei uma revisao em seis dimensoes com tres ceticos por achado. **A revisao foi
-interrompida antes de terminar**, entao a lista abaixo esta em tres estados.
-Nada aqui foi corrigido.
+Sondado em producao em 17/08. **As duas integracoes pagas estao sem
+credenciais**, e cada uma sozinha ja impede a compra online de terminar:
 
-### 3.1 Sustentados pelos ceticos — corrigir primeiro
+| Integracao | Estado | Efeito |
+|---|---|---|
+| Mercado Pago | `POST /api/webhooks/mercadopago` responde **503** | Nao ha como cobrar. Nem Pix, nem cartao, nem balcao. |
+| Clube Envios | `POST /api/frete` responde **503** | O checkout online trava no passo 3: sem cotacao, o comprador nao avanca. |
+| ViaCEP | 200 | Autofill de endereco funciona (nao exige credencial). |
 
-1. **[ALTO] Bloco pos-COMMIT fora do `try`** —
-   `src/app/api/vendas-presenciais/route.ts` (~linha 542). *(3 de 3 ceticos sustentaram)*
-   Uma falha na conciliacao depois do COMMIT escapa como 500 generico, **sem**
-   `vendaRegistrada`/`numero`/`token` no corpo. A tela do balcao le exatamente
-   esse campo para decidir o que dizer ao vendedor — sem ele, o vendedor cai no
-   estado "nao da para saber", com a unidade ja baixada. E o defeito mais caro
-   da lista porque acontece com fila na frente.
+O comportamento nos dois casos e **falha fechada, de proposito**: sem segredo
+de webhook nao ha como distinguir notificacao legitima de POST forjado (um
+forjado marcaria pedido como pago), e sem cotacao o pedido nao segue com frete
+zero. Nada disso e defeito a corrigir no codigo — e configuracao que falta.
 
-2. **[ALTO] Cupom de 100% (ou fixo >= subtotal) trava a conciliacao** —
-   `src/repositories/conciliacao.ts` (~linha 143). *(2 de 3 sustentaram)*
-   O caminho ficou alcancavel agora que o frete e real: com desconto igual ao
-   subtotal, a base de comissao vai a zero e o fluxo quebra. Conferir o que
-   `creditarComissao` faz com base zero e se `pedido_total_confere` fecha quando
-   so resta frete.
+### O que precisa chegar, e de onde
 
-3. **[MEDIO] A tela descarta opcao de frete sem nome de transportadora** —
-   `src/components/checkout-wizard.tsx` (~linha 179). *(3 de 3 sustentaram)*
-   `src/lib/frete.ts` documenta que o nome e cosmetico e **nao** pode derrubar a
-   cotacao; o cliente e mais estrito que o servidor e some com opcoes validas.
-
-4. **[BAIXO] Classificacao do 500 na tela do balcao** —
-   `src/components/venda-presencial.tsx` (~linha 200). *(2 de 3 sustentaram)*
-   Um 500 generico e classificado como "venda NAO registrada", mas a rota nao
-   sabe se o COMMIT passou. Deveria cair em "incerto".
-
-### 3.2 Refutados pelos ceticos — provavelmente ignorar
-- Ordem de lock divergente entre baixa e estorno (`estoque.ts`) — 3 de 3 refutaram.
-- Teto do stepper da vitrine aplicando saldo presencial a compra online — 3 de 3 refutaram.
-- Um achado sobre o rotulo 'Em preparacao' — 2 de 3 refutaram.
-
-### 3.3 Levantados, NAO verificados (a revisao parou antes)
-Trate como suspeitas, nao como defeitos confirmados:
-- **[ALTO] Cancelar pedido presencial pelo painel nao estorna estoque** e ainda
-  engoliria o estorno automatico do webhook — `src/repositories/pedidos.ts` (~625).
-  Este merece ser o primeiro a investigar do grupo.
-- [MEDIO] Sessao expirada no balcao: a tela promete que os dados ficam, mas nao
-  ha caminho de reautenticar sem perde-los — `venda-presencial.tsx` (~358).
-- [MEDIO] Contador da home mostra saldo vivo ao lado de frase que cita o tamanho
-  do lote — `contador-estoque.tsx` (~224).
-- [BAIXO] A vitrine imprime "Total" para um valor que exclui frete ainda nao
-  cotado, na mesma caixa que diz que o frete vem depois — `vitrine.tsx` (~274).
-
-Para retomar a revisao inteira:
-`Workflow({scriptPath: '<sessao>/workflows/scripts/milagran-revisao-plano-4-wf_e82b790c-813.js', resumeFromRunId: 'wf_e82b790c-813'})`
+1. **Mercado Pago** — painel do desenvolvedor, sua aplicacao:
+   - `MERCADOPAGO_ACCESS_TOKEN` (segredo de servidor)
+   - `MERCADOPAGO_PUBLIC_KEY` (vai para o navegador, tokeniza cartao)
+   - `MERCADOPAGO_WEBHOOK_SECRET` (Webhooks -> Configurar notificacoes ->
+     Assinatura secreta)
+   - URL de notificacao: `https://milagranoficial.com.br/api/webhooks/mercadopago`
+   - **As credenciais de TESTE (`TEST-...`) ja destravam tudo.** O prefixo do
+     token decide o ambiente; trocar pelas de producao depois e mudar uma
+     variavel. Nao e preciso esperar KYC para validar o fluxo inteiro.
+2. **Clube Envios** — token, `cliente_id` e **CEP de origem da expedicao**.
+   A primeira chamada tem que ser em homologacao
+   (`CLUBE_ENVIOS_BASE_URL=https://apishmg.clubeenvios.com.br`), porque a
+   resposta de sucesso nao esta documentada e `src/lib/frete.ts` a le por lista
+   de apelidos — se nenhum casar, ele lanca `CotacaoIlegivelError` com as chaves
+   recebidas em vez de chutar um numero. O ajuste, se preciso, e num arquivo so.
+3. **Peso e dimensoes reais do kit.** Semeados como palpite declarado (500 g,
+   12x16x20 cm), com comentario na migration. **Este e o item mais caro da
+   lista:** medida errada = frete cotado abaixo do custo, e a diferenca sai da
+   margem em TODO pedido online. Sem conserto depois — `frete_centavos` e
+   congelado no INSERT pelo trigger de imutabilidade.
+4. **Registro ANVISA.** Continua NULL; a vitrine exibe "em breve".
 
 ---
 
 ## 4. Decisoes do cliente ja tomadas (nao reabrir)
 
-Tomadas em 16/08/2026 e ja implementadas:
 1. Autenticacao por tabela `usuarios` + sessao em cookie, um login por vendedor.
 2. Frete pela API do Clube Envios.
-3. Estoque online **sem teto**; a unidade e baixada no **pagamento**. O
-   presencial tem teto rigido de 50 e baixa na **criacao** da venda.
+3. Estoque online **sem teto**, baixado no **pagamento**. Presencial com teto
+   rigido de 50, baixado na **criacao** da venda.
 4. Venda presencial cobra pelo mesmo Mercado Pago, confirmada por webhook.
 
-## 5. Ainda precisa de resposta do cliente
+## 5. Riscos operacionais conhecidos
 
-- **Peso e dimensoes reais do kit.** Estao semeados como palpite declarado
-  (500 g, 12x16x20 cm) com comentario na migration. Valor errado = frete cotado
-  abaixo do custo, e a diferenca sai da margem em todo pedido online. Sem
-  conserto depois: `frete_centavos` e congelado no INSERT.
-- **CEP de origem da expedicao**, token e `cliente_id` do Clube Envios.
-- **Credenciais do Mercado Pago** na VPS (ver checklist no `DEPLOY.md`).
-- **Registro ANVISA** — continua NULL, e a vitrine exibe "em breve".
 - **Rate limit no evento**: 10 req/10 min por IP, em memoria, uma replica.
-  Dezenas de pessoas atras do WiFi do local compartilham um IP.
-
-## 6. Riscos operacionais conhecidos
-
-- **A resposta de sucesso de `POST /cotacao` do Clube Envios nao esta na
-  documentacao publica.** `src/lib/frete.ts` le preco e prazo por lista de
-  apelidos e lanca `CotacaoIlegivelError` com as chaves recebidas se nao achar —
-  nunca devolve zero. **A primeira chamada tem que ser em homologacao**
-  (`CLUBE_ENVIOS_BASE_URL=https://apishmg.clubeenvios.com.br`), e o ajuste, se
-  necessario, e num arquivo so.
+  Dezenas de pessoas atras do WiFi do local compartilham um IP — o checkout
+  ONLINE pode barrar visitantes no salao. O balcao NAO tem esse freio (a porta
+  la e a sessao do vendedor), entao a venda do evento nao para.
 - `deploy/milagran-ci-deploy.sh` reverte o deploy inteiro se
   `/seja-representante.html` nao responder 200. A URL foi mantida viva de
   proposito; nao mexer nela sem atualizar `verificar_borda()` no mesmo commit.
-- O checklist completo do dia do evento esta em `DEPLOY.md`, secao
+- O checklist do dia do evento esta em `DEPLOY.md`, secao
   "Checklist do lancamento de 25/08/2026".
