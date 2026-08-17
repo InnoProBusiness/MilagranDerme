@@ -115,6 +115,26 @@ const EMAIL_CLIENTE_RESGATE = 'cupom-cliente@exemplo.com'
 const CPF_CLIENTE_RESGATE = '11122233344'
 const CODIGOS_RESGATE = ['MARIA10', 'EXPIRADO', 'DESLIGADO', 'LIMITE1'] as const
 
+/**
+ * `inicia_em` EXPLICITAMENTE NO PASSADO nos cupons que precisam estar valendo.
+ *
+ * O default da coluna e `now()`, que e o relogio do POSTGRES; `resgatarCupom`
+ * compara com o `agora` que recebe, que e o relogio do NODE. Os dois processos
+ * nao estao sincronizados: medido em 17/08/2026 nesta maquina, o Postgres do
+ * container estava 11 ms adiantado. Um cupom inserido com o default nasce,
+ * portanto, alguns milissegundos no futuro para quem o resgata — e o resgate
+ * imediato do teste devolvia `nao_iniciado` em vez do motivo sob teste.
+ *
+ * Ficava verde rodando o arquivo sozinho e vermelho na suite inteira, que e o
+ * pior tipo de teste: some quando voce vai investigar. Nao e defeito de
+ * produto — cupom real e criado com antecedencia, nao milissegundos antes da
+ * primeira venda —, e sim um fixture que dependia de dois relogios coincidirem.
+ *
+ * A data fixa tambem diz melhor o que o fixture quer: "este cupom ja esta
+ * valendo", e nao "este cupom comeca exatamente agora".
+ */
+const JA_VALENDO = new Date('2026-01-01T00:00:00Z')
+
 describe('resgate de cupom', () => {
   let idCliente: string
   let idEndereco: string
@@ -205,7 +225,8 @@ describe('resgate de cupom', () => {
 
     // representante ativo — o link do cupom para comissao continua valendo.
     const cupomMaria = await db.insertInto('cupons').values({
-      codigo: 'MARIA10', tipo: 'percentual', valor: 10, representante_id: repAtiva.id, ativo: true,
+      codigo: 'MARIA10', tipo: 'percentual', valor: 10, representante_id: repAtiva.id,
+      ativo: true, inicia_em: JA_VALENDO,
     }).returning('id').executeTakeFirstOrThrow()
     idCupomMaria = cupomMaria.id
 
@@ -219,11 +240,12 @@ describe('resgate de cupom', () => {
     // Se o cupom estivesse inativo, o teste nao provaria nada sobre o
     // caminho representante_inativo especificamente.
     await db.insertInto('cupons').values({
-      codigo: 'DESLIGADO', tipo: 'percentual', valor: 10, representante_id: repInativa.id, ativo: true,
+      codigo: 'DESLIGADO', tipo: 'percentual', valor: 10, representante_id: repInativa.id,
+      ativo: true, inicia_em: JA_VALENDO,
     }).execute()
 
     await db.insertInto('cupons').values({
-      codigo: 'LIMITE1', tipo: 'percentual', valor: 10, limite_total: 1,
+      codigo: 'LIMITE1', tipo: 'percentual', valor: 10, limite_total: 1, inicia_em: JA_VALENDO,
     }).execute()
 
     // Pedido existente para o teste de limite por cliente: precisa de ao

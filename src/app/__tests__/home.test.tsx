@@ -24,6 +24,19 @@ import { render, screen, within } from '@testing-library/react'
 vi.mock('@/repositories/produtos', () => ({ listarKitsAtivos: vi.fn() }))
 vi.mock('@/repositories/estoque', () => ({ saldoDoEstoque: vi.fn() }))
 
+/**
+ * A home passou a montar o CHECKOUT INTEIRO na secao "06 — A compra" (o mesmo
+ * padrao da LP de recrutamento, que traz o formulario embutido em vez de um
+ * link). `CheckoutWizard` e Client Component e chama `useRouter`, que fora do
+ * App Router lanca "invariant expected app router to be mounted".
+ *
+ * O mock e o mesmo de src/components/__tests__/checkout-wizard.test.tsx — e la
+ * que o comportamento do checkout e testado de verdade, com fetch falso e as
+ * quatro etapas. Aqui interessa apenas que ele ESTA na pagina, no lugar certo
+ * da jornada de §18.
+ */
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+
 import PaginaInicial from '@/app/page'
 import { listarKitsAtivos, type Kit } from '@/repositories/produtos'
 import { saldoDoEstoque, type SaldoEstoque } from '@/repositories/estoque'
@@ -119,7 +132,15 @@ describe('Home da loja de lancamento', () => {
     expect(screen.getByTestId('preco')).toHaveTextContent('R$ 249,00')
     // §9: o valor unitario tem linha propria na jornada, com rotulo, para quem
     // vai comprar mais de um conseguir conferir a conta.
-    expect(screen.getByTestId('valor-unitario')).toHaveTextContent('R$ 249,00')
+    //
+    // `getAllByTestId`, e nao `getByTestId`: desde que o checkout passou a ser
+    // montado na propria home, "Valor unitário" aparece DUAS vezes — na secao
+    // de preco e dentro do passo 1 do checkout. As duas sao legitimas e leem o
+    // mesmo `kit.precoCentavos` pela mesma funcao de formatacao, entao o que
+    // importa e que NENHUMA delas divirja.
+    const unitarios = screen.getAllByTestId('valor-unitario')
+    expect(unitarios.length).toBeGreaterThan(0)
+    for (const linha of unitarios) expect(linha).toHaveTextContent('R$ 249,00')
   })
 
   // A home nao conhece o CEP de ninguem, entao o unico valor de frete que ela
@@ -175,8 +196,9 @@ describe('Home da loja de lancamento', () => {
 
       const cta = screen.getByTestId('cta-principal')
       expect(cta).toHaveTextContent('GARANTIR MEU KIT')
-      expect(cta).toHaveAttribute('href', '/comprar')
-      expect(screen.getByTestId('cta-final')).toHaveTextContent('GARANTIR MEU KIT')
+      // ANCORA, e nao mais /comprar: a compra acontece nesta pagina, no fim
+      // dela. O botao do hero desce ate o checkout em vez de trocar de tela.
+      expect(cta).toHaveAttribute('href', '#comprar')
     })
 
     it('vira "COMPRAR ONLINE" quando o presencial esgota', async () => {
@@ -184,12 +206,40 @@ describe('Home da loja de lancamento', () => {
       await renderizarHome()
 
       expect(screen.getByTestId('cta-principal')).toHaveTextContent('COMPRAR ONLINE')
-      expect(screen.getByTestId('cta-final')).toHaveTextContent('COMPRAR ONLINE')
-      // O destino NAO muda: o canal online nao esgota (§4), entao os dois
-      // rotulos levam a uma compra que existe.
-      expect(screen.getByTestId('cta-principal')).toHaveAttribute('href', '/comprar')
+      // O destino NAO muda com o esgotamento: o canal online nao tem teto
+      // (§4), entao os dois rotulos levam a uma compra que existe.
+      expect(screen.getByTestId('cta-principal')).toHaveAttribute('href', '#comprar')
       expect(screen.getByTestId('contador-estoque'))
         .toHaveTextContent('Os 50 kits disponíveis para compra presencial foram esgotados.')
+    })
+
+    /**
+     * O FIM DA PAGINA NAO E MAIS UM BOTAO, E O CHECKOUT.
+     *
+     * Ate 17/08/2026 a secao "06 — A compra" trazia um segundo botao
+     * (`cta-final`) que levava para /comprar. Ele deixou de existir: quem leu
+     * os seis blocos de argumento agora escolhe a quantidade e finaliza ali
+     * mesmo, como a LP de recrutamento faz com o formulario de candidatura.
+     *
+     * Este teste trava o padrao. Se alguem trocar o checkout embutido por um
+     * link de novo, ele fica vermelho.
+     */
+    it('a secao de compra traz o checkout embutido, nao um link para outra tela', async () => {
+      await renderizarHome()
+
+      const secao = document.querySelector('#comprar')
+      expect(secao).not.toBeNull()
+
+      // O passo 1 do checkout: seletor de quantidade e subtotal, dentro da
+      // propria secao.
+      const dentro = within(secao as HTMLElement)
+      expect(dentro.getByTestId('quantidade')).toBeInTheDocument()
+      expect(dentro.getByRole('button', { name: /aumentar quantidade/i })).toBeInTheDocument()
+      expect(dentro.getByRole('button', { name: /^continuar$/i })).toBeInTheDocument()
+
+      // E nenhum link de saida sobrou ali.
+      expect(dentro.queryByTestId('cta-final')).toBeNull()
+      expect(secao!.querySelector('a[href="/comprar"]')).toBeNull()
     })
 
     // Saldo negativo e estado legitimo (ajuste de inventario maior que o saldo).

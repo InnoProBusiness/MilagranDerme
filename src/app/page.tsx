@@ -5,6 +5,7 @@ import { formatarBRL } from '@/lib/money'
 import { AVISO_PRE_VENDA, lancamentoJaOcorreu } from '@/lib/tempo'
 import { saldoDoEstoque } from '@/repositories/estoque'
 import { listarKitsAtivos } from '@/repositories/produtos'
+import { CheckoutWizard } from '@/components/checkout-wizard'
 
 /**
  * A LOJA DE LANCAMENTO — "/" (§6, §7, §8 e §18 do documento do cliente de
@@ -67,10 +68,27 @@ const SUBTITULO = 'Uma nova experiência em limpeza de pele chegou.'
  * que muda e a promessa da palavra, nao para onde o botao leva. O canal online
  * nunca esgota (pre-venda sem teto, §4), entao nao existe estado em que o
  * botao aponte para uma compra impossivel.
+ *
+ * O DESTINO E UMA ANCORA NESTA MESMA PAGINA, e nao mais /comprar.
+ *
+ * A referencia e a LP de recrutamento (public/seja-representante.html): la a
+ * ultima secao NAO tem um botao que leva a outra tela — tem o formulario de
+ * candidatura inteiro, ali dentro. Quem chega ao fim da pagina age no lugar
+ * onde ja esta. A loja tinha o padrao oposto: seis secoes de argumento e, no
+ * fim, um botao que jogava o visitante para outra URL, onde a compra so
+ * comecava.
+ *
+ * `scroll-behavior: smooth` ja esta em globals.css, entao a ancora desliza
+ * ate o checkout em vez de saltar.
+ *
+ * /comprar e /checkout continuam existindo e funcionando: sao o alvo do link
+ * do representante (/r/<slug>), de campanha com URL propria e de quem
+ * salvou o endereco. Esta mudanca troca o caminho PADRAO da home, nao remove
+ * caminho nenhum.
  */
 const CTA_COM_PRESENCIAL = 'GARANTIR MEU KIT'
 const CTA_SO_ONLINE = 'COMPRAR ONLINE'
-const DESTINO_COMPRA = '/comprar'
+const DESTINO_COMPRA = '#comprar'
 
 /**
  * O conteudo do kit vinha de public/seja-representante.html (as quatro
@@ -476,20 +494,39 @@ export default async function PaginaInicial() {
       </section>
 
       {/* ---------------- §18, passo 6: COMPRAR ---------------- */}
+      {/*
+        A COMPRA ACONTECE AQUI, na propria pagina — o checkout inteiro, e nao
+        um botao para outra tela.
+
+        E o mesmo padrao da LP de recrutamento (public/seja-representante.html),
+        cuja ultima secao traz o formulario de candidatura embutido em vez de
+        um link. Quem leu os seis blocos de argumento age no lugar onde ja
+        esta; mandar para outra URL nesse ponto e pedir para o visitante
+        recomecar a decisao numa tela que ele nunca viu.
+
+        `CheckoutWizard` e client component e a home e server component — o
+        Next monta os dois sem ceremonia. Ele ja e autocontido: carrega o
+        proprio estado, cota o frete e cria o pedido. Nao existe uma segunda
+        implementacao de checkout nesta pagina.
+      */}
       <section className="section" id="comprar" aria-labelledby="comprar-titulo">
         <div className="section__head">
           <span className="kicker">06 — A compra</span>
           <h2 id="comprar-titulo">Comprar o kit</h2>
           <p className="section__lede">
             {esgotado
-              ? 'Os kits do evento acabaram, mas a loja online continua aberta e não tem limite de unidades.'
-              : 'Escolha a quantidade na próxima tela. O pagamento é por PIX ou cartão de crédito.'}
+              ? 'Os kits do evento acabaram, mas a loja online continua aberta e não tem limite de unidades. Pague com PIX ou cartão de crédito.'
+              : 'Escolha a quantidade e finalize aqui mesmo. O pagamento é por PIX ou cartão de crédito.'}
           </p>
         </div>
 
-        <a className="btn btn--solid" href={DESTINO_COMPRA} data-testid="cta-final">
-          {rotuloCta}
-        </a>
+        {/*
+          `kit` e nao-nulo aqui por construcao: o catalogo vazio ja encerrou a
+          pagina no retorno antecipado la em cima, com o estado vazio honesto.
+          Repetir a checagem seria codigo morto — e, pior, sugeriria um segundo
+          estado vazio que nunca renderiza.
+        */}
+        <CheckoutWizard kit={kit} quantidadeInicial={1} />
       </section>
     </>
   )
