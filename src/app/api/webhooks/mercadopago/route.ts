@@ -54,7 +54,21 @@ export async function POST(req: Request) {
     // POST forjado. Recusar e a unica opcao segura: aceitar "porque a env
     // ainda nao foi preenchida" transforma um erro de configuracao em porta
     // aberta para marcar pedido como pago.
-    console.error('[webhook-mp] MERCADOPAGO_WEBHOOK_SECRET nao configurada — recusando')
+    //
+    // O DIAGNOSTICO AO LADO DA RECUSA responde, sem abrir nada, a pergunta que
+    // aparece quando o painel do provedor nao mostra onde gerar o segredo: as
+    // notificacoes chegam ASSINADAS? Se `assinatura=sim`, o Mercado Pago ja
+    // esta assinando e falta so o segredo do nosso lado. Se `assinatura=nao`,
+    // nenhum segredo faria a verificacao passar e a conversa e outra.
+    //
+    // So a PRESENCA dos cabecalhos vai para o log, nunca o valor: a assinatura
+    // e material criptografico e o log do container e agregado.
+    console.error(
+      '[webhook-mp] MERCADOPAGO_WEBHOOK_SECRET nao configurada — recusando'
+      + ` (assinatura=${req.headers.get('x-signature') ? 'sim' : 'nao'}`
+      + `, request-id=${requestId ? 'sim' : 'nao'}`
+      + `, tipo=${tipo ?? '-'})`,
+    )
     return Response.json({ error: 'nao_configurado' }, { status: 503 })
   }
 
