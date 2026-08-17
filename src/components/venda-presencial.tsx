@@ -288,9 +288,42 @@ export function interpretarResposta(status: number, corpo: unknown): Desfecho {
       }
     }
 
+    /**
+     * A COBRANCA JA EXISTE NO PROVEDOR — nao mande cobrar de novo.
+     *
+     * Este ramo separa dois fracassos que a tela mostrava com a MESMA
+     * instrucao, e a instrucao so serve para um deles. Quando a rota nao
+     * conseguiu nem criar a cobranca, "cobre de novo pelo mesmo pedido" e
+     * exatamente o certo. Quando ela criou a cobranca e falhou DEPOIS (o
+     * `conciliacao_falhou` de /api/vendas-presenciais), o dinheiro pode ja ter
+     * sido capturado: repetir a cobranca debita o comprador duas vezes pelo
+     * mesmo kit — e num evento, com fila, ninguem confere isso na hora.
+     *
+     * `cobrancaCriada` e o campo que a rota manda justamente para desfazer a
+     * ambiguidade; o codigo HTTP e o mesmo 500 nos dois casos.
+     */
+    if (c.cobrancaCriada === true) {
+      return {
+        registrada: true,
+        entregar: false,
+        podeTentarDeNovo: false,
+        titulo: 'Confira o pagamento',
+        frase:
+          `${daVenda} está registrada e a cobrança JÁ FOI criada, mas não deu para confirmar o `
+          + 'resultado aqui. NÃO entregue o kit e NÃO cobre de novo — o comprador seria cobrado '
+          + 'duas vezes. Abra o pedido no link abaixo para ver se o pagamento foi confirmado.',
+        detalhe: mensagem,
+        numero,
+        token,
+        pix: null,
+        disponivelInformado: null,
+      }
+    }
+
     // 402 (cartao recusado), 502 (provedor fora) e 500 (falha nossa) depois do
-    // COMMIT. Titulos diferentes porque o conserto e diferente, mas a frase
-    // termina igual nos tres: a venda existe e o kit nao sai.
+    // COMMIT, nos casos em que a cobranca NAO chegou a existir. Titulos
+    // diferentes porque o conserto e diferente, mas a frase termina igual nos
+    // tres: a venda existe e o kit nao sai.
     return {
       registrada: true,
       entregar: false,

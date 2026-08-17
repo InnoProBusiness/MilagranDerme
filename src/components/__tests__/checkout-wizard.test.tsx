@@ -411,6 +411,41 @@ describe('CheckoutWizard', () => {
     expect(screen.getByRole('radio', { name: /SEDEX/ })).toHaveAccessibleName(/3 dias úteis/)
   })
 
+  /**
+   * DINHEIRO: opcao sem nome de transportadora continua pagavel.
+   *
+   * src/lib/frete.ts trata o nome como cosmetico de proposito — "some da tela,
+   * nao some do bolso de ninguem". A tela era mais estrita que o servidor e
+   * descartava a opcao inteira, o que importa porque a resposta de sucesso do
+   * Clube Envios NAO esta documentada: se nenhum apelido de nome casar, TODA
+   * opcao chega sem nome e o checkout online fica sem frete nenhum para
+   * escolher — travado no dia do lancamento por causa de um rotulo.
+   */
+  it('DINHEIRO: cotacao sem nome de transportadora continua selecionavel', async () => {
+    vi.stubGlobal('fetch', criarFetchFalso({
+      frete: resposta(200, {
+        opcoes: [
+          { idServico: 4553, transportadora: '', valorCentavos: 2350, prazoDias: 8 },
+        ],
+      }),
+    }))
+
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    await irAtePasso3()
+    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    // O autofill do CEP traz rua, bairro, cidade e UF; o numero da casa e o
+    // unico campo que ele nao tem como saber, e sem ele o passo 3 nao libera.
+    await userEvent.type(screen.getByLabelText(/^numero$/i), '1000')
+
+    // Rotulo neutro, sem inventar transportadora, com preco e prazo intactos.
+    const opcao = await screen.findByRole('radio', { name: /Envio/ })
+    expect(opcao).toHaveAccessibleName(/R\$ 23,50/)
+    expect(opcao).toHaveAccessibleName(/8 dias úteis/)
+
+    await userEvent.click(opcao)
+    expect(botaoContinuar()).not.toBeDisabled()
+  })
+
   // O caso que o cabecalho de src/components/linha-frete.tsx e o de
   // src/lib/frete.ts existem para impedir: cotacao indisponivel NAO pode virar
   // frete zero e NAO pode deixar o pedido seguir.

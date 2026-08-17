@@ -12,7 +12,7 @@ import { salvarClienteComEndereco, CpfDivergenteError } from '@/repositories/cli
 import { criarPedido, PrecoDivergenteError } from '@/repositories/pedidos'
 import { baixarEstoque, EstoqueInsuficienteError } from '@/repositories/estoque'
 import { abrirPagamento, vincularAoProvedor, type Pagamento } from '@/repositories/pagamentos'
-import { conciliarPagamento } from '@/repositories/conciliacao'
+import { conciliarPagamento, type ResultadoConciliacao } from '@/repositories/conciliacao'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -539,8 +539,22 @@ export async function POST(req: Request) {
     }, { status: 202 })
   }
 
-  const conciliado = await getDb().transaction().execute(async (trx) => {
-    await vincularAoProvedor(local.id, resposta.id, status, trx)
+  // ESTE try NAO E DECORACAO. Sem ele, uma falha aqui dentro escapa do
+  // handler e o Next devolve um 500 SEM CORPO — sem `vendaRegistrada`, sem
+  // `numero`, sem `token`. A tela do balcao cai no desfecho "nao da para
+  // saber" (o mais seguro que ela tem, mas tambem o mais caro): o vendedor
+  // para, com fila na frente, para conferir no painel um pedido que nos
+  // sabemos que existe, com a unidade ja baixada.
+  //
+  // A DIFERENCA PARA O catch DE CIMA importa e e o motivo de `cobrancaCriada`
+  // existir: la a cobranca NAO chegou a ser criada, entao "cobre de novo" e a
+  // instrucao certa. Aqui `criarPagamentoMP` JA VOLTOU com sucesso — o
+  // dinheiro pode inclusive ja ter sido capturado. Mandar cobrar de novo
+  // cobraria o comprador duas vezes pelo mesmo kit.
+  let conciliado: ResultadoConciliacao
+  try {
+    conciliado = await getDb().transaction().execute(async (trx) => {
+      await vincularAoProvedor(local.id, resposta.id, status, trx)
     // MESMA funcao que o webhook chama. Um cartao aprovado na hora move o pedido
     // por este caminho; se o webhook do mesmo pagamento chegar logo depois,
     // conciliarPagamento devolve no-op.
@@ -552,12 +566,34 @@ export async function POST(req: Request) {
     // (src/repositories/conciliacao.ts), com o indice unico parcial
     // estoque_baixa_unica_por_pedido como rede embaixo. Sem essa idempotencia,
     // toda venda presencial paga tiraria DUAS unidades da caixa.
-    return conciliarPagamento(venda.id, status, trx)
-  })
+      return conciliarPagamento(venda.id, status, trx)
+    })
+  } catch (e) {
+    console.error('[vendas-presenciais] conciliacao falhou apos a cobranca:', mensagemSeguraDoErro(e))
+
+    // O webhook do Mercado Pago e a rede de seguranca real deste caminho: a
+    // cobranca tem `external_reference` = id do pedido, entao a notificacao
+    // reconcilia o pedido sozinha, mesmo sem a linha local ter sido vinculada
+    // aqui. Por isso a instrucao e ESPERAR E CONFERIR, nunca refazer.
+    return Response.json({
+      error: 'conciliacao_falhou',
+      vendaRegistrada: true,
+      cobrancaCriada: true,
+      numero: venda.numero,
+      token: venda.token,
+      mensagem: 'A venda está registrada e a cobrança JÁ FOI criada — não cobre de novo, '
+        + 'o comprador seria cobrado duas vezes. NÃO entregue o kit: abra o pedido pelo link '
+        + 'abaixo e confira se o pagamento foi confirmado.',
+    }, { status: 500 })
+  }
 
   // Depois do COMMIT, nunca de dentro da transacao: e-mail enviado nao volta
   // atras, rollback volta. `mudou` garante envio unico — o webhook do mesmo
   // pagamento, chegando depois, ja encontra o pedido pago e nao reenvia.
+  //
+  // Fora do try acima de proposito: enviarConfirmacaoDePedido nunca lanca (o
+  // doc dela registra isso), e engoli-la naquele catch faria uma falha de
+  // e-mail ser anunciada ao vendedor como falha de conciliacao.
   if (conciliado.mudou && conciliado.para === 'pago') {
     await enviarConfirmacaoDePedido(venda.id)
   }

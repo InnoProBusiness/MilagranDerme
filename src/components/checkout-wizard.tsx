@@ -176,10 +176,25 @@ function lerOpcoesDeFrete(corpo: unknown): OpcaoDeFreteNaTela[] {
     const prazoDias = o.prazoDias
 
     if (typeof idServico !== 'number' || !Number.isInteger(idServico) || idServico <= 0) continue
-    if (transportadora === '') continue
     if (typeof valorCentavos !== 'number' || !Number.isInteger(valorCentavos) || valorCentavos < 0) continue
     if (typeof prazoDias !== 'number' || !Number.isInteger(prazoDias) || prazoDias <= 0) continue
 
+    // NOME VAZIO NAO DESCARTA A OPCAO. src/lib/frete.ts diz, no ponto em que
+    // monta a cotacao: "Nome da transportadora e cosmetico: some da tela, nao
+    // some do bolso de ninguem. Diferente de preco e prazo, nao derruba a
+    // cotacao." A tela era mais estrita que o servidor e sumia com opcoes
+    // pagaveis.
+    //
+    // O RISCO CONCRETO: a resposta de sucesso do POST /cotacao do Clube Envios
+    // nao esta na documentacao publica, e o servidor le o nome por uma lista
+    // de apelidos. Se nenhum apelido casar — plausivel, e o risco ja
+    // registrado no handoff —, TODA opcao vinha com nome vazio, este `continue`
+    // esvaziava a lista, e o comprador via "nenhuma opcao de frete" com preco e
+    // prazo perfeitamente legiveis do outro lado. Checkout online travado no
+    // dia do lancamento por um rotulo.
+    //
+    // O que nao pode faltar continua sendo barrado acima: sem idServico o
+    // servidor nao recota, e sem preco ou prazo nao ha o que mostrar nem cobrar.
     opcoes.push({
       idServico,
       transportadora,
@@ -645,7 +660,15 @@ export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
                       onChange={() => setIdServicoEscolhido(o.idServico)}
                     />
                     <span className="frete-opcao__nome">
-                      {o.transportadora}
+                      {/*
+                        Rotulo neutro quando a cotacao veio sem nome de
+                        transportadora. Um radio com o nome em branco fica
+                        clicavel mas ilegivel — o comprador escolhe entre duas
+                        linhas que so mostram preco. "Envio" nao inventa
+                        transportadora nenhuma (dizer "Correios" aqui seria
+                        chutar quem despacha) e mantem a opcao pagavel.
+                      */}
+                      {o.transportadora === '' ? 'Envio' : o.transportadora}
                       <span className="frete-opcao__prazo">{textoDePrazo(o.prazoDias)}</span>
                     </span>
                     <span className="frete-opcao__valor">{formatarBRL(o.valor)}</span>

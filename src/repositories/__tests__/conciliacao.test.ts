@@ -130,6 +130,27 @@ async function novoPedido(comRepresentante: boolean, canal: CanalVenda = 'online
   })
 }
 
+/**
+ * Pedido em que o cupom zera o produto inteiro e o comprador paga SO O FRETE.
+ * `pedido_desconto_nao_excede` e `<=`, nao `<`: o banco aceita isto, e um
+ * cupom de 100% (ou fixo >= subtotal) e promocao de lancamento plausivel.
+ */
+async function novoPedidoComDescontoTotal(frete: number) {
+  return criarPedido({
+    origem: 'link',
+    canal: 'online',
+    representanteId: idRep,
+    percentualComissao: PERCENTUAL,
+    utmSource: null, utmMedium: null, utmCampaign: null,
+    desconto: deInteiro(PRECO_KIT),
+    frete: deInteiro(frete),
+    itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT) }],
+    clienteId: idCliente,
+    enderecoId: idEndereco,
+    vendedorId: null,
+  })
+}
+
 /** Conciliacao numa transacao propria, como as duas rotas fazem. */
 function conciliar(pedidoId: string, statusPagamento: 'aprovado' | 'estornado' | 'cancelado') {
   return getDb().transaction().execute((trx) =>
@@ -604,5 +625,71 @@ describe('conciliacao de pagamento e livro-razao de estoque', () => {
     expect(String(registros.mock.calls[0][1])).not.toContain('11122233344')
 
     registros.mockRestore()
+  })
+})
+
+/**
+ * CUPOM QUE ZERA O PRODUTO — o comprador paga so o frete.
+ *
+ * Nao e hipotese de laboratorio: `pedido_desconto_nao_excede` e `<=`, um cupom
+ * percentual de 100 passa na CHECK de cupons, e "frete por nossa conta nao,
+ * produto por nossa conta sim" e promocao de lancamento comum. O caminho so
+ * ficou alcancavel quando o frete virou real — antes, total zero nem chegava a
+ * ser cobrado pelo provedor.
+ *
+ * O QUE ACONTECIA: base de comissao zero, `creditarComissao` lancava, a
+ * transacao inteira fazia rollback e o webhook devolvia 503. O Mercado Pago
+ * reenvia ate receber 2xx, entao o pedido ficava em laco de reentrega — pago
+ * no provedor, eternamente 'pendente' aqui, com o estoque nunca baixado.
+ */
+describe('cupom que zera o subtotal', () => {
+  beforeEach(semear)
+
+  it('pedido pago com desconto total e confirmado, sem creditar comissao', async () => {
+    const pedido = await novoPedidoComDescontoTotal(2500)
+
+    const r = await conciliar(pedido.id, 'aprovado')
+
+    // O que mais importa: o pedido FECHA. Antes, esta linha nem era alcancada.
+    expect(r.mudou).toBe(true)
+    expect(r.para).toBe('pago')
+    expect(await statusNoBanco(pedido.id)).toBe('pago')
+
+    // Comissao de 20% sobre produto zerado e zero. Nao ha lancamento a fazer —
+    // e um livro-razao append-only nao ganha linha de valor nenhum.
+    expect(r.comissaoCreditada).toBeNull()
+    expect(await listarLancamentos(idRep)).toHaveLength(0)
+    expect((await saldoDoRepresentante(idRep)).totalCreditado).toBe(0)
+  })
+
+  it('estorno de pedido com desconto total nao tenta reverter o que nao existe', async () => {
+    const pedido = await novoPedidoComDescontoTotal(2500)
+    await conciliar(pedido.id, 'aprovado')
+
+    const r = await conciliar(pedido.id, 'estornado')
+
+    expect(r.para).toBe('reembolsado')
+    expect(r.comissaoEstornada).toBeNull()
+    expect(await listarLancamentos(idRep)).toHaveLength(0)
+  })
+
+  // Um centavo de produto sobrando volta a gerar comissao: a guarda nova e
+  // sobre base ZERO, e nao "desconto grande demais". Sem este teste, trocar a
+  // condicao por algo mais frouxo passaria despercebido.
+  it('um centavo restante ainda credita comissao', async () => {
+    const pedido = await criarPedido({
+      origem: 'link', canal: 'online',
+      representanteId: idRep, percentualComissao: PERCENTUAL,
+      utmSource: null, utmMedium: null, utmCampaign: null,
+      desconto: deInteiro(PRECO_KIT - 100),
+      frete: deInteiro(2500),
+      itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT) }],
+      clienteId: idCliente, enderecoId: idEndereco, vendedorId: null,
+    })
+
+    const r = await conciliar(pedido.id, 'aprovado')
+
+    // 20% de R$ 1,00 = R$ 0,20
+    expect(r.comissaoCreditada).toBe(20)
   })
 })

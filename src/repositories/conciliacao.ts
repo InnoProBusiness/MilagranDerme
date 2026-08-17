@@ -132,15 +132,34 @@ export async function conciliarPagamento(
 
   // Venda da casa (representante_id NULL) nao gera lancamento nenhum — e o
   // caso normal de toda venda do perfil oficial, nao uma excecao.
+  // BASE DE CALCULO: subtotal menos desconto, SEM frete. Os dois valores vem
+  // das colunas congeladas do pedido, protegidas pelo trigger de
+  // imutabilidade — nunca de um recalculo sobre o catalogo de hoje.
+  const base = deInteiro(pedido.subtotal_centavos - pedido.desconto_centavos)
+
   if (
     geraCreditoDeComissao(de, para) &&
     pedido.representante_id !== null &&
-    pedido.percentual_comissao_snapshot !== null
+    pedido.percentual_comissao_snapshot !== null &&
+    // BASE ZERO NAO E ERRO, E VENDA COM CUPOM DE 100%.
+    //
+    // `pedido_desconto_nao_excede` e `<=`, entao o banco aceita desconto igual
+    // ao subtotal, e um cupom percentual de 100 passa na CHECK de cupons: o
+    // comprador paga so o frete. Comissao de 20% sobre produto zerado e zero,
+    // e um livro-razao append-only nao ganha linha de valor nenhum.
+    //
+    // A guarda mora AQUI, e nao em creditarComissao, de proposito: o `throw`
+    // de la protege contra chamada indevida (alguem creditando o que nao ha) e
+    // continua valendo. Quem sabe que "nao ha comissao nesta venda" e um
+    // desfecho normal e este ponto, que conhece o pedido inteiro.
+    //
+    // ANTES DESTA LINHA o throw subia daqui, a transacao inteira fazia
+    // rollback e o webhook devolvia 503 — e como o Mercado Pago reenvia ate
+    // receber 2xx, o pedido ficava em laco: pago no provedor, eternamente
+    // 'pendente' aqui, com o estoque nunca baixado. So virou alcancavel quando
+    // o frete passou a ser real; antes, total zero nem era cobrado.
+    base > 0
   ) {
-    // BASE DE CALCULO: subtotal menos desconto, SEM frete. Os dois valores
-    // vem das colunas congeladas do pedido, protegidas pelo trigger de
-    // imutabilidade — nunca de um recalculo sobre o catalogo de hoje.
-    const base = deInteiro(pedido.subtotal_centavos - pedido.desconto_centavos)
     const lancamento = await creditarComissao(
       {
         pedidoId,

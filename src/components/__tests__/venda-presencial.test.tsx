@@ -599,6 +599,51 @@ describe('interpretarResposta', () => {
     }
   })
 
+  /**
+   * DINHEIRO: os dois 500 pos-COMMIT pedem acoes OPOSTAS, e o codigo HTTP e o
+   * mesmo nos dois. Quem separa e `cobrancaCriada`.
+   *
+   * Sem esta distincao a tela mandava "cobre de novo pelo MESMO pedido" tambem
+   * quando a cobranca ja existia no Mercado Pago e podia ja estar capturada —
+   * debitando o comprador duas vezes pelo mesmo kit, num balcao com fila, onde
+   * ninguem confere extrato na hora.
+   */
+  it('500 com cobranca ja criada manda conferir, nunca cobrar de novo', () => {
+    const d = interpretarResposta(500, {
+      error: 'conciliacao_falhou',
+      vendaRegistrada: true,
+      cobrancaCriada: true,
+      numero: 12,
+      token: TOKEN,
+    })
+
+    expect(d.registrada).toBe(true)
+    expect(d.entregar).toBe(false)
+    expect(d.podeTentarDeNovo).toBe(false)
+    expect(d.frase).toMatch(/NÃO cobre de novo/i)
+    // A instrucao do OUTRO ramo, que aqui seria uma cobranca em duplicidade.
+    // Mirar em /Cobre de novo/i nao serve: casa com o proprio "NÃO cobre de
+    // novo" acima, entao passaria dizendo o contrario do que verifica.
+    expect(d.frase).not.toMatch(/pelo MESMO pedido/i)
+    // O link do pedido e a acao que sobra para o vendedor: sem numero e token
+    // ele nao tem como conferir nada.
+    expect(d.numero).toBe(12)
+    expect(d.token).toBe(TOKEN)
+  })
+
+  it('500 sem cobranca criada continua mandando cobrar de novo pelo mesmo pedido', () => {
+    const d = interpretarResposta(500, {
+      error: 'nao_foi_possivel_cobrar',
+      vendaRegistrada: true,
+      numero: 13,
+      token: TOKEN,
+    })
+
+    expect(d.registrada).toBe(true)
+    expect(d.entregar).toBe(false)
+    expect(d.frase).toMatch(/Cobre de novo pelo MESMO pedido/i)
+  })
+
   it('erros anteriores ao COMMIT liberam nova tentativa do mesmo formulario', () => {
     const esgotado = interpretarResposta(409, ESTOQUE_ESGOTADO)
     expect(esgotado.registrada).toBe(false)
