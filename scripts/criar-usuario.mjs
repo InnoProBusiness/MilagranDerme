@@ -84,8 +84,34 @@ function lerArgumentos(argv) {
  * Le a senha com o eco desligado. Sem isto a senha fica visivel na tela e no
  * scrollback do terminal — e no dia do evento a tela do notebook do balcao
  * costuma estar virada para a fila.
+ *
+ * EXIGE TERMINAL DE VERDADE, e a checagem abaixo existe por causa de uma
+ * falha silenciosa observada em 17/08/2026.
+ *
+ * Sem TTY, `leitor.question` simplesmente NUNCA chama o callback: a Promise
+ * nao resolve, o event loop esvazia e o node encerra com codigo 0 — depois de
+ * ter impresso o prompt. O comando parecia ter funcionado e nao criava
+ * ninguem.
+ *
+ * Por que isso e uma armadilha do dia 25, e nao curiosidade: o DEPLOY.md manda
+ * criar os operadores "de dentro do container", e `docker exec` SEM `-it` e
+ * exatamente um stdin sem TTY. A pessoa rodaria o comando as 9h, leria a saida
+ * como sucesso, e o vendedor descobriria que nao consegue entrar so quando a
+ * fila ja estivesse formada — sem nenhuma mensagem de erro para investigar.
+ *
+ * Falhar aqui e ruidoso e imediato. O caminho NAO e aceitar a senha por pipe:
+ * ela apareceria no historico do shell e nos logs do processo, que e
+ * precisamente o que o eco desligado evita.
  */
 function perguntarSenha(rotulo) {
+  if (!process.stdin.isTTY) {
+    falhar(
+      'a senha precisa ser digitada num terminal de verdade, e a entrada atual nao e um.\n'
+      + '       Se estiver usando docker exec, acrescente -it:\n'
+      + '         docker exec -it <container> npm run usuario:criar -- --nome "..." --email ... --papel vendedor',
+    )
+  }
+
   return new Promise((resolver) => {
     const leitor = createInterface({ input: process.stdin, output: process.stdout, terminal: true })
     const saida = process.stdout

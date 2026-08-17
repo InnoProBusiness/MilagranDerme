@@ -121,11 +121,18 @@ Ordem importa: os tres primeiros itens sao pre-requisito para vender.
    cada pessoa com, de dentro do container ou com `DIRECT_URL` apontando para o
    banco:
    ```
-   npm run usuario:criar -- --nome "Fulano" --email fulano@exemplo.com --papel vendedor
+   docker exec -it $(docker ps -qf name=milagran_app) \
+     npm run usuario:criar -- --nome "Fulano" --email fulano@exemplo.com --papel vendedor
    ```
    A senha e pedida pelo terminal, com eco desligado. Rodar de novo para o mesmo
    e-mail TROCA a senha e derruba as sessoes abertas daquela pessoa — e o
    caminho de "esqueci a senha as 9h do dia 25".
+
+   **O `-it` nao e opcional.** Sem TTY o comando nao consegue ler a senha; ate
+   17/08/2026 ele imprimia o prompt, nao criava ninguem e encerrava com codigo
+   de SUCESSO — o operador so descobriria no dia, com a fila formada, que o
+   vendedor nao consegue entrar. Hoje ele recusa com mensagem explicita, mas o
+   `-it` continua sendo o jeito certo de chamar.
 4. **Conferir peso e dimensoes do kit.** `migrations/1755300600000_kit_dimensoes.sql`
    semeia 500 g / 12 x 16 x 20 cm como **palpite declarado**, nao medida. Valor
    errado = frete cotado abaixo do custo real, e a diferenca sai da margem em
