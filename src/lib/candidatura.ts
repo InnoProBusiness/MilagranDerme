@@ -3,6 +3,12 @@ import {
   criarLimitadorPorIp, ipDoPedido,
   JANELA_RATE_LIMIT_MS, MAX_CANDIDATURAS_POR_JANELA,
 } from '@/lib/rate-limit'
+// IMPORT DE TIPO, e nao de valor: `import type` some na compilacao, entao
+// este modulo continua sem tocar em src/lib/db.ts, sem abrir pool e sem
+// exigir DATABASE_URL. E o que mantem src/lib/__tests__/candidatura.test.ts
+// rodando sem Postgres nenhum, que e a razao declarada de a logica morar
+// aqui e nao no route handler.
+import type { EntradaLead, TipoLead } from '@/repositories/leads'
 
 /**
  * Nucleo do fluxo de candidatura de representante: valida, gera o PDF e
@@ -213,6 +219,116 @@ function htmlNotificacao(dados: DadosCandidatura): string {
   `
 }
 
+// ---- Lead (persistencia da candidatura) ----
+//
+// Ate 16/08/2026 uma candidatura tinha UM destino: um PDF anexado a um
+// e-mail. Nada era gravado — este arquivo nao importava getDb() em lugar
+// nenhum. A secao 17 do documento do cliente exige LISTAR representantes e
+// distribuidores no painel, e uma caixa de entrada nao e consultavel: nao da
+// para filtrar por estado, contar por tipo nem responder "quem se candidatou
+// no Ceara em agosto". Pior que isso, o aceite de LGPD que o formulario
+// coleta (checkbox `lgpd`, obrigatorio) so virava a linha "Consentimento
+// LGPD: Sim" desenhada no PDF: o consentimento era INCOMPROVAVEL, e o unico
+// carimbo de tempo existente era "quando o PDF foi gerado", que nao e o
+// mesmo fato. Agora cada candidatura tambem vira uma linha em `leads`
+// (migrations/1755300400000_leads.sql).
+
+/**
+ * Porta de persistencia do lead, INJETADA por quem chama (o route handler em
+ * src/app/api/candidatura/route.ts passa `registrarLead`).
+ *
+ * Injecao, e nao import direto do repositorio, por um motivo so: este modulo
+ * e testado sem banco. Importar `registrarLead` como VALOR arrastaria
+ * src/lib/db.ts para dentro de src/lib/__tests__/candidatura.test.ts, que
+ * hoje roda sem DATABASE_URL e sem Postgres na maquina de desenvolvimento —
+ * os testes de e-mail e de PDF passariam a depender de um banco que nao tem
+ * nada a ver com o que eles verificam. O parametro e opcional e o ultimo:
+ * toda chamada de duas posicoes que ja existia continua valendo, sem lead e
+ * sem mudanca de comportamento.
+ */
+export type GravadorDeLead = (lead: EntradaLead) => Promise<unknown>
+
+/**
+ * "Nivel de interesse" do formulario (public/seja-representante.html, select
+ * `nivel`, obrigatorio) tem exatamente duas opcoes: Representante e
+ * Distribuidor. E dali que sai o tipo do lead — nao e chute nem constante
+ * fixa, o proprio candidato ja diz qual dos dois quer ser, e os cartoes de
+ * plano da LP levam para o formulario com esse valor em mente
+ * (`data-nivel="Representante"` / `data-nivel="Distribuidor"`).
+ *
+ * Qualquer outro valor (formulario futuro sem o campo, corpo montado a mao)
+ * cai em 'representante' em vez de derrubar a gravacao. O motivo e assimetria
+ * de dano: um lead no balde errado e uma correcao de um clique no painel,
+ * enquanto um valor fora do ENUM tipo_lead faz o INSERT falhar — e como a
+ * gravacao e best-effort (ver processarCandidatura), esse lead sumiria em
+ * silencio, com a prova de consentimento junto.
+ */
+function tipoDoNivel(nivel: string): TipoLead {
+  return nivel.trim().toLowerCase() === 'distribuidor' ? 'distribuidor' : 'representante'
+}
+
+/**
+ * "Area de atuacao" e "Ja atua com estetica?" nao tem coluna em `leads` — a
+ * tabela e generica, atende tambem o formulario de interessado da home, e
+ * criar duas colunas que so um formulario preenche seria carregar NULL/''
+ * para sempre em todos os outros. Elas viram texto em `mensagem`, que existe
+ * exatamente para o que e especifico de cada origem. Sem isso o painel
+ * mostraria MENOS do que o e-mail ja mostrava hoje, o que faria a tela nova
+ * nascer pior que a caixa de entrada que ela veio substituir.
+ *
+ * Com acentuacao completa de proposito: isto e conteudo lido por uma pessoa
+ * na tela do painel, nao comentario de codigo.
+ */
+function mensagemDaCandidatura(dados: DadosCandidatura): string {
+  const partes: string[] = []
+  const area = texto(dados, 'area')
+  const atuaEstetica = texto(dados, 'atuaEstetica')
+  if (area) partes.push(`Área de atuação: ${area}`)
+  if (atuaEstetica) partes.push(`Já atua com estética: ${atuaEstetica}`)
+  return partes.join(' | ')
+}
+
+/**
+ * Traduz o corpo cru do formulario no lead a gravar. Exportada para poder
+ * ser testada sozinha, sem banco e sem e-mail: e uma funcao pura.
+ *
+ * `origem` recebe o "Como conheceu a marca?" do formulario (Instagram,
+ * TikTok, Indicacao, Evento, Outro) tal como veio, em portugues e com
+ * acento. leads.origem e texto livre sem CHECK justamente para isso
+ * (migrations/1755300400000_leads.sql) — mapear esses rotulos para slugs
+ * inventados aqui criaria um segundo vocabulario para manter em sincronia
+ * com o `<select>` do HTML, e o primeiro valor novo no formulario viraria um
+ * lead com origem errada ou um cadastro recusado.
+ *
+ * `consentidoEm` e o instante em que o aceite chegou ao servidor. Nao e o
+ * carimbo do PDF: aquele diz quando o arquivo foi desenhado e nunca foi
+ * consultavel por consulta nenhuma.
+ */
+export function leadDaCandidatura(
+  dados: DadosCandidatura,
+  agora: Date = new Date(),
+): EntradaLead {
+  // Em processarCandidatura este ponto so e alcancado depois de
+  // CAMPOS_OBRIGATORIOS, que ja recusa lgpd ausente, '' ou false — na
+  // pratica aqui e sempre true. A derivacao existe para a funcao continuar
+  // honesta quando chamada de fora desse fluxo: consentimento e o unico
+  // campo desta tabela que nao pode ser assumido por conveniencia.
+  const consentiu = Boolean(dados.lgpd)
+
+  return {
+    tipo: tipoDoNivel(texto(dados, 'nivel')),
+    nome: texto(dados, 'nome'),
+    email: texto(dados, 'email'),
+    whatsapp: texto(dados, 'whatsapp'),
+    cidade: texto(dados, 'cidade'),
+    estado: texto(dados, 'estado'),
+    mensagem: mensagemDaCandidatura(dados),
+    consentimentoLgpd: consentiu,
+    consentidoEm: consentiu ? agora : null,
+    origem: texto(dados, 'origem'),
+  }
+}
+
 export type Resultado = {
   status: number
   corpo: Record<string, unknown>
@@ -222,10 +338,16 @@ export type Resultado = {
  * Todo o fluxo, do corpo cru ao par (status, JSON). Fica aqui e nao no
  * route handler para que o handler seja so adaptacao de Request/Response —
  * e para que esta logica continue testavel sem subir o Next.
+ *
+ * `gravarLead` e opcional e best-effort: ver o bloco de gravacao abaixo. O
+ * CONTRATO HTTP nao muda com ele — os mesmos codigos (200/400/429/500/502)
+ * pelos mesmos motivos de antes, o que mantem validos tanto os testes deste
+ * arquivo quanto o `public/script.js` que le a resposta.
  */
 export async function processarCandidatura(
   dados: DadosCandidatura,
   ip: string,
+  gravarLead?: GravadorDeLead,
 ): Promise<Resultado> {
   if (excedeuRateLimit(ip)) {
     return { status: 429, corpo: { error: 'rate_limited' } }
@@ -247,6 +369,55 @@ export async function processarCandidatura(
 
   if (!EMAIL_REGEX.test(texto(dados, 'email'))) {
     return { status: 400, corpo: { error: 'invalid_email' } }
+  }
+
+  // ---- Grava o lead ANTES de qualquer e-mail sair ----
+  //
+  // ORDEM. O envio pela Resend e um efeito colateral EXTERNO e irreversivel:
+  // depois que a mensagem sai, nada aqui a traz de volta. Gravar o lead
+  // depois dela deixaria uma janela em que o processo morre (deploy, OOM do
+  // container de 512M, timeout) com o e-mail ja entregue e o consentimento
+  // perdido — justamente o registro que so existe em UM lugar, porque o
+  // e-mail nao e consultavel. Gravando antes, a unica coisa que pode falhar
+  // depois do INSERT e o envio, e o envio ja tem tratamento proprio (502).
+  //
+  // POSICAO. Depois da validacao, e nao antes: honeypot, campo obrigatorio
+  // ausente e e-mail invalido nao podem virar linha em `leads`. Guardar nome,
+  // e-mail e whatsapp de quem NAO marcou o checkbox de LGPD e exatamente o
+  // tratamento sem base legal que esta tabela existe para tornar impossivel
+  // — e um lead de bot nao e um lead, e lixo no painel que a operacao vai
+  // ligar de volta.
+  //
+  // Antes da checagem das variaveis do Resend, tambem de proposito: sem
+  // RESEND_API_KEY/EMAIL_FROM/EMAIL_TO o e-mail nunca sai e a linha no banco
+  // vira o UNICO vestigio daquela candidatura. E o caso em que descartar
+  // doeria mais, nao menos.
+  //
+  // BEST-EFFORT. Uma falha aqui NAO derruba a candidatura nem vira 5xx: o
+  // banco fora do ar as 20h de um dia de campanha nao pode transformar em
+  // erro um formulario que a pessoa preencheu certo e que a equipe ainda vai
+  // receber por e-mail. Mesmo raciocinio ja aplicado ao e-mail de
+  // confirmacao ao candidato, logo abaixo.
+  //
+  // Reenvio depois de um 502 grava um lead a mais para a mesma pessoa. Isso e
+  // esperado e nao e defeito: `leads` nao tem indice unico por e-mail porque
+  // cada envio e um evento de consentimento com instante proprio, e um upsert
+  // sobrescreveria o `consentido_em` anterior — o comentario que decide isso
+  // esta em migrations/1755300400000_leads.sql. Deduplicar para efeito de
+  // contato e trabalho da tela.
+  if (gravarLead) {
+    try {
+      await gravarLead(leadDaCandidatura(dados))
+    } catch (erro) {
+      // SO a mensagem. Uma violacao de CHECK do Postgres em `leads` carrega
+      // a linha inteira — nome, e-mail, whatsapp, cidade — na propriedade
+      // `detail` do erro, e logar o objeto cru derramaria dado pessoal do
+      // candidato no stdout do container, que vai para o log agregado do
+      // Swarm. Mesmo aviso registrado em src/repositories/leads.ts e em
+      // src/repositories/clientes.ts.
+      const motivo = erro instanceof Error ? erro.message : 'erro nao identificado'
+      console.error(`candidatura: falha ao gravar o lead, seguindo com o e-mail: ${motivo}`)
+    }
   }
 
   const { RESEND_API_KEY, EMAIL_FROM, EMAIL_TO, ENVIAR_CONFIRMACAO } = process.env

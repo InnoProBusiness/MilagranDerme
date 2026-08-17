@@ -18,35 +18,42 @@ const config: NextConfig = {
   reactStrictMode: true,
   output: 'standalone',
 
-  /**
-   * "/" serve a landing page de recrutamento sem redirecionar e sem trocar a
-   * URL na barra do navegador. Rewrite, nao redirect: o visitante ve
-   * `milagranoficial.com.br`, nao `milagranoficial.com.br/seja-representante.html`.
+  /*
+   * AQUI HAVIA UM REWRITE de "/" para "/seja-representante.html", e ele saiu
+   * em 16/08/2026. Ficou o registro do que aconteceu, porque a ausencia de
+   * uma linha nao conta historia nenhuma e o comentario antigo ja previa este
+   * dia ("quando a vitrine entregar e '/' virar a loja, este rewrite sai").
    *
-   * Antes disso havia um `src/app/page.tsx` que fazia `redirect()` — o que
-   * funcionava, mas empurrava a URL feia para a barra de endereco, para o
-   * link copiado e para o compartilhamento no WhatsApp.
+   * O QUE ERA: enquanto a landing page de recrutamento era a unica coisa
+   * pronta, "/" servia o HTML estatico dela sem redirecionar e sem trocar a
+   * URL na barra — o visitante via `milagranoficial.com.br`, nao
+   * `milagranoficial.com.br/seja-representante.html`.
    *
-   * Por que rewrite e nao mover o HTML para dentro do App Router: a LP e um
-   * arquivo estatico de 22KB escrito a mao, sem build. Converte-la em
-   * componente React so para servir "/" trocaria uma linha de configuracao
-   * por uma migracao inteira, e `src/app/globals.css` ja e uma copia de
-   * `public/styles.css` que so converge quando a vitrine do Plano 2
-   * substituir a LP.
+   * O QUE MUDOU: o documento do cliente de 16/08/2026 (§14, §18) inverteu a
+   * prioridade. A raiz e a LOJA de lancamento (`src/app/page.tsx`), e
+   * representante virou um link discreto no rodape. Com um `page.tsx` de
+   * verdade em "/", o rewrite deixou de ser inofensivo: rewrite ganha da rota
+   * do App Router, e a loja nunca apareceria.
    *
-   * `/seja-representante.html` continua respondendo 200 de proposito — pode
-   * haver link e campanha em circulacao apontando para la. As duas URLs
-   * servem o mesmo conteudo, e o `<link rel="canonical">` da pagina aponta
-   * para "/", que e quem os buscadores devem indexar.
+   * O QUE NAO MUDOU: `/seja-representante.html` continua respondendo 200,
+   * servido de public/ pelo mesmo container, e isso NAO e opcional. Duas
+   * razoes independentes: §14 manda manter o formulario disponivel (ha
+   * campanha em circulacao apontando para la), e
+   * `deploy/milagran-ci-deploy.sh` aprova ou REVERTE o deploy inteiro com
+   * base num curl nessa URL (`verificar_borda`, linhas ~137-153). Mexer nela
+   * sem atualizar o script no mesmo commit faz todo deploy seguinte se
+   * auto-reverter, com sintoma (aplicacao velha no ar) que nao aponta para a
+   * causa.
    *
-   * Quando o Plano 2 entregar a vitrine e "/" virar a loja, este rewrite sai
-   * e a LP volta a viver so em `/seja-representante.html`. E uma linha.
+   * O `<link rel="canonical">` da LP foi repontado no mesmo commit: ele dizia
+   * "/", ou seja, declarava o recrutamento como identidade da marca. Agora
+   * aponta para a propria URL de recrutamento, e a loja fica com "/".
+   *
+   * E `src/app/globals.css` deixou de ser copia de `public/styles.css`: o
+   * primeiro e o design system da loja, o segundo serve so a LP estatica. A
+   * divergencia entre os dois e assumida — o cabecalho de globals.css conta
+   * o porque.
    */
-  async rewrites() {
-    return [
-      { source: '/', destination: '/seja-representante.html' },
-    ]
-  },
 }
 
 export default config

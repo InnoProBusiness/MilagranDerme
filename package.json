@@ -15,7 +15,8 @@
     "typecheck": "tsc --noEmit",
     "db:up": "docker compose up -d",
     "db:migrate": "node-pg-migrate -d DIRECT_URL -m migrations up",
-    "db:types": "kysely-codegen --out-file src/lib/db-types.ts"
+    "db:types": "kysely-codegen --out-file src/lib/db-types.ts",
+    "usuario:criar": "node scripts/criar-usuario.mjs"
   },
   "dependencies": {
     "kysely": "^0.28.0",

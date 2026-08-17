@@ -1,0 +1,78 @@
+-- migrations/1755300200000_status_em_transito.sql
+-- Up Migration
+--
+-- MIGRATION DE UM STATEMENT SO, DE PROPOSITO. Nao acrescente nada a este
+-- arquivo.
+--
+-- `npm run db:migrate` roda `node-pg-migrate ... up`, e a opcao
+-- `--single-transaction` da ferramenta e TRUE por padrao: todas as migrations
+-- pendentes de uma execucao entram em UMA transacao unica (ver
+-- node_modules/node-pg-migrate/bin/node-pg-migrate.ts, singleTransactionArg).
+-- Migration em .sql nao tem como pedir `pgm.noTransaction()` — isso so existe
+-- para migration em JS. Ou seja: nao ha como tirar este ALTER TYPE da
+-- transacao.
+--
+-- E o Postgres proibe USAR um valor de ENUM criado na transacao corrente
+-- ("unsafe use of new value ... of enum type"). Um INSERT, um CHECK, um
+-- DEFAULT ou um WHERE mencionando 'em_transito' no mesmo `db:migrate`
+-- falharia e derrubaria o bloco inteiro de migrations junto.
+--
+-- Por isso a regra vale para a EXECUCAO inteira, nao so para este arquivo:
+-- nenhuma migration do bloco 1755300000000 pode citar 'em_transito'. Hoje
+-- nenhuma cita — o primeiro consumidor do valor e a aplicacao
+-- (src/lib/pedido-status.ts), que so roda depois do commit. Se alguma
+-- migration futura precisar do valor (um backfill, por exemplo), ela tem que
+-- ser aplicada em UMA SEGUNDA invocacao de `db:migrate`, depois desta ter
+-- commitado.
+--
+-- Rodar dentro de transacao so e permitido a partir do Postgres 12; a versao
+-- daqui e a 14, fixada em docker-compose.yml e no servico do CI justamente
+-- para acompanhar producao.
+--
+-- POR QUE O STATUS EXISTE: 'enviado' hoje significa "saiu daqui" e nada mais,
+-- e o comprador fica com a mesma frase na tela do dia da postagem ate a
+-- entrega. 'em_transito' e o estado intermediario que a tela de acompanhamento
+-- (§12) mostra enquanto o objeto esta com a transportadora. AFTER 'enviado'
+-- coloca o valor na posicao certa da ordenacao do ENUM — `ORDER BY status`
+-- em relatorio de logistica segue a ordem do ciclo de vida, e nao a ordem de
+-- criacao dos valores. A transicao permitida (enviado -> em_transito ->
+-- entregue) e definida em src/lib/pedido-status.ts; o banco guarda o valor, a
+-- aplicacao guarda a maquina de estados.
+--
+-- IF NOT EXISTS torna o statement idempotente: se um banco ja tiver recebido o
+-- valor por outro caminho (restore de dump mais novo, por exemplo), a
+-- migration passa em vez de abortar o deploy.
+ALTER TYPE pedido_status ADD VALUE IF NOT EXISTS 'em_transito' AFTER 'enviado';
+
+-- Down Migration
+--
+-- ESTE DOWN NAO DESFAZ NADA, E ISSO E DELIBERADO — nao e um esquecimento nem
+-- um TODO.
+--
+-- O Postgres nao tem `ALTER TYPE ... DROP VALUE`. Nao existe em versao
+-- nenhuma. O unico jeito de tirar 'em_transito' de pedido_status seria criar
+-- um ENUM novo sem ele, `ALTER TABLE pedidos ALTER COLUMN status TYPE ...
+-- USING ...`, apagar o tipo antigo e renomear o novo. Isso teria dois custos
+-- inaceitaveis num rollback:
+--
+--   1. reescreve a tabela pedidos inteira, com lock exclusivo, exatamente no
+--      momento em que a operacao esta tentando voltar rapido de um deploy
+--      ruim;
+--   2. e, pior, DESTROI FATO: todo pedido que ja estiver em 'em_transito'
+--      precisa virar outro valor no USING, e qualquer escolha ali (voltar para
+--      'enviado'?) inventa uma informacao que ninguem verificou. Rollback de
+--      esquema nao pode reescrever o estado real de uma entrega.
+--
+-- Deixar o valor no ENUM e inofensivo: valor de ENUM que ninguem grava nao
+-- ocupa espaco na tabela nem muda o comportamento de nada. O que reverte de
+-- verdade e a aplicacao voltar a nao produzir o valor — e essa reversao mora
+-- em src/lib/pedido-status.ts, no deploy, nao aqui.
+--
+-- Se um dia o valor precisar sumir de verdade, o caminho e uma migration NOVA
+-- escrita para isso, com janela de manutencao e com decisao explicita do
+-- negocio sobre para onde vao os pedidos que estiverem nesse status — nunca um
+-- efeito colateral de `db:migrate down`.
+--
+-- Um Down so de comentario e uma consulta vazia valida para o Postgres: ele
+-- responde EmptyQueryResponse e o node-pg-migrate segue em frente marcando a
+-- migration como revertida.

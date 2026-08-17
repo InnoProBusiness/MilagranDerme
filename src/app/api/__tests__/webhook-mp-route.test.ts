@@ -43,6 +43,8 @@ const PERCENTUAL = 20
 
 let idRep: string
 let idKit: string
+let idCliente: string
+let idEndereco: string
 
 function assinar(dataId: string, requestId: string, ts = String(Math.floor(Date.now() / 1000))) {
   const v1 = createHmac('sha256', SEGREDO)
@@ -94,14 +96,40 @@ async function semear() {
     preco_centavos: PRECO, unidades: 1,
   }).returning('id').executeTakeFirstOrThrow()
   idKit = kit.id
+
+  // Cliente e endereco passaram a ser OBRIGATORIOS para pedido do canal
+  // online: a constraint pedido_online_tem_endereco
+  // (migrations/1755300100000_pedidos_canal_logistica.sql) recusa a linha sem
+  // endereco_id. Nao e burocracia de teste — e a regra de §3 do documento de
+  // lancamento: pedido online e enviado pelos Correios, entao tem que existir
+  // para onde despachar. Antes do Plano 4 este arquivo criava pedido sem
+  // nenhum dos dois, e continuava valido.
+  const cliente = await db.insertInto('clientes').values({
+    nome: 'Comprador Webhook', email: `wh-cli-${s}@exemplo.com`,
+    cpf: '39053344705', whatsapp: '62999990000',
+  }).returning('id').executeTakeFirstOrThrow()
+  idCliente = cliente.id
+
+  const endereco = await db.insertInto('enderecos').values({
+    cliente_id: cliente.id, cep: '74575070', rua: 'Rua do Webhook',
+    numero: '100', bairro: 'Centro', cidade: 'Goiania', estado: 'GO',
+  }).returning('id').executeTakeFirstOrThrow()
+  idEndereco = endereco.id
 }
 
 async function novoPedido() {
   return criarPedido({
+    // canal 'online' e explicito porque EntradaPedido passou a exigi-lo: o
+    // eixo canal e independente de `origem` (que e ATRIBUICAO de comissao) —
+    // ver o comentario de pedido_origem_coerente em
+    // migrations/1754900300000_pedidos.sql.
+    canal: 'online',
     origem: 'link', representanteId: idRep, percentualComissao: PERCENTUAL,
     utmSource: null, utmMedium: null, utmCampaign: null,
     desconto: deInteiro(0), frete: deInteiro(0),
     itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO) }],
+    clienteId: idCliente,
+    enderecoId: idEndereco,
   })
 }
 

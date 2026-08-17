@@ -1,4 +1,5 @@
 import { listarKitsAtivos } from '@/repositories/produtos'
+import { escassezPresencialDoKit } from '@/lib/escassez-do-lote'
 import { Vitrine } from '@/components/vitrine'
 
 // Forca renderizacao dinamica: preco, ANVISA e ativo/inativo vem do banco e
@@ -11,5 +12,11 @@ export const dynamic = 'force-dynamic'
 export default async function PaginaComprar() {
   const kits = await listarKitsAtivos()
 
-  return <Vitrine kits={kits} representante={null} />
+  // A Vitrine renderiza kits[0]; o lote presencial e lido para ESSE kit. Com
+  // catalogo vazio nao ha kit e nao ha lote — a propria Vitrine cuida do
+  // estado vazio, entao aqui basta nao consultar o banco a toa.
+  const kit = kits[0]
+  const escassez = kit ? await escassezPresencialDoKit(kit.id) : null
+
+  return <Vitrine kits={kits} representante={null} escassez={escassez} />
 }

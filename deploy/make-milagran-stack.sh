@@ -31,6 +31,19 @@ RESEND_KEY=$(ler_opcional /root/.milagran-resend-key)
 EMAIL_FROM=$(ler_opcional /root/.milagran-email-from)
 EMAIL_TO=$(ler_opcional /root/.milagran-email-to)
 
+# Mercado Pago e Clube Envios. Tambem "opcionais" no sentido tecnico (a stack
+# sobe sem eles), mas a consequencia e MUITO diferente da do Resend: sem estes
+# a loja fica no ar sem conseguir receber dinheiro nem cotar frete. Por isso o
+# relatorio no fim do script trata os dois grupos de forma diferente -- Resend
+# vazio e um aviso, pagamento vazio e um alerta.
+MP_ACCESS=$(ler_opcional /root/.milagran-mp-access-token)
+MP_PUBLIC=$(ler_opcional /root/.milagran-mp-public-key)
+MP_WEBHOOK=$(ler_opcional /root/.milagran-mp-webhook-secret)
+CE_TOKEN=$(ler_opcional /root/.milagran-clube-envios-token)
+CE_CLIENTE=$(ler_opcional /root/.milagran-clube-envios-cliente-id)
+CE_BASE=$(ler_opcional /root/.milagran-clube-envios-base-url)
+CEP_ORIGEM=$(ler_opcional /root/.milagran-cep-origem)
+
 # `&` e o "texto casado" no replacement do sed e `|` e o delimitador usado
 # aqui; sem escapar, um EMAIL_FROM com um deles gera um YAML errado em
 # silencio. DBPASS e ATRIB sao hex puro e nao precisariam, mas passam pela
@@ -44,6 +57,13 @@ sed \
   -e "s|^\( *- RESEND_API_KEY=\)$|\1$(escapar "$RESEND_KEY")|" \
   -e "s|^\( *- EMAIL_FROM=\)$|\1$(escapar "$EMAIL_FROM")|" \
   -e "s|^\( *- EMAIL_TO=\)$|\1$(escapar "$EMAIL_TO")|" \
+  -e "s|^\( *- MERCADOPAGO_ACCESS_TOKEN=\)$|\1$(escapar "$MP_ACCESS")|" \
+  -e "s|^\( *- MERCADOPAGO_PUBLIC_KEY=\)$|\1$(escapar "$MP_PUBLIC")|" \
+  -e "s|^\( *- MERCADOPAGO_WEBHOOK_SECRET=\)$|\1$(escapar "$MP_WEBHOOK")|" \
+  -e "s|^\( *- CLUBE_ENVIOS_TOKEN=\)$|\1$(escapar "$CE_TOKEN")|" \
+  -e "s|^\( *- CLUBE_ENVIOS_CLIENTE_ID=\)$|\1$(escapar "$CE_CLIENTE")|" \
+  -e "s|^\( *- CLUBE_ENVIOS_BASE_URL=\)$|\1$(escapar "$CE_BASE")|" \
+  -e "s|^\( *- CEP_ORIGEM_EXPEDICAO=\)$|\1$(escapar "$CEP_ORIGEM")|" \
   "$MODELO" > "$SAIDA"
 
 chmod 600 "$SAIDA"
@@ -59,3 +79,45 @@ fi
 
 echo "milagran-stack.yml gerado (imagem milagran:${TAG})"
 [ -n "$RESEND_KEY" ] && echo "  Resend: configurado" || echo "  Resend: VAZIO -- POST /api/candidatura respondera 500 server_not_configured"
+
+# RELATORIO DE PRONTIDAO PARA O LANCAMENTO DE 25/08/2026.
+#
+# Nao aborta: subir a loja sem pagamento configurado e uma decisao legitima
+# (foi o estado de producao ate 16/08). O que nao pode acontecer de novo e a
+# pessoa que roda o deploy NAO SABER disso -- o modo de falha anterior era
+# 100% silencioso, sem erro em log nenhum, e so aparecia quando um comprador
+# real chegava na tela de pagamento e nao encontrava botao.
+faltando_pagamento=""
+[ -n "$MP_ACCESS" ]  || faltando_pagamento="$faltando_pagamento MERCADOPAGO_ACCESS_TOKEN"
+[ -n "$MP_PUBLIC" ]  || faltando_pagamento="$faltando_pagamento MERCADOPAGO_PUBLIC_KEY"
+[ -n "$MP_WEBHOOK" ] || faltando_pagamento="$faltando_pagamento MERCADOPAGO_WEBHOOK_SECRET"
+
+if [ -n "$faltando_pagamento" ]; then
+  echo "  Mercado Pago: INCOMPLETO --$faltando_pagamento"
+  echo "    Efeito: a loja sobe, mas ninguem consegue pagar. Sem o webhook secret"
+  echo "    nenhum pagamento e conciliado -- e sem conciliacao o estoque nao baixa"
+  echo "    e a comissao nao e creditada."
+  echo "    Cadastre em /root/.milagran-mp-access-token, .milagran-mp-public-key"
+  echo "    e .milagran-mp-webhook-secret, depois rode este script de novo."
+else
+  case "$MP_ACCESS" in
+    TEST-*)    echo "  Mercado Pago: configurado em SANDBOX (token TEST-) -- nenhum dinheiro real se move" ;;
+    APP_USR-*) echo "  Mercado Pago: configurado em PRODUCAO (token APP_USR-)" ;;
+    *)         echo "  Mercado Pago: configurado, mas o token nao comeca com TEST- nem APP_USR- -- confira o valor" ;;
+  esac
+fi
+
+faltando_frete=""
+[ -n "$CE_TOKEN" ]   || faltando_frete="$faltando_frete CLUBE_ENVIOS_TOKEN"
+[ -n "$CE_CLIENTE" ] || faltando_frete="$faltando_frete CLUBE_ENVIOS_CLIENTE_ID"
+[ -n "$CEP_ORIGEM" ] || faltando_frete="$faltando_frete CEP_ORIGEM_EXPEDICAO"
+
+if [ -n "$faltando_frete" ]; then
+  echo "  Frete (Clube Envios): INCOMPLETO --$faltando_frete"
+  echo "    Efeito: /api/frete responde 503 e o CHECKOUT ONLINE PARA no passo do"
+  echo "    endereco. A venda presencial do evento continua funcionando (nao tem frete)."
+else
+  [ -n "$CE_BASE" ] \
+    && echo "  Frete (Clube Envios): configurado apontando para $CE_BASE" \
+    || echo "  Frete (Clube Envios): configurado em PRODUCAO (apis.clubeenvios.com.br)"
+fi

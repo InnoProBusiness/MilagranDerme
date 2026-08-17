@@ -15,36 +15,52 @@ estatico, rotas do App Router e a API — e um processo `node server.js`
 
 ## O que serve cada URL
 
-| URL | Origem |
-|---|---|
-| `/` | **rewrite** para `public/seja-representante.html` (`next.config.ts`) |
-| `/seja-representante.html` | `public/seja-representante.html` — mesmo conteudo, 200 |
-| `/privacidade.html` | `public/privacidade.html` — **URL nao pode mudar** |
-| `/styles.css`, `/script.js`, `/assets/*` | `public/` |
-| `/r/<slug>` | `src/app/r/[slug]/page.tsx` + `src/proxy.ts` (cookie de atribuicao) |
-| `/api/candidatura` | `src/app/api/candidatura/route.ts` (POST) |
-| `/api/health` | `src/app/api/health/route.ts` — liveness do container |
+| URL | Origem | Acesso |
+|---|---|---|
+| `/` | `src/app/page.tsx` — **a loja de lancamento** | publico |
+| `/comprar` | `src/app/comprar/page.tsx` (vitrine) | publico |
+| `/checkout` | `src/app/checkout/page.tsx` | publico |
+| `/pedido/<token>` | `src/app/pedido/[token]/page.tsx` — token uuid, nunca o numero | publico |
+| `/seja-representante.html` | `public/seja-representante.html` — **precisa continuar 200** | publico |
+| `/privacidade.html` | `public/privacidade.html` — **URL nao pode mudar** | publico |
+| `/styles.css`, `/script.js`, `/assets/*` | `public/` | publico |
+| `/r/<slug>` | `src/app/r/[slug]/page.tsx` + `src/proxy.ts` (cookie de atribuicao) | publico |
+| `/entrar` | `src/app/entrar/page.tsx` | publico |
+| `/venda` | `src/app/venda/page.tsx` — balcao do evento | sessao de vendedor |
+| `/admin/*` | `src/app/admin/*` — §17 do documento de lancamento | sessao de admin |
+| `/api/candidatura` | `src/app/api/candidatura/route.ts` (POST) | publico |
+| `/api/pedidos`, `/api/pagamentos` | checkout online | publico |
+| `/api/estoque`, `/api/frete`, `/api/cep/<cep>`, `/api/leads` | apoio da loja | publico |
+| `/api/sessao` | POST entra, DELETE sai | publico / sessao |
+| `/api/vendas-presenciais` | venda de balcao | sessao de vendedor |
+| `/api/admin/*` | painel | sessao de admin |
+| `/api/webhooks/mercadopago` | conciliacao de pagamento | assinatura HMAC |
+| `/api/health` | `src/app/api/health/route.ts` — liveness do container | publico |
 
 - **`/privacidade.html` e um compromisso de LGPD.** A URL esta linkada no
   rodape da LP e no consentimento do formulario de candidatura. Nao mova,
   nao renomeie, nao troque por rota do App Router sem redirect.
-- **`/` e rewrite, nao redirect.** Antes havia um `src/app/page.tsx` com
-  `redirect('/seja-representante.html')`: funcionava, mas empurrava a URL
-  com `.html` para a barra de endereco, para o link copiado e para o
-  compartilhamento no WhatsApp. O rewrite serve o mesmo arquivo mantendo
-  `milagranoficial.com.br` na barra. **Nao existe mais `app/page.tsx`** — no
-  `next build`, `/` nao aparece na lista de rotas, e isso e o esperado.
-- **As duas URLs respondem 200 de proposito.** `/seja-representante.html`
-  continua valendo porque pode haver link e campanha em circulacao. O
-  `<link rel="canonical">` da pagina aponta para `/`, que e quem os
-  buscadores devem indexar. Se um dia for preciso consolidar de vez, o
-  caminho e um `redirects()` do `.html` para `/` — mas note que redirect e
-  rewrite na mesma dupla de URLs pede teste, pelo risco de laco.
-- **Quando o Plano 2 entregar a vitrine**, o rewrite sai do `next.config.ts`
-  e a LP volta a viver so em `/seja-representante.html`. E uma linha.
-- **`src/app/globals.css` e uma copia de `public/styles.css`.** A LP
-  estatica usa `public/styles.css`; o App Router usa `globals.css`. As duas
-  copias so convergem quando a vitrine do Plano 2 substituir a LP.
+- **`/` deixou de ser rewrite em 16/08/2026.** Ate entao `next.config.ts`
+  reescrevia `/` para `public/seja-representante.html`, e a home do site era a
+  landing page de recrutamento. O documento de lancamento (§14, §18) inverteu a
+  prioridade: a raiz e a LOJA, e representante virou um link discreto no rodape.
+  O rewrite saiu e `src/app/page.tsx` passou a existir de verdade.
+- **`/seja-representante.html` continua respondendo 200, e isso NAO e opcional.**
+  Duas razoes independentes: (1) §14 manda manter o formulario disponivel, e ha
+  campanha em circulacao apontando para la; (2) **`deploy/milagran-ci-deploy.sh`
+  aprova ou REVERTE o deploy inteiro com base num `curl` nessa URL.** Se um dia
+  ela deixar de responder 200, `verificar_borda()` precisa ser atualizada no
+  MESMO commit — senao todo deploy seguinte se auto-reverte, e o sintoma
+  (rollback silencioso, aplicacao velha no ar) nao aponta para a causa.
+- **O `<link rel="canonical">` da LP mudou junto.** Ele apontava para `/`,
+  declarando que a pagina de recrutamento era a home; agora aponta para a
+  propria URL de recrutamento. Sem essa troca, os buscadores continuariam
+  indexando o recrutamento como identidade da marca no lugar da loja.
+- **`src/app/globals.css` e `public/styles.css` divergiram de proposito.**
+  `globals.css` e o dono do design system da loja (App Router) e ganhou todo o
+  visual novo do lancamento; `public/styles.css` serve APENAS a LP estatica de
+  recrutamento. Eram quase identicos ate 16/08/2026; estilo novo vai para um
+  lado so, e a divergencia e assumida.
 
 ## Onde as coisas moram
 
@@ -71,6 +87,8 @@ elas (o molde foi `/opt/innofin`).
 | Chave de deploy | `/root/.ssh/milagran-ci` (privada vai para o secret `VPS_SSH_KEY`) |
 | Segredos | `/root/.milagran-db-pass`, `/root/.milagran-atribuicao-secret` |
 | Resend (opcional) | `/root/.milagran-resend-key`, `.milagran-email-from`, `.milagran-email-to` |
+| Mercado Pago | `/root/.milagran-mp-access-token`, `.milagran-mp-public-key`, `.milagran-mp-webhook-secret` |
+| Frete (Clube Envios) | `/root/.milagran-clube-envios-token`, `.milagran-clube-envios-cliente-id`, `.milagran-cep-origem` (e `.milagran-clube-envios-base-url` para homologacao) |
 | Banco | database `milagran` no Postgres **14** compartilhado do swarm |
 | Roteamento | Traefik, `https://milagranoficial.com.br` |
 
@@ -78,13 +96,67 @@ Os dois scripts sao versionados em `deploy/` e **copiados** para `/root/` da
 VPS (e de la que rodam, porque leem os segredos em `/root/.milagran-*`). Se
 editar um deles, reenvie: `scp -P $VPS_PORT deploy/*.sh root@$VPS_HOST:/root/`.
 
+## Checklist do lancamento de 25/08/2026
+
+Ordem importa: os tres primeiros itens sao pre-requisito para vender.
+
+1. **Mercado Pago no container.** Ate 16/08/2026 `MERCADOPAGO_*` e `APP_URL`
+   **nao existiam** no `milagran-stack.example.yml` nem no gerador. O efeito era
+   silencioso e total: o container subia, a loja aparecia, e a tela de pagamento
+   dizia "o pagamento ainda esta sendo liberado" porque a chave publica vinha
+   vazia — sem um erro em log sequer. Cadastre os tres arquivos em `/root/`,
+   rode `make-milagran-stack.sh` e **leia o relatorio que ele imprime no fim**:
+   ele diz se o token e de sandbox (`TEST-`) ou de producao (`APP_USR-`).
+2. **Frete.** `CLUBE_ENVIOS_TOKEN`, `CLUBE_ENVIOS_CLIENTE_ID` e
+   `CEP_ORIGEM_EXPEDICAO`. Sem eles `/api/frete` responde 503 e o checkout
+   online **para** no passo do endereco, de proposito — nunca cai para frete
+   zero. A venda presencial do evento nao depende disso (nao tem frete).
+   Faca a PRIMEIRA chamada apontando `CLUBE_ENVIOS_BASE_URL` para a homologacao
+   (`https://apishmg.clubeenvios.com.br`): o corpo de sucesso de `POST /cotacao`
+   nao esta na documentacao publica, e `src/lib/frete.ts` le preco e prazo por
+   uma lista de apelidos. Se os nomes reais forem outros, o erro
+   `CotacaoIlegivelError` diz exatamente quais chaves chegaram — e o unico lugar
+   a corrigir.
+3. **Operadores.** Nao ha senha em variavel de ambiente nem em migration. Crie
+   cada pessoa com, de dentro do container ou com `DIRECT_URL` apontando para o
+   banco:
+   ```
+   npm run usuario:criar -- --nome "Fulano" --email fulano@exemplo.com --papel vendedor
+   ```
+   A senha e pedida pelo terminal, com eco desligado. Rodar de novo para o mesmo
+   e-mail TROCA a senha e derruba as sessoes abertas daquela pessoa — e o
+   caminho de "esqueci a senha as 9h do dia 25".
+4. **Conferir peso e dimensoes do kit.** `migrations/1755300600000_kit_dimensoes.sql`
+   semeia 500 g / 12 x 16 x 20 cm como **palpite declarado**, nao medida. Valor
+   errado = frete cotado abaixo do custo real, e a diferenca sai da margem em
+   todo pedido online. Nao ha conserto depois: `frete_centavos` e congelado pelo
+   trigger de imutabilidade no momento do INSERT.
+5. **Estoque presencial.** `migrations/1755300700000_seed_estoque.sql` lanca a
+   entrada de 50 unidades. Conferir o numero real antes do evento; ajuste depois
+   e um movimento novo (`ajustarEstoque`), nunca uma edicao de linha.
+6. **Resend.** Continua opcional no gerador, mas para o lancamento deixa de ser:
+   sem ele o comprador paga e nao recebe confirmacao nenhuma. Verificar o
+   dominio e publicar SPF/DKIM tem prazo de DNS — nao deixe para o dia 24.
+7. **QR Code no APEX, nunca em `www`.** O cookie de atribuicao usa o prefixo
+   `__Host-`, que nao atravessa subdominio: um QR apontando para
+   `www.milagranoficial.com.br` faz toda venda do evento perder o representante.
+8. **Rate limit.** `/api/pedidos` limita 10 requisicoes por 10 min **por IP**, em
+   memoria de um processo, com `replicas: 1`. No evento dezenas de pessoas ficam
+   atras de um IP so (WiFi do local ou CGNAT da operadora) e o 11o comprador leva
+   429. Decidir antes do dia 25: contador em Redis (a VPS ja roda um na stack
+   `evolution`) ou isencao para o IP do local. So aumentar o numero nao resolve
+   o caso de 200 pessoas. Ver `src/lib/rate-limit.ts`.
+9. **Registro ANVISA.** `kits.anvisa_registro` continua NULL e a vitrine exibe
+   "Registro ANVISA: em breve". Cosmetico sem regularizacao exibida nao pode ser
+   vendido no Brasil — obter o numero ou lancar assim conscientemente.
+
 ## Deploy automatico (push na main)
 
 **Nao ha passo manual no caminho normal.** `.github/workflows/ci.yml` roda
 em todo push e todo PR para a main:
 
 ```
-push/PR  ->  quality-gate   npm ci -> typecheck -> migrations -> 127 testes
+push/PR  ->  quality-gate   npm ci -> typecheck -> migrations -> 728 testes
                             -> next build          (Postgres 14 de servico)
                                    |
 push na main apenas  ------------->+
@@ -200,7 +272,7 @@ consciente.
 - **Producao roda Postgres 14, nao 17.** O Postgres e compartilhado com os
   outros projetos da VPS e nao vai subir de versao por causa deste. O
   `docker-compose.yml` local foi alinhado ao 14 para nao desenvolver contra
-  recurso que producao nao tem. As 127 verificacoes da suite passam nos dois.
+  recurso que producao nao tem. As 728 verificacoes da suite passam nos dois.
 - **`replicas: 1` nao e arbitrario.** O rate limit de `/api/candidatura`
   conta em memoria do processo. Com N replicas o limite efetivo vira N x 5
   por janela; antes de escalar, mover o contador para Redis.

@@ -3,21 +3,41 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Seja Representante Milagran Derme</title>
+<!--
+  IDENTIDADE DESTA PAGINA (revisado em 16/08/2026).
+
+  Ate aqui esta pagina se declarava a home da marca: o canonical e o og:url
+  apontavam para "https://milagranoficial.com.br/" e o titulo era so o nome da
+  marca com "Seja Representante" na frente. Fazia sentido enquanto "/" era um
+  rewrite que servia ESTE arquivo (ver next.config.ts) — as duas URLs entregavam
+  o mesmo HTML e o canonical escolhia a bonita.
+
+  O rewrite saiu e "/" virou a LOJA de lancamento (§14, §18 do documento do
+  cliente). Sem esta correcao, o canonical mandaria os buscadores tratarem o
+  recrutamento como identidade da marca e enterrarem a loja — duas paginas
+  diferentes disputando o mesmo endereco canonico.
+
+  Agora esta pagina aponta para si mesma e se apresenta como o que e: o
+  programa de representantes. A URL NAO muda (ha campanha em circulacao, §14
+  manda manter, e deploy/milagran-ci-deploy.sh aprova o deploy inteiro com um
+  curl nela).
+-->
+<title>Seja Representante — Programa de Representantes Milagran Derme</title>
 <meta name="description" content="Torne-se representante oficial da Milagran Derme. Kit de limpeza de pele instantânea, apresentação profissional própria, checkout personalizado e suporte dedicado.">
-<link rel="canonical" href="https://milagranoficial.com.br/">
+<link rel="canonical" href="https://milagranoficial.com.br/seja-representante.html">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
-<meta property="og:title" content="Seja Representante Milagran Derme">
+<meta property="og:site_name" content="Milagran Derme">
+<meta property="og:title" content="Seja Representante — Programa de Representantes Milagran Derme">
 <meta property="og:description" content="Kit de limpeza de pele instantânea para profissionais de beleza. Candidate-se a representante da marca e receba sua própria página de vendas e checkout personalizado.">
 <meta property="og:image" content="https://milagranoficial.com.br/assets/og-image.jpg">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="1200">
-<meta property="og:url" content="https://milagranoficial.com.br/">
+<meta property="og:url" content="https://milagranoficial.com.br/seja-representante.html">
 <meta property="og:locale" content="pt_BR">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Seja Representante Milagran Derme">
+<meta name="twitter:title" content="Seja Representante — Programa de Representantes Milagran Derme">
 <meta name="twitter:description" content="Kit de limpeza de pele instantânea para profissionais de beleza. Candidate-se a representante da marca.">
 <meta name="twitter:image" content="https://milagranoficial.com.br/assets/og-image.jpg">
 

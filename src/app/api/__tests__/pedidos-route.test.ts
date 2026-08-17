@@ -5,10 +5,12 @@ import { POST } from '@/app/api/pedidos/route'
 import { assinarAtribuicao } from '@/lib/atribuicao'
 import { MAX_PEDIDOS_POR_JANELA } from '@/lib/rate-limit'
 import { deInteiro } from '@/lib/money'
+import type { OpcaoDeFrete, VolumeDaCotacao } from '@/lib/frete'
 
-// Unico ponto mockado deste arquivo, e so a LEITURA do catalogo: e a unica
-// costura por onde da para reproduzir "o preco mudou entre a vitrine e o
-// checkout" de forma deterministica. A rota le kits FORA da transacao e
+// PRIMEIRO dos dois pontos mockados deste arquivo (o outro e a cotacao de
+// frete, logo abaixo), e aqui so a LEITURA do catalogo: e a unica costura por
+// onde da para reproduzir "o preco mudou entre a vitrine e o checkout" de
+// forma deterministica. A rota le kits FORA da transacao e
 // criarPedido le kits DE NOVO DENTRO dela; forcar um preco diferente na
 // primeira leitura faz a segunda divergir — que e exatamente o cenario que a
 // guarda de preco existe para pegar. O throw, a transacao e o mapeamento
@@ -31,6 +33,85 @@ vi.mock('@/repositories/produtos', async (importOriginal) => {
     },
   }
 })
+
+/** O que a rota mandou cotar — o objeto que chegou em `cotarFrete`. */
+type CotacaoPedida = {
+  cepDestino: string
+  valorDeclarado: number
+  volumes: VolumeDaCotacao[]
+}
+
+/**
+ * SEGUNDO ponto mockado, e por um motivo diferente do catalogo acima: desde
+ * 16/08/2026 a rota RECOTA o frete no servidor antes de criar o pedido
+ * (src/lib/frete.ts fala com a API do Clube Envios pela rede). Sem este mock,
+ * cada teste deste arquivo dispararia uma chamada HTTP de verdade — com a
+ * credencial que estiver no .env da maquina —, e um teste de checkout passaria
+ * a depender da disponibilidade de um terceiro para ficar verde.
+ *
+ * O QUE CONTINUA REAL, e e a parte que importa: as CLASSES DE ERRO. O `...real`
+ * reexporta ClubeEnviosError, CotacaoIlegivelError e FreteNaoConfiguradoError
+ * como elas sao, entao o `instanceof` da rota compara contra exatamente as
+ * classes de producao. Um mock que declarasse classes proprias com os mesmos
+ * nomes deixaria estes testes verdes enquanto a rota devolvia 500 (e nao 503)
+ * para todo comprador em producao — que e precisamente o defeito que despachar
+ * por classe, e nao por prefixo de string, existe para impedir.
+ *
+ * `chamadas` guarda a entrada recebida: e por ela que se prova QUE dimensoes e
+ * QUE valor declarado a rota mandou cotar, sem depender de o provedor
+ * responder nada.
+ */
+const clube = vi.hoisted(() => ({
+  opcoes: [] as OpcaoDeFrete[],
+  falha: null as null | 'clube_envios' | 'ilegivel' | 'nao_configurado' | 'inesperado',
+  chamadas: [] as CotacaoPedida[],
+}))
+
+vi.mock('@/lib/frete', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/frete')>()
+  return {
+    ...real,
+    cotarFrete: async (e: CotacaoPedida) => {
+      clube.chamadas.push(e)
+      // Os quatro modos de falha da cotacao, cada um com o desfecho que a rota
+      // precisa distinguir: os tres primeiros sao "o provedor nao entregou
+      // preco" e viram 503; o ultimo e um Error comum (cadastro de kit com
+      // medida invalida, por exemplo), que e defeito nosso e vira 500.
+      if (clube.falha === 'clube_envios') throw new real.ClubeEnviosError(0, 'timeout de rede')
+      if (clube.falha === 'ilegivel') throw new real.CotacaoIlegivelError(['id_servico', 'transportadora'])
+      if (clube.falha === 'nao_configurado') throw new real.FreteNaoConfiguradoError('CLUBE_ENVIOS_TOKEN nao configurada')
+      if (clube.falha === 'inesperado') throw new Error('Volume invalido na cotacao (medidas precisam ser inteiros positivos)')
+      return { idCotacao: 4242, opcoes: clube.opcoes }
+    },
+  }
+})
+
+/**
+ * Duas opcoes com valor E prazo deliberadamente diferentes, e a mais barata NAO
+ * e a escolhida por padrao nos testes de frete: e a unica forma de distinguir
+ * "a rota gravou a opcao que o comprador escolheu pelo idServico" de "a rota
+ * chamou opcaoMaisBarata e deu certo por coincidencia".
+ *
+ * Valores NAO redondos (R$ 23,50 e R$ 49,90) de proposito: o kit custa
+ * R$ 1.000,00, e um frete somado errado — ou nao somado — desaparece dentro de
+ * um total redondo sem que nenhuma assercao pisque.
+ */
+const OPCAO_PAC: OpcaoDeFrete = {
+  idServico: 3, idTransportadora: 1, transportadora: 'Correios PAC',
+  valor: deInteiro(2350), prazoDias: 8,
+}
+const OPCAO_SEDEX: OpcaoDeFrete = {
+  idServico: 4, idTransportadora: 1, transportadora: 'Correios SEDEX',
+  valor: deInteiro(4990), prazoDias: 3,
+}
+
+/**
+ * O que o wizard manda no corpo sobre frete: SO O ID da opcao escolhida.
+ * Nenhum campo monetario acompanha, e o `.strict()` de `Corpo`
+ * (src/app/api/pedidos/route.ts) e quem transforma isso em 422 quando alguem
+ * tenta — ver os testes DINHEIRO: mais abaixo.
+ */
+const ESCOLHA_DE_FRETE = { idServico: OPCAO_PAC.idServico }
 
 const SEGREDO = 'a'.repeat(64)
 const COMPRADOR = {
@@ -208,12 +289,24 @@ describe('POST /api/pedidos', () => {
   beforeAll(() => {
     process.env.ATRIBUICAO_SECRET = SEGREDO
   })
-  beforeEach(semear)
-  afterEach(() => { catalogo.precoForcadoCentavos = null })
+  // A cotacao volta ao estado "provedor respondendo as duas opcoes" antes de
+  // CADA teste: um teste que force falha ou esvazie a lista nao pode deixar o
+  // proximo cotando outra coisa. `chamadas` zera junto para que cada teste
+  // possa afirmar sobre a SUA cotacao, e nao sobre a soma do arquivo.
+  beforeEach(async () => {
+    await semear()
+    clube.opcoes = [OPCAO_PAC, OPCAO_SEDEX]
+    clube.falha = null
+    clube.chamadas = []
+  })
+  afterEach(() => {
+    catalogo.precoForcadoCentavos = null
+    clube.falha = null
+  })
   afterAll(async () => { await closeDb() })
 
   it('cria o pedido e devolve numero e token', async () => {
-    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 2, ...COMPRADOR }))
+    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 2, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
     expect(r.status).toBe(201)
     const body = await r.json()
     expect(typeof body.numero).toBe('number')
@@ -230,7 +323,7 @@ describe('POST /api/pedidos', () => {
   it('DINHEIRO: precoUnitarioCentavos/total no corpo sao rejeitados, nao apenas ignorados', async () => {
     const antes = await contarPedidos()
     const r = await POST(requisicao({
-      kitSlug: 'kit-milagran', quantidade: 1,
+      kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE,
       precoUnitarioCentavos: 1, total: 1, // tentativa de manipulacao
       ...COMPRADOR,
     }))
@@ -240,7 +333,7 @@ describe('POST /api/pedidos', () => {
 
   it('DINHEIRO: a venda pelo link da Maria e atribuida a ela, com o percentual dela', async () => {
     const r = await POST(requisicao(
-      { kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR },
+      { kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR },
       cookieDe(SLUG_MARIA),
     ))
     expect(r.status).toBe(201)
@@ -257,7 +350,7 @@ describe('POST /api/pedidos', () => {
   })
 
   it('sem cookie, a venda e da casa', async () => {
-    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
     expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await getDb().selectFrom('pedidos').select('origem')
@@ -273,7 +366,7 @@ describe('POST /api/pedidos', () => {
   // correcao 1, Finding 3).
   it('DINHEIRO: cookie de representante desligada vira rep_inativo, com UTM preservado', async () => {
     const r = await POST(requisicao(
-      { kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR },
+      { kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR },
       cookieDe(SLUG_INATIVA, { utmSource: 'facebook', utmMedium: 'ads', utmCampaign: 'inverno' }),
     ))
     expect(r.status).toBe(201)
@@ -288,13 +381,22 @@ describe('POST /api/pedidos', () => {
 
   it('cupom aplicado desconta e registra o uso', async () => {
     const r = await POST(requisicao({
-      kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM, ...COMPRADOR,
+      kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM,
+      ...ESCOLHA_DE_FRETE, ...COMPRADOR,
     }))
     expect(r.status).toBe(201)
     const { numero } = await r.json()
     const pedido = await pedidoPorNumero(numero)
     expect(pedido.desconto_centavos).toBe(10000)
-    expect(pedido.total_centavos).toBe(90000)
+    // DINHEIRO: a ORDEM das operacoes esta aqui, nao so o total. O frete e
+    // somado DEPOIS do desconto e o cupom nao abate um centavo dele — quem
+    // pagou 10% de desconto continua pagando a transportadora inteira. E a
+    // formula da constraint pedido_total_confere
+    // (migrations/1754900300000_pedidos.sql); escrita como conta, e nao como o
+    // literal 92350, para que o numero errado nao possa ser "corrigido" no
+    // teste sem que a conta apareca.
+    expect(pedido.frete_centavos).toBe(OPCAO_PAC.valor)
+    expect(pedido.total_centavos).toBe(100000 - 10000 + OPCAO_PAC.valor)
     const usos = await getDb().selectFrom('cupom_usos').selectAll()
       .where('pedido_id', '=', pedido.id).execute()
     expect(usos).toHaveLength(1)
@@ -309,7 +411,7 @@ describe('POST /api/pedidos', () => {
   // um stub, nao a fiacao real com o banco.
   it('DINHEIRO: cupom de outra representante tem prioridade sobre o cookie, com o percentual dela', async () => {
     const r = await POST(requisicao(
-      { kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM_JOANA, ...COMPRADOR },
+      { kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM_JOANA, ...ESCOLHA_DE_FRETE, ...COMPRADOR },
       cookieDe(SLUG_MARIA),
     ))
     expect(r.status).toBe(201)
@@ -325,7 +427,7 @@ describe('POST /api/pedidos', () => {
   // aplica; so a atribuicao continua sendo a do cookie.
   it('cupom da casa (sem representante) nao rouba a venda do cookie', async () => {
     const r = await POST(requisicao(
-      { kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM_CASA, ...COMPRADOR },
+      { kitSlug: 'kit-milagran', quantidade: 1, cupom: CODIGO_CUPOM_CASA, ...ESCOLHA_DE_FRETE, ...COMPRADOR },
       cookieDe(SLUG_MARIA),
     ))
     expect(r.status).toBe(201)
@@ -340,7 +442,7 @@ describe('POST /api/pedidos', () => {
   it('cupom invalido devolve 422 e NAO cria pedido', async () => {
     const antes = await contarPedidos()
     const r = await POST(requisicao({
-      kitSlug: 'kit-milagran', quantidade: 1, cupom: 'NAOEXISTE', ...COMPRADOR,
+      kitSlug: 'kit-milagran', quantidade: 1, cupom: 'NAOEXISTE', ...ESCOLHA_DE_FRETE, ...COMPRADOR,
     }))
     expect(r.status).toBe(422)
     expect(await contarPedidos()).toBe(antes)
@@ -363,7 +465,7 @@ describe('POST /api/pedidos', () => {
   // ainda nao commitou numa transacao separada, e a FK falharia.
   it('DINHEIRO/LGPD: cupom invalido nao deixa cliente nem endereco orfaos', async () => {
     const r = await POST(requisicao({
-      kitSlug: 'kit-milagran', quantidade: 1, cupom: 'NAOEXISTE', ...COMPRADOR,
+      kitSlug: 'kit-milagran', quantidade: 1, cupom: 'NAOEXISTE', ...ESCOLHA_DE_FRETE, ...COMPRADOR,
     }))
     expect(r.status).toBe(422)
 
@@ -391,7 +493,7 @@ describe('POST /api/pedidos', () => {
   // INDISTINGUIVEL do 422 generico de qualquer outro dado invalido.
   it('SEGURANCA: CPF divergente do cadastro devolve o MESMO 422 generico, sem detalhe', async () => {
     // Primeiro checkout cadastra o cliente com o CPF de COMPRADOR.
-    const primeiro = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+    const primeiro = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
     expect(primeiro.status).toBe(201)
 
     // Segundo checkout, mesmo e-mail, CPF diferente: a rota tem que
@@ -399,7 +501,7 @@ describe('POST /api/pedidos', () => {
     // validacao — sem um campo "mensagem", sem a palavra "cpf" ou
     // "divergente" em lugar nenhum do corpo.
     const r = await POST(requisicao({
-      kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR, cpf: '98765432100',
+      kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR, cpf: '98765432100',
     }))
     expect(r.status).toBe(422)
     const corpo = await r.json()
@@ -419,7 +521,7 @@ describe('POST /api/pedidos', () => {
     // O que a "vitrine" mostrou (1 centavo) deixou de bater com o catalogo.
     catalogo.precoForcadoCentavos = 1
 
-    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
     expect(r.status).toBe(422)
 
     // Corpo INTEIRO, nao so o codigo: a mensagem crua do throw carrega o
@@ -440,13 +542,221 @@ describe('POST /api/pedidos', () => {
   })
 
   it('rejeita quantidade acima do teto', async () => {
-    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 999, ...COMPRADOR }))
+    const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 999, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
     expect(r.status).toBe(422)
   })
 
   it('rejeita corpo sem os campos do comprador', async () => {
     const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1 }))
     expect(r.status).toBe(422)
+  })
+
+  /**
+   * §13 do documento de 16/08/2026 e a secao 5 do plano: o comprador escolhe
+   * uma opcao de frete na tela e envia SO o `idServico` dela. O valor cobrado
+   * sai da cotacao que ESTE servidor faz, com o CEP deste corpo, no instante
+   * do submit.
+   *
+   * POR QUE ISTO PRECISA DE TESTE PROPRIO: `pedidos.frete_centavos` e
+   * `pedidos.total_centavos` sao CONGELADOS pelo trigger
+   * pedido_atribuicao_imutavel_trg — depois do INSERT nao existe UPDATE de
+   * correcao por caminho nenhum. Um frete errado (manipulado no corpo, lido de
+   * uma cotacao velha, ou zerado por falha do provedor) nao da erro em lugar
+   * nenhum: vira prejuizo silencioso de um pedido de cada vez, ate alguem
+   * conferir a fatura da transportadora contra a tabela de pedidos.
+   */
+  describe('frete recotado no servidor', () => {
+    it('DINHEIRO: grava valor e prazo da opcao ESCOLHIDA, nao os da mais barata', async () => {
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1,
+        // A opcao CARA, de proposito: se a rota chamasse opcaoMaisBarata em vez
+        // de casar pelo idServico, este teste seria o unico a perceber — e o
+        // sintoma em producao seria a loja cobrando SEDEX e postando PAC (ou o
+        // contrario, que e o caro).
+        idServico: OPCAO_SEDEX.idServico,
+        ...COMPRADOR,
+      }))
+      expect(r.status).toBe(201)
+      const { numero } = await r.json()
+      const pedido = await pedidoPorNumero(numero)
+
+      expect(pedido.frete_centavos).toBe(OPCAO_SEDEX.valor)
+      expect(pedido.prazo_dias_estimado).toBe(OPCAO_SEDEX.prazoDias)
+      // total = subtotal - desconto + frete (constraint pedido_total_confere).
+      // O subtotal sai da propria linha e nao de um literal: este teste e sobre
+      // o frete entrar na conta, e o preco do catalogo ja e travado por outros.
+      expect(pedido.total_centavos).toBe(pedido.subtotal_centavos + OPCAO_SEDEX.valor)
+      // canal e literal na rota — esta e a loja. A coluna e congelada pelo
+      // mesmo trigger, entao um 'presencial' gravado aqui por engano jamais
+      // poderia ser corrigido, e tiraria a venda do estoque errado (§4).
+      expect(pedido.canal).toBe('online')
+    })
+
+    it('DINHEIRO: cota com o CEP submetido, o subtotal e as dimensoes do CADASTRO', async () => {
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 2, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
+      }))
+      expect(r.status).toBe(201)
+
+      // UMA cotacao por requisicao. Cotar duas vezes (uma para responder, outra
+      // para gravar) seria a porta aberta para os dois valores divergirem entre
+      // si dentro do mesmo pedido.
+      expect(clube.chamadas).toHaveLength(1)
+      const pedida = clube.chamadas[0]
+      expect(pedida.cepDestino).toBe(COMPRADOR.cep)
+
+      const kit = await getDb().selectFrom('kits')
+        .select(['preco_centavos', 'peso_gramas', 'altura_cm', 'largura_cm', 'comprimento_cm'])
+        .where('slug', '=', 'kit-milagran')
+        .executeTakeFirstOrThrow()
+
+      // Valor declarado e o subtotal (preco do CATALOGO x quantidade), nunca um
+      // numero vindo do corpo.
+      expect(pedida.valorDeclarado).toBe(kit.preco_centavos * 2)
+      // Medidas e peso saem da tabela `kits`, e a quantidade comprada multiplica
+      // o volume. Numero escrito na rota daria frete errado sem que nada no
+      // codigo dissesse de onde ele veio (ver o doc comment de Kit em
+      // src/repositories/produtos.ts).
+      expect(pedida.volumes).toEqual([{
+        alturaCm: kit.altura_cm,
+        larguraCm: kit.largura_cm,
+        comprimentoCm: kit.comprimento_cm,
+        pesoGramas: kit.peso_gramas,
+        quantidade: 2,
+      }])
+    })
+
+    it('DINHEIRO: idServico que nao esta na cotacao vira 422 e NAO cria pedido', async () => {
+      const antes = await contarPedidos()
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, idServico: 987654, ...COMPRADOR,
+      }))
+      expect(r.status).toBe(422)
+      // Corpo inteiro: a recusa e especifica (a tela precisa saber que deve
+      // recalcular o frete, e nao que digitou o CPF errado) e nao carrega nada
+      // sobre a cotacao em si.
+      expect(await r.json()).toEqual({
+        error: 'opcao_de_frete_invalida',
+        mensagem: 'A opção de frete escolhida não está mais disponível. Recalcule o frete e tente de novo.',
+      })
+      expect(await contarPedidos()).toBe(antes)
+    })
+
+    // O provedor respondeu, mas nao ha servico atendendo aquele CEP. A rota NAO
+    // pode "seguir sem frete": zero e o unico valor que nao pode ser inventado
+    // (src/components/linha-frete.tsx e o cabecalho de src/lib/frete.ts).
+    it('DINHEIRO: cotacao sem opcao nenhuma vira 422, nunca frete zero', async () => {
+      clube.opcoes = []
+      const antes = await contarPedidos()
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
+      }))
+      expect(r.status).toBe(422)
+      expect(await contarPedidos()).toBe(antes)
+    })
+
+    it('rejeita idServico ausente, zero, negativo, fracionario ou em texto', async () => {
+      const antes = await contarPedidos()
+      const base = { kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }
+      const corpos: unknown[] = [
+        base,                          // ausente: escolher frete nao e opcional
+        { ...base, idServico: 0 },
+        { ...base, idServico: -3 },
+        { ...base, idServico: 1.5 },
+        { ...base, idServico: '3' },   // o JSON tem que trazer numero, nao texto
+        { ...base, idServico: null },
+      ]
+
+      for (const corpo of corpos) {
+        const r = await POST(requisicao(corpo))
+        expect(r.status).toBe(422)
+        // Erro achatado, sem detalhe de campo: a resposta de validacao e a
+        // mesma de qualquer outro campo invalido do corpo.
+        expect(await r.json()).toEqual({ error: 'dados_invalidos' })
+      }
+      expect(await contarPedidos()).toBe(antes)
+    })
+
+    /**
+     * DINHEIRO: a tentativa de mandar o VALOR do frete (em vez de so a escolha)
+     * e recusada, nao ignorada. `.strict()` derruba o corpo inteiro — e essa e
+     * a diferenca que importa: um campo ignorado deixaria a tentativa de
+     * manipulacao indistinguivel de um checkout normal, inclusive no log.
+     *
+     * `prazoDiasEstimado` esta na lista embora nao seja dinheiro: e a promessa
+     * de entrega que o comprador ve, e ela tambem sai da cotacao do servidor.
+     */
+    it('DINHEIRO: valor de frete no corpo continua sendo 422 pelo .strict()', async () => {
+      const antes = await contarPedidos()
+      const tentativas = [
+        { frete: 0 },
+        { frete: 1 },
+        { freteCentavos: 0 },
+        { freteCentavos: 1 },
+        { valorFrete: 1 },
+        { prazoDiasEstimado: 1 },
+      ]
+
+      for (const extra of tentativas) {
+        const r = await POST(requisicao({
+          kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR, ...extra,
+        }))
+        expect(r.status).toBe(422)
+        expect(await r.json()).toEqual({ error: 'dados_invalidos' })
+      }
+      expect(await contarPedidos()).toBe(antes)
+    })
+
+    /**
+     * Os tres modos de indisponibilidade do Clube Envios (provedor recusou ou
+     * nao respondeu, resposta ilegivel, credencial/CEP de origem ausentes) tem
+     * o MESMO desfecho para quem esta comprando, e por isso vivem no mesmo
+     * teste: 503, mensagem curada, pedido nenhum.
+     *
+     * A parte LGPD: como a cotacao acontece ANTES de a transacao abrir, uma
+     * falha de frete nao chega a tocar o banco — nem cliente, nem endereco. Nao
+     * ha rollback a torcer para funcionar, porque nao houve escrita.
+     *
+     * O que este teste proibe acima de tudo: cair para frete zero e criar o
+     * pedido assim mesmo.
+     */
+    it('DINHEIRO/LGPD: cotacao indisponivel vira 503 sem criar pedido nem gravar dado pessoal', async () => {
+      for (const falha of ['clube_envios', 'ilegivel', 'nao_configurado'] as const) {
+        clube.falha = falha
+        const r = await POST(requisicao({
+          kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
+        }))
+        expect(r.status, `falha=${falha}`).toBe(503)
+        expect(await r.json()).toEqual({
+          error: 'frete_indisponivel',
+          mensagem: 'Não foi possível calcular o frete agora. Tente novamente em instantes.',
+        })
+      }
+
+      // Zero, e nao "o mesmo de antes": o beforeEach limpou os pedidos deste
+      // e-mail, entao nenhum pedido deste comprador pode existir depois de tres
+      // tentativas que nao conseguiram cotar.
+      expect(await contarPedidos()).toBe(0)
+      const clientes = await getDb().selectFrom('clientes').select('id')
+        .where(sql<boolean>`lower(email) = lower(${COMPRADOR.email})`).execute()
+      expect(clientes).toHaveLength(0)
+    })
+
+    // Falha que NAO e do provedor (cotarFrete tambem lanca Error comum quando um
+    // volume vem com medida invalida — cadastro de kit quebrado). Vira 500, nao
+    // 503: 503 diz "tente de novo em instantes" e tentar de novo com o mesmo kit
+    // quebrado nao resolve nada. Distinguir os dois e o que mantem o log
+    // contando a historia certa no dia do evento.
+    it('falha inesperada na cotacao vira 500, e nao 503', async () => {
+      clube.falha = 'inesperado'
+      const antes = await contarPedidos()
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
+      }))
+      expect(r.status).toBe(500)
+      expect(await r.json()).toEqual({ error: 'nao_foi_possivel_criar_o_pedido' })
+      expect(await contarPedidos()).toBe(antes)
+    })
   })
 
   // O endpoint nao tem autenticacao e escreve CPF, nome completo, telefone e
@@ -458,14 +768,14 @@ describe('POST /api/pedidos', () => {
     it('permite MAX_PEDIDOS_POR_JANELA pedidos do mesmo IP e barra o seguinte com 429', async () => {
       const ip = ipUnico()
       for (let i = 0; i < MAX_PEDIDOS_POR_JANELA; i++) {
-        const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }, undefined, ip))
+        const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }, undefined, ip))
         // O teto nao pode cortar trafego legitimo ANTES de ser atingido:
         // todas as MAX primeiras precisam passar de verdade.
         expect(r.status).toBe(201)
       }
       expect(await contarPedidos()).toBe(MAX_PEDIDOS_POR_JANELA)
 
-      const bloqueado = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }, undefined, ip))
+      const bloqueado = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }, undefined, ip))
       expect(bloqueado.status).toBe(429)
       expect(await bloqueado.json()).toEqual({ error: 'rate_limited' })
       expect(await contarPedidos()).toBe(MAX_PEDIDOS_POR_JANELA)
@@ -475,7 +785,7 @@ describe('POST /api/pedidos', () => {
     // IP, e um comprador legitimo nao pode ser barrado porque outro
     // exagerou.
     it('o teto e por IP: outro IP continua criando pedido normalmente', async () => {
-      const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR }))
+      const r = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
       expect(r.status).toBe(201)
     })
 
@@ -494,7 +804,7 @@ describe('POST /api/pedidos', () => {
       // teve linha nenhuma: se o 429 fosse decidido depois de qualquer
       // escrita, o cliente e o endereco deste e-mail apareceriam.
       const bloqueado = await POST(requisicao({
-        kitSlug: 'kit-milagran', quantidade: 1, ...COMPRADOR, email: EMAIL_BLOQUEADO,
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR, email: EMAIL_BLOQUEADO,
       }, undefined, ip))
       expect(bloqueado.status).toBe(429)
 

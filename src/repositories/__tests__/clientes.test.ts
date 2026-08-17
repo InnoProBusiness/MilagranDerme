@@ -160,6 +160,81 @@ describe('clientes', () => {
     expect(l.atualizado_em.getTime()).toBeGreaterThan(antigo.getTime())
   })
 
+  // §10 do documento de 16/08/2026: o balcao do evento nao pede endereco de
+  // entrega. O comprador paga, leva o kit na hora, e nao ha nada para
+  // despachar para lugar nenhum. Ate esta mudanca o endereco era obrigatorio
+  // nesta funcao e o INSERT em `enderecos` era incondicional — a venda
+  // presencial teria que inventar um endereco so para conseguir gravar o
+  // cliente, e esse endereco falso ficaria indistinguivel de um declarado
+  // pela propria pessoa.
+  describe('endereco opcional (venda presencial)', () => {
+    it('LGPD: sem endereco nao grava linha nenhuma em enderecos e devolve enderecoId null', async () => {
+      const r = await salvarClienteComEndereco(CLIENTE, null)
+      expect(r.clienteId).toMatch(/^[0-9a-f-]{36}$/)
+      // null EXPLICITO. Quem chama (src/app/api/vendas-presenciais/route.ts)
+      // repassa este valor direto para criarPedido: `undefined` viraria
+      // "campo ausente" e uma string vazia bateria em
+      // pedidos_endereco_id_fkey em vez de dizer "nao ha endereco".
+      expect(r.enderecoId).toBeNull()
+
+      // A prova que interessa nao e o valor devolvido, e a tabela: o dado
+      // pessoal que ninguem coletou nao pode existir gravado.
+      const enderecos = await getDb().selectFrom('enderecos')
+        .select('id').where('cliente_id', '=', r.clienteId).execute()
+      expect(enderecos).toHaveLength(0)
+    })
+
+    it('o caminho COM endereco continua gravando exatamente uma linha, como antes', async () => {
+      const r = await salvarClienteComEndereco(CLIENTE, ENDERECO)
+      expect(r.enderecoId).toMatch(/^[0-9a-f-]{36}$/)
+
+      const enderecos = await getDb().selectFrom('enderecos')
+        .select(['id', 'cep', 'numero']).where('cliente_id', '=', r.clienteId).execute()
+      expect(enderecos).toHaveLength(1)
+      expect(enderecos[0].id).toBe(r.enderecoId)
+      expect(enderecos[0].cep).toBe(ENDERECO.cep)
+      expect(enderecos[0].numero).toBe(ENDERECO.numero)
+    })
+
+    // A mesma pessoa pode comprar online hoje e passar no balcao no dia 25.
+    // O INSERT virou condicional; se alguem um dia trocar isso por um
+    // "sincronizar endereco" (apagar e regravar), a compra de balcao levaria
+    // junto o endereco da compra online — e o pedido antigo, que ainda vai
+    // ser entregue, deixaria de mostrar para onde foi.
+    it('venda presencial nao apaga o endereco que uma compra online anterior gravou', async () => {
+      const online = await salvarClienteComEndereco(CLIENTE, ENDERECO)
+      const presencial = await salvarClienteComEndereco(CLIENTE, null)
+
+      expect(presencial.clienteId).toBe(online.clienteId)
+      expect(presencial.enderecoId).toBeNull()
+
+      const enderecos = await getDb().selectFrom('enderecos')
+        .select('id').where('cliente_id', '=', online.clienteId).execute()
+      expect(enderecos).toHaveLength(1)
+      expect(enderecos[0].id).toBe(online.enderecoId)
+    })
+
+    // A recusa de CPF divergente vale igual nos dois canais, e o balcao e
+    // justamente onde ela e mais necessaria: uma tela operada em pe, com
+    // fila, digitando o e-mail que o comprador falou em voz alta. Se a
+    // verificacao tivesse ficado no ramo "com endereco", a venda presencial
+    // sobrescreveria o CPF de outra pessoa sem que nenhum teste antigo
+    // ficasse vermelho.
+    it('SEGURANCA: CPF divergente continua recusado tambem sem endereco', async () => {
+      const a = await salvarClienteComEndereco(CLIENTE, ENDERECO)
+      await expect(
+        salvarClienteComEndereco(
+          { ...CLIENTE, email: EMAIL_CLIENTE_MINUSCULO, cpf: CPF_DIVERGENTE },
+          null,
+        ),
+      ).rejects.toThrow(CpfDivergenteError)
+
+      const linha = await getDb().selectFrom('clientes')
+        .select('cpf').where('id', '=', a.clienteId).executeTakeFirstOrThrow()
+      expect(linha.cpf).toBe(CLIENTE.cpf)
+    })
+  })
+
   // salvarClienteComEndereco precisa poder entrar na transacao do CHAMADOR
   // (Tarefa 9 chama de dentro da transacao que tambem cria o pedido e
   // resgata o cupom) sem perder a capacidade de rodar sozinha.
@@ -170,8 +245,29 @@ describe('clientes', () => {
       expect(r.enderecoId).toMatch(/^[0-9a-f-]{36}$/)
     })
 
+    // A forma EXATA da chamada do balcao (src/app/api/vendas-presenciais/route.ts):
+    // tres argumentos, o do meio null, tudo dentro da transacao que tambem
+    // baixa o estoque e cria o pedido. Vale um teste proprio porque a
+    // combinacao "null no meio + trx no fim" e a unica que a producao usa e
+    // seria facil quebrar mexendo so na posicao dos parametros.
+    it('aceita null e transacao do chamador na mesma chamada', async () => {
+      const r = await getDb().transaction().execute(
+        (trx) => salvarClienteComEndereco(CLIENTE, null, trx),
+      )
+      expect(r.clienteId).toMatch(/^[0-9a-f-]{36}$/)
+      expect(r.enderecoId).toBeNull()
+
+      const clientes = await getDb().selectFrom('clientes').select('id')
+        .where(sql<boolean>`lower(email) = lower(${EMAIL_CLIENTE})`).execute()
+      expect(clientes).toHaveLength(1)
+    })
+
     it('se a transacao do chamador falhar depois, nao sobra cliente nem endereco', async () => {
-      let enderecoId: string | undefined
+      // `string | null`, e nao `string | undefined`: desde que o endereco
+      // virou opcional, salvarClienteComEndereco devolve null quando nao ha
+      // endereco. Aqui HA um (o caminho online), entao a assercao continua
+      // sendo "veio um id" — so mudou o tipo que consegue receber o valor.
+      let enderecoId: string | null = null
       await expect(
         getDb().transaction().execute(async (trx) => {
           const r = await salvarClienteComEndereco(CLIENTE, ENDERECO, trx)

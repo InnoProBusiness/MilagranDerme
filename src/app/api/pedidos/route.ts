@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { getDb } from '@/lib/db'
-import { buscarKitAtivoPorSlug } from '@/repositories/produtos'
+import { buscarKitAtivoPorSlug, type Kit } from '@/repositories/produtos'
 import { salvarClienteComEndereco, CpfDivergenteError } from '@/repositories/clientes'
 import { resgatarCupom } from '@/repositories/cupons'
 import { criarPedido, PrecoDivergenteError } from '@/repositories/pedidos'
@@ -9,7 +9,11 @@ import { aplicarPrioridadeDoCupom } from '@/lib/montar-pedido'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { segredoDeAtribuicao, NOME_COOKIE_ATRIBUICAO } from '@/lib/atribuicao'
 import { mensagemDeRecusa, type MotivoRecusa } from '@/lib/cupom'
-import { deInteiro } from '@/lib/money'
+import { deInteiro, type Centavos } from '@/lib/money'
+import {
+  cotarFrete, ClubeEnviosError, CotacaoIlegivelError, FreteNaoConfiguradoError,
+  type OpcaoDeFrete,
+} from '@/lib/frete'
 import {
   criarLimitadorPorIp, ipDoPedido,
   JANELA_RATE_LIMIT_MS, MAX_PEDIDOS_POR_JANELA,
@@ -24,6 +28,12 @@ export const dynamic = 'force-dynamic'
  * um script enche o banco de dado pessoal de terceiros (ou de lixo) na
  * velocidade da rede, e ainda serve para tentar cupom atras de cupom ate
  * achar um codigo valido.
+ *
+ * Desde a cotacao de frete (§13 do plano de 16/08/2026) o mesmo freio tem um
+ * segundo trabalho: cada POST que chega ate a cotacao gasta UMA REQUISICAO NA
+ * CONTA DA MILAGRAN no Clube Envios. Sem o teto por IP, um loop de checkout
+ * abandonado consumiria a cota do provedor no dia do evento e o sintoma
+ * apareceria como "frete indisponivel" para comprador legitimo.
  *
  * ATENCAO, honestamente: o contador e EM MEMORIA, por processo — ver o
  * cabecalho de src/lib/rate-limit.ts. Isto e um quebra-molas contra abuso
@@ -44,6 +54,24 @@ const Corpo = z.object({
   kitSlug: z.string().min(1),
   quantidade: z.number().int().min(1).max(QUANTIDADE_MAXIMA),
   cupom: z.string().trim().min(3).max(24).optional(),
+  /**
+   * QUAL opcao de frete o comprador escolheu na tela — e SO isso. O id vem de
+   * uma cotacao que o proprio servidor fez antes (POST /api/frete, mesma
+   * `cotarFrete` de src/lib/frete.ts); o VALOR daquela opcao nao acompanha o
+   * id e nem poderia: dinheiro nunca entra por este corpo.
+   *
+   * `.strict()` logo abaixo e o que transforma essa regra em resposta HTTP —
+   * mandar `frete`, `freteCentavos` ou `total` junto e 422, nao um campo
+   * ignorado em silencio. E por isso que a rota RECOTA (ver
+   * opcaoDeFreteEscolhida) em vez de aceitar o par id+valor que a tela ja tem
+   * em maos.
+   *
+   * Um id que nao aparece na recotacao vira 422 `opcao_de_frete_invalida`: a
+   * tabela da transportadora pode ter mudado entre a tela e o submit, e nesse
+   * caso o certo e o comprador ver o valor novo, nao o servidor escolher uma
+   * opcao por ele.
+   */
+  idServico: z.number().int().positive(),
   nome: z.string().trim().min(3),
   email: z.string().email(),
   cpf: z.string().regex(/^\d{11}$/),
@@ -88,6 +116,116 @@ function mensagemSeguraDoErro(e: unknown): string {
   return e instanceof Error ? e.message : 'erro_desconhecido'
 }
 
+/**
+ * Recota o frete NO SERVIDOR e devolve a opcao que o comprador escolheu — ou
+ * uma `Response` pronta quando nao ha o que cobrar dele.
+ *
+ * ```ts
+ * const opcao = await opcaoDeFreteEscolhida({ ... })
+ * if (opcao instanceof Response) return opcao
+ * ```
+ *
+ * A UNIAO `OpcaoDeFrete | Response` e o molde de `exigirPapel`
+ * (src/lib/guarda.ts) e vale aqui pelo mesmo motivo: enquanto o
+ * `instanceof Response` nao estiver escrito, `opcao.valor` nao compila — o
+ * compilador cobra o tratamento da recusa em vez de deixar a rota seguir com
+ * um objeto de erro nas maos e gravar sabe-se la o que em frete_centavos.
+ *
+ * POR QUE RECOTAR, JA QUE A TELA ACABOU DE COTAR
+ * ---------------------------------------------
+ * Porque `pedidos.frete_centavos` e `pedidos.total_centavos` sao CONGELADOS
+ * pelo trigger pedido_atribuicao_imutavel_trg
+ * (migrations/1754900300000_pedidos.sql, lista reescrita em
+ * 1755300100000_pedidos_canal_logistica.sql): depois do INSERT nao existe
+ * UPDATE possivel nessas colunas por caminho nenhum do sistema. O valor tem
+ * que estar certo AGORA, no INSERT — nao ha "corrige depois". E a unica fonte
+ * confiavel do valor e o provedor respondendo ao CEP que este mesmo corpo
+ * submeteu; o par id+valor que a tela tem em maos passou pelo navegador e
+ * portanto vale tanto quanto qualquer outro numero digitado pelo comprador.
+ *
+ * ONDE ISTO E CHAMADO IMPORTA TANTO QUANTO O QUE ELE FAZ: FORA DA TRANSACAO.
+ * Ver o comentario no POST.
+ *
+ * NUNCA CAI PARA FRETE ZERO. Provedor fora do ar, resposta ilegivel ou
+ * credencial ausente viram 503 e o pedido NAO nasce. Um zero silencioso aqui
+ * seria "R$ 0,00" na tela (src/components/linha-frete.tsx existe exatamente
+ * para impedir isso), viraria `frete_centavos = 0` congelado na linha e viraria
+ * prejuizo da Milagran em cada postagem. Falhar alto e barato: o comprador
+ * tenta de novo em trinta segundos.
+ */
+async function opcaoDeFreteEscolhida(e: {
+  kit: Kit
+  quantidade: number
+  cepDestino: string
+  subtotal: Centavos
+  idServico: number
+}): Promise<OpcaoDeFrete | Response> {
+  try {
+    const cotacao = await cotarFrete({
+      cepDestino: e.cepDestino,
+      // Valor declarado e o SUBTOTAL dos produtos, sem desconto e sem frete: e
+      // quanto vale a mercadoria dentro da caixa para efeito de transporte.
+      // Descontar cupom aqui seria declarar a menor o que a transportadora
+      // precisa repor se extraviar, e o desconto nem esta resolvido neste
+      // ponto — o cupom so e resgatado dentro da transacao, mais abaixo.
+      valorDeclarado: e.subtotal,
+      // Dimensoes do CADASTRO do kit (src/repositories/produtos.ts), nunca um
+      // numero escrito nesta rota: peso/medida errados sao frete errado, e o
+      // erro so aparece no balcao dos Correios. `quantidade` multiplica o
+      // volume porque cada unidade e uma caixa.
+      volumes: [{
+        alturaCm: e.kit.alturaCm,
+        larguraCm: e.kit.larguraCm,
+        comprimentoCm: e.kit.comprimentoCm,
+        pesoGramas: e.kit.pesoGramas,
+        quantidade: e.quantidade,
+      }],
+    })
+
+    const opcao = cotacao.opcoes.find((o) => o.idServico === e.idServico)
+    if (!opcao) {
+      // A opcao sumiu entre a tela e o submit (tabela da transportadora mudou,
+      // servico deixou de atender aquele CEP) ou o id foi inventado. Nos dois
+      // casos NAO cabe escolher outra opcao por conta propria — nem a mais
+      // barata: o comprador veria um valor no resumo e outro na cobranca. 422 e
+      // a tela recalcula.
+      return Response.json({
+        error: 'opcao_de_frete_invalida',
+        mensagem: 'A opção de frete escolhida não está mais disponível. Recalcule o frete e tente de novo.',
+      }, { status: 422 })
+    }
+
+    return opcao
+  } catch (erro) {
+    // Despacho por CLASSE, nunca por texto de mensagem — mesma regra do catch
+    // do POST. As tres sao "nao deu para cotar" por motivos diferentes
+    // (provedor recusou/nao respondeu, resposta ilegivel, variavel de ambiente
+    // faltando) e as tres tem o MESMO desfecho para quem comprou: 503, sem
+    // pedido criado. O motivo especifico so vai para o log — a mensagem de
+    // ClubeEnviosError pode ecoar o payload enviado, que carrega o CEP.
+    if (
+      erro instanceof ClubeEnviosError
+      || erro instanceof CotacaoIlegivelError
+      || erro instanceof FreteNaoConfiguradoError
+    ) {
+      console.error('[pedidos] frete indisponivel:', mensagemSeguraDoErro(erro))
+      return Response.json({
+        error: 'frete_indisponivel',
+        mensagem: 'Não foi possível calcular o frete agora. Tente novamente em instantes.',
+      }, { status: 503 })
+    }
+
+    // Sobra o que NAO e falha do provedor: `cotarFrete` tambem lanca Error
+    // comum quando um volume vem com medida zerada ou nao inteira, e isso e
+    // defeito do nosso cadastro (kits.peso_gramas e companhia), nao
+    // indisponibilidade externa. 500 em vez de 503 para que o log nao conte a
+    // historia errada — 503 sugere "tente de novo", e tentar de novo com o
+    // mesmo kit quebrado nao resolve nada.
+    console.error('[pedidos] falha inesperada ao cotar frete:', mensagemSeguraDoErro(erro))
+    return Response.json({ error: 'nao_foi_possivel_criar_o_pedido' }, { status: 500 })
+  }
+}
+
 export async function POST(req: Request) {
   // Antes de qualquer leitura de corpo ou toque no banco: um pedido barrado
   // nao chega a abrir transacao, entao um 429 nao pode deixar cliente,
@@ -108,10 +246,39 @@ export async function POST(req: Request) {
   // O preco vem do catalogo. Nada no corpo da requisicao influencia dinheiro:
   // precoUnitarioCentavos/total, se enviados, nem sobrevivem ao parse do Zod
   // acima porque nao fazem parte de `Corpo`.
+  //
+  // `montarCarrinho` aceita frete desde 16/08/2026 (src/lib/carrinho.ts) e
+  // aqui ele NAO e passado — de proposito. Este resumo existe para dois usos:
+  // o subtotal que o cupom desconta e as linhas que viram pedido_itens. O
+  // total que vale e o que `criarPedido` calcula com a formula da constraint
+  // pedido_total_confere; um `carrinho.total` montado aqui seria um segundo
+  // total, calculado antes de o desconto do cupom existir, esperando para
+  // divergir do primeiro.
   const carrinho = montarCarrinho([{
     kitId: kit.id, nome: kit.nome,
     precoUnitario: kit.precoCentavos, quantidade: d.quantidade,
   }])
+
+  // A COTACAO ACONTECE AQUI, ANTES DE QUALQUER TRANSACAO — e a ordem e a
+  // decisao, nao o acaso. `cotarFrete` e uma chamada de REDE com ate 12s de
+  // timeout (src/lib/frete.ts); dentro de uma transacao aberta, esses 12s
+  // segurariam uma conexao do pool (que tem 5) e todos os locks ja tomados
+  // pelo caminho — bastam cinco compradores simultaneos com o provedor lento
+  // para travar o checkout inteiro. E o mesmo motivo, escrito com as mesmas
+  // palavras, pelo qual a chamada ao Mercado Pago fica fora da transacao em
+  // src/app/api/pagamentos/route.ts.
+  //
+  // Consequencia aceita: cotar custa uma requisicao ao provedor mesmo para um
+  // pedido que sera recusado logo adiante (cupom invalido, CPF divergente). O
+  // preco disso e uma chamada HTTP; o preco do contrario e o checkout parado.
+  const opcao = await opcaoDeFreteEscolhida({
+    kit,
+    quantidade: d.quantidade,
+    cepDestino: d.cep,
+    subtotal: carrinho.subtotal,
+    idServico: d.idServico,
+  })
+  if (opcao instanceof Response) return opcao
 
   const segredo = segredoDeAtribuicao()
   // O header Cookie separa pares por "; " (ponto-e-virgula + um espaco) na
@@ -133,12 +300,12 @@ export async function POST(req: Request) {
       // dado pessoal de um estranho commitado e preso a pedido nenhum.
       //
       // NUNCA passar `d` inteiro como EntradaCliente/EntradaEndereco: `d`
-      // tambem carrega kitSlug, quantidade e cupom, e salvarClienteComEndereco
-      // espalha o segundo argumento inteiro (`...e`) dentro do INSERT em
-      // enderecos — passar `d` faz o Postgres recusar a coluna "kitSlug",
-      // que nao existe na tabela. Objetos explicitos, so com os campos de
-      // cada tipo, sao o que garante que so o que pertence a cada tabela
-      // chega nela.
+      // tambem carrega kitSlug, quantidade, cupom e idServico, e
+      // salvarClienteComEndereco espalha o segundo argumento inteiro (`...e`)
+      // dentro do INSERT em enderecos — passar `d` faz o Postgres recusar a
+      // coluna "kitSlug", que nao existe na tabela. Objetos explicitos, so com
+      // os campos de cada tipo, sao o que garante que so o que pertence a cada
+      // tabela chega nela.
       const { clienteId, enderecoId } = await salvarClienteComEndereco(
         { nome: d.nome, email: d.email, cpf: d.cpf, whatsapp: d.whatsapp },
         {
@@ -173,20 +340,35 @@ export async function POST(req: Request) {
 
       const pedido = await criarPedido({
         origem: atribuicao.origem,
+        // ONDE a venda aconteceu, e nao quem a trouxe (`origem`, logo acima, e
+        // atribuicao de comissao — os dois eixos sao ortogonais, ver
+        // EntradaPedido em src/repositories/pedidos.ts). Esta rota E a loja:
+        // todo pedido que nasce aqui e 'online'. O balcao do evento tem rota
+        // propria (src/app/api/vendas-presenciais/route.ts) e canal proprio,
+        // porque canal decide de qual estoque a unidade sai (§4) e separa o
+        // relatorio de §17. Literal, nunca vindo do corpo: a coluna e
+        // CONGELADA pelo trigger de imutabilidade e um canal errado no INSERT
+        // nao tem conserto.
+        canal: 'online',
         representanteId: atribuicao.representanteId,
         percentualComissao: atribuicao.percentualComissao,
         utmSource: atribuicao.utmSource,
         utmMedium: atribuicao.utmMedium,
         utmCampaign: atribuicao.utmCampaign,
         desconto,
-        // PLACEHOLDER DE POLITICA INDEFINIDA, nao "frete gratis". A coluna
-        // pedidos.frete_centavos e NOT NULL e precisa de um valor; a
-        // politica de frete ainda nao foi decidida, entao o pedido nasce com
-        // zero e nenhuma tela mostra esse zero (ver
-        // src/components/linha-frete.tsx). O ResumoCarrinho de proposito NAO
-        // tem campo de frete para este ponto ler — quando o frete for real,
-        // e aqui que o valor calculado entra.
-        frete: deInteiro(0),
+        // O VALOR DA COTACAO QUE O SERVIDOR ACABOU DE FAZER — nunca um numero
+        // vindo do corpo, que nem sobrevive ao `.strict()` do schema. Ate
+        // 16/08/2026 esta linha era `deInteiro(0)` com um comentario dizendo
+        // "placeholder de politica indefinida, nao frete gratis"; a politica
+        // foi decidida (Clube Envios, §13) e o zero deixou de existir neste
+        // caminho: quando nao da para cotar, a rota ja devolveu 503 la em cima
+        // e nao chegou ate aqui.
+        frete: opcao.valor,
+        // Prazo da MESMA opcao, para a tela de confirmacao e para a fila da
+        // expedicao (§17). Diferente de frete e canal, esta coluna nao e
+        // congelada — a logistica corrige quando a transportadora muda o prazo.
+        // E ESTIMATIVA, nao promessa.
+        prazoDiasEstimado: opcao.prazoDias,
         itens: carrinho.linhas.map((l) => ({
           kitId: l.kitId,
           quantidade: l.quantidade,

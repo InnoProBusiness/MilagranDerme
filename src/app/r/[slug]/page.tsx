@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import { buscarRepresentanteAtivoPorSlug } from '@/repositories/representantes'
 import { listarKitsAtivos } from '@/repositories/produtos'
+import { escassezPresencialDoKit } from '@/lib/escassez-do-lote'
 import { Vitrine } from '@/components/vitrine'
 
 // A atribuicao depende de cookie e query string, entao a pagina nao pode
@@ -26,12 +27,22 @@ export default async function PaginaRepresentante({ params }: Props) {
 
   const kits = await listarKitsAtivos()
 
+  // O lote presencial e da MARCA, nao do representante: os 50 kits de §2 sao
+  // do evento de 25/08 e nao pertencem a nenhuma vitrine em particular. Um
+  // visitante que chega pelo link de uma representante ve o mesmo contador que
+  // todo mundo — e o mesmo numero que a home mostra. Contadores diferentes por
+  // vitrine seriam a mesma classe de defeito que LinhaFrete existe para
+  // impedir: duas telas afirmando coisas diferentes sobre o mesmo estoque.
+  const kit = kits[0]
+  const escassez = kit ? await escassezPresencialDoKit(kit.id) : null
+
+  // Sem <main> proprio: o landmark de conteudo principal e o do layout raiz
+  // (src/app/layout.tsx). Um <main> aqui ficaria aninhado dentro dele.
   return (
-    <main>
-      <Vitrine
-        kits={kits}
-        representante={{ nome: representante.nome, slug: representante.slug }}
-      />
-    </main>
+    <Vitrine
+      kits={kits}
+      representante={{ nome: representante.nome, slug: representante.slug }}
+      escassez={escassez}
+    />
   )
 }

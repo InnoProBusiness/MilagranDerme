@@ -1,6 +1,9 @@
 import { enviarEmailResend } from '@/lib/candidatura'
-import { buscarPedidoParaEmail, type PedidoParaEmail } from '@/repositories/pedidos'
+import {
+  buscarPedidoParaEmail, type CanalVenda, type PedidoParaEmail,
+} from '@/repositories/pedidos'
 import { formatarBRL } from '@/lib/money'
+import { AVISO_PRE_VENDA } from '@/lib/tempo'
 
 function escaparHtml(valor: unknown): string {
   return String(valor)
@@ -8,6 +11,49 @@ function escaparHtml(valor: unknown): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+/**
+ * O QUE ACONTECE COM O KIT DEPOIS DO PAGAMENTO — e isso depende do CANAL da
+ * venda.
+ *
+ * DEFEITO CORRIGIDO EM 16/08/2026, registrado aqui porque a frase antiga
+ * chegou a caixas de entrada de verdade: este e-mail dizia "Avisaremos assim
+ * que o pedido for enviado" para TODO pedido. No online e verdade; no balcao
+ * do evento (§2, §10) e mentira — o comprador pagou, recebeu o kit em maos e
+ * saiu, e ficaria esperando um aviso de envio que nunca vai existir. Pior:
+ * mandaria gente ligar para a Milagran perguntando por rastreio de um produto
+ * que ja esta na casa dela.
+ *
+ * A ordem do `if` e deliberada: o caso ESTREITO (presencial) e testado e todo
+ * o resto cai no texto online, que e o DEFAULT da coluna `canal` no banco
+ * (migrations/1755300100000_pedidos_canal_logistica.sql). Um canal novo no
+ * ENUM herdaria a copy de envio — a errada para receber e a certa para
+ * despachar —, o que e o lado seguro de errar.
+ *
+ * A frase de pre-venda e a CONSTANTE de src/lib/tempo.ts, com a data de
+ * 25/08/2026 dentro dela, e nao um texto escrito aqui: a mesma promessa
+ * aparece na home, no checkout e na pagina do pedido, e um e-mail com prazo
+ * diferente do que a tela mostra e a divergencia que aquela constante existe
+ * para impedir.
+ *
+ * O paragrafo inteiro sai daqui, INCLUSIVE a frase que apresenta o link: para
+ * quem comprou no balcao o link e um comprovante, e para quem comprou online
+ * ele e a tela de acompanhamento. Chamar os dois de "acompanhar" faria o
+ * e-mail do evento convidar o comprador a acompanhar uma entrega que ja
+ * aconteceu na frente dele.
+ *
+ * Texto voltado ao comprador: acentuacao completa.
+ */
+function proximoPasso(canal: CanalVenda): string {
+  if (canal === 'presencial') {
+    return 'O seu kit foi entregue em mãos, no próprio evento: esta compra não '
+      + 'passa pelos Correios e não tem código de rastreio. O link abaixo abre '
+      + 'o comprovante do seu pedido:'
+  }
+  return `${AVISO_PRE_VENDA} Assim que ele for postado nos Correios, o código `
+    + 'de rastreio aparece na página do seu pedido, que você acompanha por '
+    + 'este link:'
 }
 
 export function htmlConfirmacaoDePedido(p: PedidoParaEmail, urlBase: string): string {
@@ -41,8 +87,7 @@ export function htmlConfirmacaoDePedido(p: PedidoParaEmail, urlBase: string): st
           </tr>
         </table>
         <p style="color:#f4ecdd;font-size:15px;line-height:1.6;">
-          Avisaremos assim que o pedido for enviado. Você pode acompanhar por
-          este link:
+          ${escaparHtml(proximoPasso(p.canal))}
         </p>
         <p style="margin:0 0 8px;">
           <a href="${escaparHtml(urlBase)}/pedido/${escaparHtml(p.token)}"

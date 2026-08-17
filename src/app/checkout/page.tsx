@@ -23,12 +23,10 @@ export default async function PaginaCheckout({ searchParams }: Props) {
 
   if (!kit) {
     return (
-      <main>
-        <section className="section checkout">
-          <p className="kicker">Checkout</p>
-          <p>Nenhum kit disponivel no momento.</p>
-        </section>
-      </main>
+      <section className="section checkout">
+        <p className="kicker">Checkout</p>
+        <p>Nenhum kit disponivel no momento.</p>
+      </section>
     )
   }
 
@@ -37,9 +35,7 @@ export default async function PaginaCheckout({ searchParams }: Props) {
     ? Math.max(1, Math.min(QUANTIDADE_MAXIMA, quantidadeBruta))
     : 1
 
-  return (
-    <main>
-      <CheckoutWizard kit={kit} quantidadeInicial={quantidadeInicial} />
-    </main>
-  )
+  // Sem <main> proprio: o landmark de conteudo principal e o do layout raiz
+  // (src/app/layout.tsx). Um <main> aqui ficaria aninhado dentro dele.
+  return <CheckoutWizard kit={kit} quantidadeInicial={quantidadeInicial} />
 }

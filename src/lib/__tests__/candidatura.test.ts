@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   excedeuRateLimit, ipDoPedido, gerarPdfCandidatura, processarCandidatura,
+  leadDaCandidatura,
 } from '@/lib/candidatura'
 
 /**
@@ -208,6 +209,153 @@ describe('envio', () => {
     const { attachments } = JSON.parse(fetchFalso.mock.calls[0][1].body)
     expect(attachments[0].filename).toBe('candidatura-etc-passwd.pdf')
     expect(attachments[0].filename).not.toContain('/')
+  })
+})
+
+// A candidatura passou a ser PERSISTIDA (secao 17 do documento de
+// 16/08/2026): alem do PDF por e-mail, cada envio vira uma linha em `leads`.
+// Aqui o gravador e um dublê — o repositorio de verdade tem teste proprio,
+// contra Postgres, em src/repositories/__tests__/leads.test.ts. O que estes
+// testes travam e o que so este arquivo decide: o que vai no lead, QUANDO
+// ele e gravado e o que acontece quando a gravacao falha.
+describe('traducao do formulario em lead', () => {
+  it('o tipo sai do "nivel de interesse" do proprio formulario', () => {
+    expect(leadDaCandidatura(VALIDA).tipo).toBe('representante')
+    expect(leadDaCandidatura({ ...VALIDA, nivel: 'Distribuidor' }).tipo).toBe('distribuidor')
+    // Caixa e espaco nao podem decidir o balde: o valor vem de um <select>
+    // hoje, mas um formulario novo pode mandar 'distribuidor' minusculo.
+    expect(leadDaCandidatura({ ...VALIDA, nivel: '  distribuidor ' }).tipo).toBe('distribuidor')
+  })
+
+  it('nivel desconhecido cai em representante em vez de derrubar a gravacao', () => {
+    // Valor fora do ENUM tipo_lead faria o INSERT falhar, e como a gravacao
+    // e best-effort o lead sumiria em silencio com a prova de consentimento
+    // junto. Balde errado se corrige com um clique no painel.
+    expect(leadDaCandidatura({ ...VALIDA, nivel: 'Curioso' }).tipo).toBe('representante')
+    const { nivel: _, ...semNivel } = VALIDA
+    expect(leadDaCandidatura(semNivel).tipo).toBe('representante')
+  })
+
+  it('LGPD: o aceite vira consentimento com o instante em que chegou', () => {
+    const agora = new Date('2026-08-16T12:00:00.000Z')
+    const lead = leadDaCandidatura(VALIDA, agora)
+    expect(lead.consentimentoLgpd).toBe(true)
+    expect(lead.consentidoEm).toBe(agora)
+  })
+
+  it('LGPD: sem aceite nao ha carimbo — consentimento nao se assume por conveniencia', () => {
+    const lead = leadDaCandidatura({ ...VALIDA, lgpd: false }, new Date())
+    expect(lead.consentimentoLgpd).toBe(false)
+    expect(lead.consentidoEm).toBeNull()
+  })
+
+  it('leva para a mensagem o que a tabela nao tem coluna, em vez de descartar', () => {
+    // Sem isto o painel mostraria MENOS que o e-mail que ele veio substituir.
+    const lead = leadDaCandidatura({ ...VALIDA, area: 'Esteticista', atuaEstetica: 'Sim' })
+    expect(lead.mensagem).toBe('Área de atuação: Esteticista | Já atua com estética: Sim')
+  })
+
+  it('mapeia cada campo do formulario para o campo certo do lead', () => {
+    expect(leadDaCandidatura(VALIDA)).toMatchObject({
+      nome: 'Maria Silva',
+      email: 'maria@exemplo.com',
+      whatsapp: '11999998888',
+      cidade: 'Sao Paulo',
+      estado: 'SP',
+      // "Como conheceu a marca?" do formulario. leads.origem e texto livre
+      // sem CHECK justamente para o rotulo do <select> entrar como veio.
+      origem: 'Instagram',
+    })
+  })
+})
+
+describe('persistencia da candidatura', () => {
+  it('grava o lead ANTES de o e-mail sair', async () => {
+    // ORDEM e a garantia deste teste, nao "gravou". O envio e um efeito
+    // externo irreversivel: gravar depois dele deixaria uma janela em que o
+    // processo morre com o e-mail entregue e o consentimento perdido.
+    const ordem: string[] = []
+    const fetchFalso = vi.fn().mockImplementation(async () => {
+      ordem.push('email')
+      return new Response('{}', { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchFalso)
+    configurarResend()
+    const gravarLead = vi.fn().mockImplementation(async () => { ordem.push('lead') })
+
+    const r = await processarCandidatura(VALIDA, ipUnico(), gravarLead)
+
+    expect(r.status).toBe(200)
+    expect(ordem).toEqual(['lead', 'email'])
+    expect(gravarLead.mock.calls[0][0]).toMatchObject({
+      tipo: 'representante',
+      email: 'maria@exemplo.com',
+      consentimentoLgpd: true,
+    })
+  })
+
+  it('falha ao gravar o lead nao derruba a candidatura nem muda o status', async () => {
+    // Banco fora do ar as 20h de um dia de campanha nao pode transformar em
+    // erro um formulario preenchido certo, que a equipe ainda vai receber.
+    const fetchFalso = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchFalso)
+    configurarResend()
+    const gravarLead = vi.fn().mockRejectedValue(new Error('conexao recusada'))
+
+    const r = await processarCandidatura(VALIDA, ipUnico(), gravarLead)
+
+    expect(r.status).toBe(200)
+    expect(r.corpo).toEqual({ ok: true })
+    expect(fetchFalso).toHaveBeenCalledTimes(1)
+  })
+
+  it('LGPD: honeypot nao grava lead — dado de bot nao e lead, e lixo no painel', async () => {
+    vi.stubGlobal('fetch', vi.fn())
+    configurarResend()
+    const gravarLead = vi.fn()
+
+    await processarCandidatura({ ...VALIDA, website: 'http://spam' }, ipUnico(), gravarLead)
+
+    expect(gravarLead).not.toHaveBeenCalled()
+  })
+
+  it('LGPD: sem o aceite do checkbox nada e gravado', async () => {
+    // O request morre em missing_field antes da gravacao. Guardar nome,
+    // e-mail e whatsapp de quem NAO consentiu e o tratamento sem base legal
+    // que esta tabela existe para tornar impossivel.
+    const gravarLead = vi.fn()
+    const r = await processarCandidatura({ ...VALIDA, lgpd: false }, ipUnico(), gravarLead)
+
+    expect(r.corpo).toEqual({ error: 'missing_field', field: 'lgpd' })
+    expect(gravarLead).not.toHaveBeenCalled()
+  })
+
+  it('e-mail invalido nao vira lead', async () => {
+    const gravarLead = vi.fn()
+    await processarCandidatura({ ...VALIDA, email: 'maria arroba exemplo' }, ipUnico(), gravarLead)
+    expect(gravarLead).not.toHaveBeenCalled()
+  })
+
+  it('grava o lead mesmo quando o Resend nao esta configurado', async () => {
+    // Aqui o e-mail nunca sai e a linha no banco vira o UNICO vestigio
+    // daquela candidatura — o caso em que descartar doeria mais, nao menos.
+    const gravarLead = vi.fn().mockResolvedValue(undefined)
+    const r = await processarCandidatura(VALIDA, ipUnico(), gravarLead)
+
+    expect(r.status).toBe(500)
+    expect(gravarLead).toHaveBeenCalledTimes(1)
+  })
+
+  it('sem gravador continua funcionando exatamente como antes', async () => {
+    // O parametro e opcional: as chamadas de duas posicoes que existiam
+    // antes de `leads` continuam validas, sem lead e sem 5xx novo.
+    const fetchFalso = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchFalso)
+    configurarResend()
+
+    const r = await processarCandidatura(VALIDA, ipUnico())
+    expect(r.status).toBe(200)
+    expect(r.corpo).toEqual({ ok: true })
   })
 })
 

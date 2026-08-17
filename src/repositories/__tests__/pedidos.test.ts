@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest'
+import { randomUUID } from 'node:crypto'
 import { getDb, closeDb } from '@/lib/db'
-import { criarPedido, PrecoDivergenteError, type EntradaPedido } from '@/repositories/pedidos'
+import {
+  criarPedido, avancarStatusDoPedido, registrarRastreio,
+  listarVendasAdmin, listarLogisticaAdmin, listarCompradores, resumoDeVendas,
+  PrecoDivergenteError, TransicaoInvalidaError, TransicaoFinanceiraError,
+  type EntradaPedido, type PedidoStatus,
+} from '@/repositories/pedidos'
 import { centavos, deInteiro } from '@/lib/money'
 import { sql } from 'kysely'
 
@@ -30,8 +36,40 @@ const NOME_KIT = 'Kit Milagran'
 // entre dois literais escritos a mao.
 const PRECO_KIT_CENTAVOS = 100000
 
+// Comprador, endereco e vendedor proprios deste arquivo. Eles NAO sao enfeite
+// de cenario: viraram exigencia de BANCO com o Plano 4, e sem eles nem os
+// testes que nada tem a ver com canal conseguem mais criar um pedido.
+//
+// pedido_online_tem_endereco (migrations/1755300100000_pedidos_canal_logistica.sql)
+// recusa todo pedido de canal 'online' sem endereco_id — e 'online' e o canal
+// de todo pedido que este arquivo criava antes deste plano. Por isso cada
+// chamada a criarPedido abaixo ganhou `canal`, `clienteId` e `enderecoId`: nao
+// e ruido, e o que faz o INSERT passar.
+//
+// pedido_presencial_tem_vendedor (migrations/1755300300000_usuarios_sessoes.sql)
+// fecha o outro lado: venda de balcao sem vendedor_id e recusada.
+//
+// Os e-mails levam o prefixo deste arquivo pelo mesmo motivo dos slugs acima:
+// cliente_email_unico e usuario_email_unico sao indices unicos GLOBAIS, e os
+// arquivos de teste rodam em paralelo contra o mesmo Postgres.
+const EMAIL_COMPRADOR = 'pedido-comprador@exemplo.com'
+// So digitos: cliente_cpf_digitos (migrations/1755000100000_clientes.sql) exige
+// exatamente 11. Este numero existe para ser procurado nas respostas das
+// leituras administrativas e NAO ser encontrado — ver os testes LGPD: la
+// embaixo.
+const CPF_COMPRADOR = '39053344705'
+const EMAIL_VENDEDOR = 'pedido-vendedor@exemplo.com'
+// Este arquivo nunca autentica ninguem: a linha de usuarios existe apenas para
+// o FK de pedidos.vendedor_id ter para onde apontar. O formato de verdade
+// (scrypt$N$r$p$<salt>$<hash>, src/lib/senha.ts) e asseverado em
+// src/repositories/__tests__/usuarios.test.ts, que e o arquivo que testa senha.
+const SENHA_HASH_INERTE = 'scrypt$16384$8$1$nao-usado$nao-usado'
+
 let idMaria: string
 let idKit: string
+let idCliente: string
+let idEndereco: string
+let idVendedor: string
 
 // "pedidos" nao tem uma coluna dona (slug, email...) para escopar um DELETE
 // como nos outros arquivos — em especial os pedidos de origem 'casa' e
@@ -50,6 +88,29 @@ async function criar(entrada: EntradaPedido) {
 
 async function semear() {
   const db = getDb()
+
+  // pagamentos.pedido_id e ON DELETE RESTRICT
+  // (migrations/1755200000000_pagamentos.sql): as tentativas de pagamento que
+  // os testes de resumoDeVendas inserem seguram o pedido e fariam TODOS os
+  // DELETEs abaixo falharem na rodada seguinte. Vem antes de tudo, e escopado
+  // pelos pedidos que carregam um item do kit deste arquivo — nunca um
+  // "DELETE FROM pagamentos" sem filtro, que apagaria as linhas de
+  // conciliacao.test.ts rodando em paralelo.
+  await db
+    .deleteFrom('pagamentos')
+    .where(
+      'pedido_id',
+      'in',
+      db
+        .selectFrom('pedido_itens')
+        .select('pedido_id')
+        .where(
+          'kit_id',
+          'in',
+          db.selectFrom('kits').select('id').where('slug', '=', SLUG_KIT),
+        ),
+    )
+    .execute()
 
   if (idsPedidos.length > 0) {
     await db.deleteFrom('pedidos').where('id', 'in', idsPedidos).execute()
@@ -87,6 +148,12 @@ async function semear() {
         ),
     )
     .execute()
+  // Depois dos pedidos, nunca antes: pedidos.vendedor_id e pedidos.cliente_id
+  // sao ON DELETE RESTRICT, entao um pedido sobrevivente prenderia as duas
+  // linhas aqui. enderecos sai junto do cliente por ON DELETE CASCADE
+  // (migrations/1755000100000_clientes.sql).
+  await db.deleteFrom('usuarios').where('email', '=', EMAIL_VENDEDOR).execute()
+  await db.deleteFrom('clientes').where('email', '=', EMAIL_COMPRADOR).execute()
   await db.deleteFrom('representantes').where('slug', '=', SLUG_MARIA).execute()
   // Os coadjuvantes nunca ficam presos por ON DELETE RESTRICT: o trigger
   // rejeita a UPDATE antes que qualquer pedido chegue a apontar para eles,
@@ -116,6 +183,79 @@ async function semear() {
     .returning('id')
     .executeTakeFirstOrThrow()
   idKit = kit.id
+
+  const cliente = await db
+    .insertInto('clientes')
+    .values({
+      nome: 'Comprador Pedido', email: EMAIL_COMPRADOR,
+      cpf: CPF_COMPRADOR, whatsapp: '11955554444',
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+  idCliente = cliente.id
+
+  const endereco = await db
+    .insertInto('enderecos')
+    .values({
+      cliente_id: idCliente, cep: '01310100', rua: 'Avenida Paulista',
+      numero: '1000', complemento: 'conj. 12', bairro: 'Bela Vista',
+      cidade: 'Sao Paulo', estado: 'SP',
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+  idEndereco = endereco.id
+
+  const vendedor = await db
+    .insertInto('usuarios')
+    .values({
+      nome: 'Vendedor Balcao', email: EMAIL_VENDEDOR,
+      senha_hash: SENHA_HASH_INERTE, papel: 'vendedor', ativo: true,
+    })
+    .returning('id')
+    .executeTakeFirstOrThrow()
+  idVendedor = vendedor.id
+}
+
+/**
+ * Molde de venda online completa para os testes NOVOS.
+ *
+ * Os testes antigos continuam escrevendo os doze campos a mao de proposito:
+ * neles, cada campo E o assunto (atribuicao congelada, preco, subtotal). Nos
+ * testes de canal e de logistica o assunto e um campo so, e repetir os outros
+ * onze esconderia qual deles esta sendo provado.
+ */
+function vendaOnline(extra: Partial<EntradaPedido> = {}): EntradaPedido {
+  return {
+    origem: 'casa', canal: 'online',
+    representanteId: null, percentualComissao: null,
+    utmSource: null, utmMedium: null, utmCampaign: null,
+    desconto: deInteiro(0), frete: deInteiro(0),
+    clienteId: idCliente, enderecoId: idEndereco,
+    itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
+    ...extra,
+  }
+}
+
+/**
+ * Venda de balcao (§2): sem endereco — o comprador leva o kit na hora — e com
+ * o vendedor que operou a venda. As duas coisas sao exigidas/proibidas pelas
+ * constraints citadas no topo do arquivo.
+ */
+function vendaPresencial(extra: Partial<EntradaPedido> = {}): EntradaPedido {
+  return vendaOnline({
+    canal: 'presencial', vendedorId: idVendedor, enderecoId: null, ...extra,
+  })
+}
+
+/** Marca o pedido como pago sem passar pelo Mercado Pago. */
+async function marcarPago(id: string) {
+  // UPDATE cru de proposito: conciliarPagamento gravaria uma linha em
+  // `comissoes`, que e append-only e referencia o pedido com ON DELETE
+  // RESTRICT — o pedido deste arquivo nunca mais poderia ser apagado no
+  // semear() da rodada seguinte. Quem testa a conciliacao de verdade e
+  // src/repositories/__tests__/conciliacao.test.ts, que por isso mesmo nao
+  // apaga nada. Aqui interessa so o status.
+  await getDb().updateTable('pedidos').set({ status: 'pago' }).where('id', '=', id).execute()
 }
 
 describe('criacao de pedido com atribuicao congelada', () => {
@@ -133,6 +273,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       percentualComissao: 20,
       utmSource: 'instagram', utmMedium: 'bio', utmCampaign: 'lancamento',
       desconto: deInteiro(PRECO_KIT_CENTAVOS - 53973), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.representanteId).toBe(idMaria)
@@ -149,6 +290,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().updateTable('representantes')
@@ -165,6 +307,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.representanteId).toBeNull()
@@ -176,6 +319,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'rep_inativo', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.origem).toBe('rep_inativo')
@@ -186,6 +330,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })).rejects.toThrow(/pedido_origem_coerente/)
   })
@@ -199,15 +344,22 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 500,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })).rejects.toThrow(/pedido_percentual_snapshot_valido/)
   })
 
   it('o banco rejeita total que nao fecha com as parcelas', async () => {
     await expect(
+      // endereco_id preenchido mesmo num INSERT cru que existe para violar
+      // OUTRA constraint: sem ele a linha violaria DUAS
+      // (pedido_online_tem_endereco tambem), e qual das duas o Postgres
+      // reporta primeiro nao e garantido em lugar nenhum. A verificacao abaixo
+      // travaria por sorte. Este teste continua sendo sobre o total que nao
+      // fecha, e so sobre isso.
       getDb().insertInto('pedidos').values({
         origem: 'casa', subtotal_centavos: 10000, desconto_centavos: 0,
-        frete_centavos: 0, total_centavos: 9999,
+        frete_centavos: 0, total_centavos: 9999, endereco_id: idEndereco,
       }).execute(),
     ).rejects.toThrow(/pedido_total_confere/)
   })
@@ -216,7 +368,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
     await expect(
       getDb().insertInto('pedidos').values({
         origem: 'casa', subtotal_centavos: 1000, desconto_centavos: 2000,
-        frete_centavos: 0, total_centavos: 0,
+        frete_centavos: 0, total_centavos: 0, endereco_id: idEndereco,
       }).execute(),
     ).rejects.toThrow(/pedido_desconto_nao_excede/)
   })
@@ -226,6 +378,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await expect(
@@ -247,6 +400,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
+        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       const outro = await getDb().insertInto('representantes').values({
@@ -269,6 +423,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
+        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await expect(
@@ -284,6 +439,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'casa', representanteId: null, percentualComissao: null,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
+        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await expect(
@@ -299,6 +455,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
+        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await getDb().updateTable('pedidos')
@@ -317,6 +474,7 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
+        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       const outro = await getDb().insertInto('representantes').values({
@@ -354,6 +512,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 3, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.subtotalCentavos).toBe(PRECO_KIT_CENTAVOS * 3)
@@ -371,6 +530,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     const itens = await getDb().selectFrom('pedido_itens')
@@ -393,6 +553,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: precoAdulterado }],
       // O contrato e o TIPO do erro, nao o texto: a rota decide o codigo
       // HTTP com `instanceof PrecoDivergenteError`, entao reescrever a frase
@@ -412,6 +573,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().updateTable('kits')
@@ -428,6 +590,7 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0), itens: [],
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
     })).rejects.toThrow(/sem itens|pedido_subtotal_positivo/)
   })
 
@@ -444,6 +607,7 @@ describe('pedido com itens', () => {
         await trx.insertInto('pedidos').values({
           origem: 'casa', subtotal_centavos: 123456,
           desconto_centavos: 0, frete_centavos: 0, total_centavos: 123456,
+          endereco_id: idEndereco,
         }).execute()
       }),
     ).rejects.toThrow(/pedido_itens_obrigatorios/)
@@ -458,6 +622,7 @@ describe('pedido com itens', () => {
         const pedido = await trx.insertInto('pedidos').values({
           origem: 'casa', subtotal_centavos: 999999,
           desconto_centavos: 0, frete_centavos: 0, total_centavos: 999999,
+          endereco_id: idEndereco,
         }).returning('id').executeTakeFirstOrThrow()
         await trx.insertInto('pedido_itens').values({
           pedido_id: pedido.id, kit_id: idKit, nome_snapshot: NOME_KIT,
@@ -473,11 +638,465 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
+      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().deleteFrom('pedidos').where('id', '=', p.id).execute()
     const restantes = await getDb().selectFrom('pedido_itens')
       .selectAll().where('pedido_id', '=', p.id).execute()
     expect(restantes).toHaveLength(0)
+  })
+})
+
+// CANAL E O EIXO NOVO DO PLANO 4 (§2, §10, §17). Ele nao substitui `origem`,
+// que continua sendo atribuicao de comissao — os dois convivem na mesma linha
+// e o cabecalho de migrations/1755300100000_pedidos_canal_logistica.sql explica
+// por que juntar os dois num ENUM so teria quebrado a comissao.
+describe('canal da venda, vendedor de balcao e colunas de logistica', () => {
+  beforeEach(semear)
+  afterAll(async () => { await closeDb() })
+
+  it('cria venda online com endereco e sem vendedor', async () => {
+    const p = await criar(vendaOnline({ prazoDiasEstimado: 7 }))
+
+    expect(p.canal).toBe('online')
+    expect(p.vendedorId).toBeNull()
+    expect(p.prazoDiasEstimado).toBe(7)
+    // As tres colunas de logistica nascem vazias: elas sao preenchidas depois,
+    // conforme a entrega anda, e um valor nascendo aqui significaria que algum
+    // caminho esta chutando dado de entrega na criacao do pedido.
+    expect(p.rastreioCodigo).toBeNull()
+    expect(p.rastreioTransportadora).toBeNull()
+    expect(p.enviadoEm).toBeNull()
+  })
+
+  it('cria venda presencial com vendedor e sem endereco', async () => {
+    const p = await criar(vendaPresencial())
+
+    expect(p.canal).toBe('presencial')
+    expect(p.vendedorId).toBe(idVendedor)
+
+    // Relido do banco, e nao so do objeto devolvido: o que importa e a linha
+    // gravada, porque e dela que sai o relatorio de §17 e a baixa do estoque
+    // presencial (teto rigido de 50, §4).
+    const relido = await getDb().selectFrom('pedidos')
+      .select(['canal', 'endereco_id', 'vendedor_id'])
+      .where('id', '=', p.id).executeTakeFirstOrThrow()
+    expect(relido.canal).toBe('presencial')
+    expect(relido.endereco_id).toBeNull()
+    expect(relido.vendedor_id).toBe(idVendedor)
+  })
+
+  it('o banco rejeita venda presencial sem vendedor', async () => {
+    await expect(criar(vendaPresencial({ vendedorId: null })))
+      .rejects.toThrow(/pedido_presencial_tem_vendedor/)
+  })
+
+  it('o banco rejeita venda online sem endereco de entrega', async () => {
+    await expect(criar(vendaOnline({ enderecoId: null })))
+      .rejects.toThrow(/pedido_online_tem_endereco/)
+  })
+
+  it('o banco rejeita prazo de entrega zero', async () => {
+    // Zero nao e "prazo desconhecido", e leitura errada da resposta da cotacao
+    // (src/lib/frete.ts prefere lancar CotacaoIlegivelError a chutar). Sem esta
+    // constraint, a pagina do comprador anunciaria "entrega em 0 dias".
+    await expect(criar(vendaOnline({ prazoDiasEstimado: 0 })))
+      .rejects.toThrow(/pedido_prazo_valido/)
+  })
+
+  // O trigger ganhou duas colunas novas no Plano 4. Os testes de
+  // representante_id/percentual/total mais acima provam a versao antiga; estes
+  // dois provam que a REESCRITA da funcao (migrations/1755300100000 e
+  // 1755300300000, que copiam a funcao inteira em vez de estende-la) nao
+  // deixou nada para tras.
+  it('o trigger congela o canal contra UPDATE', async () => {
+    const p = await criar(vendaOnline())
+    await expect(
+      getDb().updateTable('pedidos')
+        .set({ canal: 'presencial' })
+        .where('id', '=', p.id)
+        .execute(),
+    ).rejects.toThrow(/pedido_atribuicao_imutavel/)
+  })
+
+  it('o trigger congela o vendedor contra UPDATE', async () => {
+    // Reatribuir a venda de um vendedor para outro reescreveria o relatorio do
+    // evento depois do fato — e, como em representante_id, faria o ON DELETE
+    // RESTRICT deixar de enxergar a dependencia, liberando a exclusao da conta
+    // que de fato vendeu.
+    const p = await criar(vendaOnline())
+    await expect(
+      getDb().updateTable('pedidos')
+        .set({ vendedor_id: idVendedor })
+        .where('id', '=', p.id)
+        .execute(),
+    ).rejects.toThrow(/pedido_atribuicao_imutavel/)
+  })
+
+  it('rastreio e prazo NAO sao congelados: a logistica escreve depois', async () => {
+    // O contraponto obrigatorio dos dois testes acima. Se estas colunas
+    // tivessem entrado na lista de congeladas por descuido, /admin/logistica
+    // nao conseguiria gravar codigo de rastreio nenhum e o erro so apareceria
+    // com o primeiro pedido a postar.
+    const p = await criar(vendaOnline({ prazoDiasEstimado: 5 }))
+
+    await registrarRastreio(p.id, { codigo: 'AA123456789BR', transportadora: 'Correios' })
+    await getDb().updateTable('pedidos')
+      .set({ prazo_dias_estimado: 9 }).where('id', '=', p.id).execute()
+
+    const relido = await getDb().selectFrom('pedidos')
+      .select(['rastreio_codigo', 'rastreio_transportadora', 'prazo_dias_estimado', 'status'])
+      .where('id', '=', p.id).executeTakeFirstOrThrow()
+    expect(relido.rastreio_codigo).toBe('AA123456789BR')
+    expect(relido.rastreio_transportadora).toBe('Correios')
+    expect(relido.prazo_dias_estimado).toBe(9)
+    // registrarRastreio NAO move o status: postar e outra acao, com outra
+    // garantia. Se as duas estivessem juntas, corrigir um digito do codigo
+    // re-carimbaria enviado_em.
+    expect(relido.status).toBe('pendente')
+  })
+
+  it('registrarRastreio recusa pedido inexistente em vez de nao fazer nada', async () => {
+    // UPDATE que nao acha linha e sucesso silencioso para o Kysely, e a rota
+    // do painel responderia 200 para um id que nao existe.
+    await expect(
+      registrarRastreio(randomUUID(), { codigo: 'AA000000000BR', transportadora: 'Correios' }),
+    ).rejects.toThrow()
+  })
+})
+
+describe('avancarStatusDoPedido', () => {
+  beforeEach(semear)
+  afterAll(async () => { await closeDb() })
+
+  // A transacao e OBRIGATORIA na assinatura (o lock precisa viver ate o COMMIT
+  // do chamador), entao todo teste abre a sua — mesmo molde de
+  // conciliacao.test.ts.
+  const avancar = (id: string, novo: PedidoStatus, agora?: Date) =>
+    getDb().transaction().execute((trx) => avancarStatusDoPedido(id, novo, trx, agora))
+
+  const relerPedido = (id: string) =>
+    getDb().selectFrom('pedidos')
+      .select(['status', 'enviado_em', 'entregue_em'])
+      .where('id', '=', id).executeTakeFirstOrThrow()
+
+  it('transicao inexistente lanca TransicaoInvalidaError e nao move o pedido', async () => {
+    const p = await criar(vendaOnline())
+
+    // 'pendente' vai para aguardando_pagamento, pago ou cancelado — nunca
+    // direto para o meio da entrega. O contrato asseverado e a CLASSE, nao a
+    // frase: a rota do painel despacha por instanceof e reescrever o texto do
+    // throw nao pode virar 500 em silencio.
+    await expect(avancar(p.id, 'em_transito')).rejects.toThrow(TransicaoInvalidaError)
+
+    expect((await relerPedido(p.id)).status).toBe('pendente')
+  })
+
+  // §2: "comprou → pagou → levou na hora". Esta aresta era PROIBIDA ate o
+  // Plano 3 e foi aberta de proposito em src/lib/pedido-status.ts.
+  it('venda presencial vai de pago direto a entregue e carimba entregue_em', async () => {
+    const p = await criar(vendaPresencial())
+    await marcarPago(p.id)
+    const balcao = new Date('2026-08-25T18:30:00Z')
+
+    const r = await avancar(p.id, 'entregue', balcao)
+    expect(r).toEqual({ mudou: true, de: 'pago', para: 'entregue' })
+
+    const relido = await relerPedido(p.id)
+    expect(relido.status).toBe('entregue')
+    // ATE ESTE PLANO, entregue_em NAO TINHA ESCRITOR NENHUM em todo o codigo:
+    // a coluna existe desde migrations/1754900300000_pedidos.sql e nunca
+    // recebeu valor. Esta linha e a primeira verificacao de que ela e preenchida.
+    expect(relido.entregue_em?.getTime()).toBe(balcao.getTime())
+    // Venda de balcao nunca foi postada: enviado_em fica NULL para sempre, e e
+    // isso que impede a fila da expedicao de contar os 50 kits do evento como
+    // objetos a despachar.
+    expect(relido.enviado_em).toBeNull()
+  })
+
+  it('avancar duas vezes para o mesmo status devolve mudou false e mantem o carimbo original', async () => {
+    const p = await criar(vendaPresencial())
+    await marcarPago(p.id)
+    const primeiroClique = new Date('2026-08-25T18:30:00Z')
+    const segundoClique = new Date('2026-08-25T19:45:00Z')
+
+    await avancar(p.id, 'entregue', primeiroClique)
+    const segunda = await avancar(p.id, 'entregue', segundoClique)
+
+    // Clique duplo no balcao e rotina, nao erro: transformar isso em excecao
+    // ensinaria a operacao a ignorar tela vermelha justamente no dia em que
+    // uma tela vermelha vai importar.
+    expect(segunda).toEqual({ mudou: false, de: 'entregue', para: 'entregue' })
+
+    const relido = await relerPedido(p.id)
+    // A data que vale e a da entrega de verdade, nao a do segundo clique.
+    expect(relido.entregue_em?.getTime()).toBe(primeiroClique.getTime())
+  })
+
+  it('o caminho dos Correios carimba enviado_em na postagem e entregue_em na entrega', async () => {
+    const p = await criar(vendaOnline())
+    await marcarPago(p.id)
+    const postagem = new Date('2026-08-26T12:00:00Z')
+    const entrega = new Date('2026-08-29T09:00:00Z')
+
+    await avancar(p.id, 'enviado', postagem)
+    // 'em_transito' e o valor novo do ENUM
+    // (migrations/1755300200000_status_em_transito.sql). Passar por ele NAO
+    // pode re-carimbar enviado_em: o objeto foi postado uma vez so.
+    const transito = await avancar(p.id, 'em_transito')
+    expect(transito).toEqual({ mudou: true, de: 'enviado', para: 'em_transito' })
+    await avancar(p.id, 'entregue', entrega)
+
+    const relido = await relerPedido(p.id)
+    expect(relido.status).toBe('entregue')
+    expect(relido.enviado_em?.getTime()).toBe(postagem.getTime())
+    expect(relido.entregue_em?.getTime()).toBe(entrega.getTime())
+  })
+
+  // DINHEIRO: o painel move a caixa, nunca o caixa.
+  it('DINHEIRO: recusa a transicao que mexeria na comissao sem passar pela conciliacao', async () => {
+    const p = await criar(vendaOnline())
+    await marcarPago(p.id)
+
+    // 'pago' -> 'reembolsado' EXISTE na maquina de estados (a conciliacao usa
+    // essa aresta o tempo todo), entao isto nao e TransicaoInvalidaError. O
+    // problema e outro: quem escreve no livro-razao e conciliarPagamento, e um
+    // reembolso marcado aqui deixaria o credito da representante parado no
+    // saldo — pior, o webhook de estorno que chegasse depois encontraria o
+    // pedido JA em 'reembolsado' e viraria no-op. O clique no painel engoliria
+    // a correcao automatica.
+    await expect(avancar(p.id, 'reembolsado')).rejects.toThrow(TransicaoFinanceiraError)
+    expect((await relerPedido(p.id)).status).toBe('pago')
+
+    // Mesma regra pelo outro lado: marcar pago na mao e declarar venda sem
+    // confirmacao do provedor, que a decisao do cliente de 16/08 proibiu por
+    // escrito (§4 do plano) — e o credito de comissao tambem nao sairia.
+    const outro = await criar(vendaOnline())
+    await expect(avancar(outro.id, 'pago')).rejects.toThrow(TransicaoFinanceiraError)
+    expect((await relerPedido(outro.id)).status).toBe('pendente')
+  })
+
+  it('cancelar pedido que nunca foi pago continua permitido', async () => {
+    // O contraponto do teste acima: cancelar carrinho abandonado nao gera
+    // estorno de comissao nenhum (geraEstornoDeComissao exige ter estado
+    // pago), entao a recusa financeira NAO pode alcancar este caso — senao a
+    // operacao ficaria sem como limpar pedido que ninguem pagou.
+    const p = await criar(vendaOnline())
+    const r = await avancar(p.id, 'cancelado')
+    expect(r).toEqual({ mudou: true, de: 'pendente', para: 'cancelado' })
+  })
+
+  it('pedido inexistente lanca em vez de devolver mudou false', async () => {
+    await expect(avancar(randomUUID(), 'cancelado')).rejects.toThrow()
+  })
+
+  // A PROVA DE QUE O `FOR UPDATE` E CARGA, NAO DECORACAO — mesmo desenho do
+  // teste de concorrencia de conciliacao.test.ts, e pelo mesmo motivo: um
+  // `Promise.all` continuaria verde com o `.forUpdate()` removido, porque as
+  // duas transacoes acabam serializando sozinhas pelo escalonamento do event
+  // loop.
+  //
+  // Aqui a corrida nao e do webhook, e de duas pessoas com o painel aberto no
+  // dia do evento clicando "marcar como enviado" no mesmo pedido. COM o lock,
+  // B bloqueia no SELECT ate A commitar, le 'enviado' e vira no-op. SEM o
+  // lock, B le 'pago', enxerga enviado_em NULL (o valor velho) e grava o
+  // PROPRIO carimbo por cima — a data de postagem do pedido passaria a ser a
+  // do segundo clique, que e o numero de onde sai a discussao de prazo com a
+  // transportadora.
+  it('transicao concorrente bloqueia no lock e nao re-carimba a data de postagem', async () => {
+    const p = await criar(vendaOnline())
+    await marcarPago(p.id)
+
+    const postagemDeA = new Date('2026-08-26T12:00:00Z')
+    const postagemDeB = new Date('2026-08-27T12:00:00Z')
+
+    let liberarA!: () => void
+    const aPodeCommitar = new Promise<void>((r) => { liberarA = r })
+    let sinalizarQueAEscreveu!: () => void
+    const aJaEscreveu = new Promise<void>((r) => { sinalizarQueAEscreveu = r })
+
+    const a = getDb().transaction().execute(async (trx) => {
+      const r = await avancarStatusDoPedido(p.id, 'enviado', trx, postagemDeA)
+      sinalizarQueAEscreveu()
+      await aPodeCommitar
+      return r
+    })
+
+    await aJaEscreveu
+    const b = getDb().transaction().execute((trx) =>
+      avancarStatusDoPedido(p.id, 'enviado', trx, postagemDeB))
+
+    // ESTA PAUSA E O QUE DA SENTIDO AO TESTE. `b` acima e so uma Promise
+    // criada: nada garante que a transacao dela ja tenha chegado a emitir o
+    // SELECT. Sem a pausa, liberarA() rodaria antes disso, A commitaria, e B
+    // leria 'enviado' de qualquer jeito — inclusive sem lock nenhum.
+    await new Promise((r) => setTimeout(r, 300))
+
+    liberarA()
+    const resultadoA = await a
+    const resultadoB = await b
+
+    expect(resultadoA.mudou).toBe(true)
+    expect(resultadoB.mudou).toBe(false)
+    expect(resultadoB.de).toBe('enviado')
+
+    const relido = await relerPedido(p.id)
+    expect(relido.enviado_em?.getTime()).toBe(postagemDeA.getTime())
+  })
+})
+
+// AS LEITURAS DO PAINEL (§17). Todas leem a tabela INTEIRA, inclusive os
+// pedidos que os outros arquivos de teste estao criando em paralelo contra o
+// mesmo Postgres. Por isso nenhuma verificacao aqui usa toHaveLength nem compara
+// um total absoluto: cada teste localiza as PROPRIAS linhas por id ou pelo
+// e-mail exclusivo deste arquivo. Onde o numero absoluto seria a coisa
+// interessante (resumoDeVendas), o que da para assegurar sem corrida e a
+// invariante do calculo — e o teste diz isso por extenso.
+describe('leituras administrativas do painel', () => {
+  beforeEach(semear)
+  afterAll(async () => { await closeDb() })
+
+  it('listarVendasAdmin traz itens formatados, vendedor e o metodo do pagamento aprovado', async () => {
+    const p = await criar(vendaPresencial({
+      itens: [{ kitId: idKit, quantidade: 2, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
+    }))
+    await marcarPago(p.id)
+
+    // ORDEM DELIBERADA: o pagamento APROVADO entra PRIMEIRO e a tentativa
+    // recusada depois. Se a consulta simplesmente pegasse a tentativa mais
+    // recente, este teste ficaria vermelho — e e exatamente esse o erro que
+    // faria a tela dizer "cartao" para uma venda recebida em Pix.
+    await getDb().insertInto('pagamentos').values({
+      pedido_id: p.id, metodo: 'pix',
+      valor_centavos: PRECO_KIT_CENTAVOS * 2, status: 'aprovado',
+    }).execute()
+    await getDb().insertInto('pagamentos').values({
+      pedido_id: p.id, metodo: 'cartao',
+      valor_centavos: PRECO_KIT_CENTAVOS * 2, status: 'recusado',
+    }).execute()
+
+    const minha = (await listarVendasAdmin({ canal: 'presencial' })).find((v) => v.id === p.id)
+    expect(minha).toBeDefined()
+    expect(minha!.itens).toBe(`2x ${NOME_KIT}`)
+    expect(minha!.quantidade).toBe(2)
+    // DINHEIRO: o total tem que ser o do PEDIDO, nao a soma inflada por um
+    // join com as duas tentativas de pagamento (seriam 4 linhas com os 2
+    // itens).
+    expect(minha!.totalCentavos).toBe(PRECO_KIT_CENTAVOS * 2)
+    expect(minha!.metodoPagamento).toBe('pix')
+    expect(minha!.vendedorNome).toBe('Vendedor Balcao')
+    expect(minha!.clienteEmail).toBe(EMAIL_COMPRADOR)
+    expect(minha!.canal).toBe('presencial')
+  })
+
+  it('listarVendasAdmin filtra por canal', async () => {
+    const online = await criar(vendaOnline())
+    const balcao = await criar(vendaPresencial())
+
+    const presenciais = await listarVendasAdmin({ canal: 'presencial' })
+    expect(presenciais.some((v) => v.id === balcao.id)).toBe(true)
+    expect(presenciais.some((v) => v.id === online.id)).toBe(false)
+
+    const onlines = await listarVendasAdmin({ canal: 'online' })
+    expect(onlines.some((v) => v.id === online.id)).toBe(true)
+    expect(onlines.some((v) => v.id === balcao.id)).toBe(false)
+  })
+
+  it('LGPD: nenhuma leitura do painel carrega o CPF do comprador', async () => {
+    // CPF mora na MESMA linha de `clientes` que o nome e o e-mail que estas
+    // telas legitimamente mostram — um `.selectAll('clientes')` traria os tres
+    // de uma vez, e a resposta de /api/admin/* passaria a exportar uma base de
+    // CPF. E por isso que as tres consultas nomeiam as colunas uma a uma; esta
+    // verificacao e o que fica vermelho no dia em que alguem "simplificar".
+    const p = await criar(vendaOnline())
+    await marcarPago(p.id)
+
+    const venda = (await listarVendasAdmin()).find((v) => v.id === p.id)
+    expect(venda).toBeDefined()
+    expect(Object.keys(venda!)).not.toContain('cpf')
+    expect(JSON.stringify(venda)).not.toContain(CPF_COMPRADOR)
+
+    const comprador = (await listarCompradores()).find((c) => c.email === EMAIL_COMPRADOR)
+    expect(comprador).toBeDefined()
+    expect(JSON.stringify(comprador)).not.toContain(CPF_COMPRADOR)
+
+    const linha = (await listarLogisticaAdmin()).find((l) => l.id === p.id)
+    expect(linha).toBeDefined()
+    expect(JSON.stringify(linha)).not.toContain(CPF_COMPRADOR)
+  })
+
+  it('listarLogisticaAdmin traz o pedido a despachar e ignora a venda de balcao', async () => {
+    const online = await criar(vendaOnline({ prazoDiasEstimado: 5 }))
+    const balcao = await criar(vendaPresencial())
+    await marcarPago(online.id)
+    await marcarPago(balcao.id)
+    await registrarRastreio(online.id, { codigo: 'AA123456789BR', transportadora: 'Correios' })
+
+    const fila = await listarLogisticaAdmin()
+
+    const linha = fila.find((l) => l.id === online.id)
+    expect(linha).toBeDefined()
+    expect(linha!.cep).toBe('01310100')
+    // O numero do ENDERECO, que no tipo se chama numero_ para nao colidir com
+    // o numero do PEDIDO. Os dois aparecem na mesma linha de uma etiqueta.
+    expect(linha!.numero_).toBe('1000')
+    expect(linha!.numero).toBe(online.numero)
+    expect(linha!.rastreioCodigo).toBe('AA123456789BR')
+    expect(linha!.rastreioTransportadora).toBe('Correios')
+    expect(linha!.prazoDiasEstimado).toBe(5)
+
+    // A venda de balcao nao tem endereco (§10) e nao ha o que despachar: se
+    // ela aparecesse, os 50 kits do evento entrariam na fila da expedicao como
+    // 50 linhas em branco na frente dos pedidos que precisam ser postados.
+    expect(fila.some((l) => l.id === balcao.id)).toBe(false)
+  })
+
+  it('listarLogisticaAdmin ignora pedido que ainda nao foi pago', async () => {
+    const p = await criar(vendaOnline())
+    expect((await listarLogisticaAdmin()).some((l) => l.id === p.id)).toBe(false)
+  })
+
+  it('listarCompradores conta so o pedido pago e nao o carrinho abandonado', async () => {
+    // Determinista mesmo com os outros arquivos rodando em paralelo: o e-mail
+    // e exclusivo deste arquivo e o semear() apaga os pedidos dele antes de
+    // cada teste, entao a linha agregada abaixo so pode ter vindo daqui.
+    const pago = await criar(vendaOnline())
+    await marcarPago(pago.id)
+    await criar(vendaOnline()) // fica em 'pendente': ninguem pagou
+
+    const comprador = (await listarCompradores()).find((c) => c.email === EMAIL_COMPRADOR)
+    expect(comprador).toBeDefined()
+    expect(comprador!.nome).toBe('Comprador Pedido')
+    expect(comprador!.pedidos).toBe(1)
+    expect(comprador!.totalCentavos).toBe(PRECO_KIT_CENTAVOS)
+  })
+
+  it('DINHEIRO: resumoDeVendas fecha o total do topo com a soma por canal', async () => {
+    const balcao = await criar(vendaPresencial())
+    await marcarPago(balcao.id)
+    await getDb().insertInto('pagamentos').values({
+      pedido_id: balcao.id, metodo: 'pix',
+      valor_centavos: PRECO_KIT_CENTAVOS, status: 'aprovado',
+    }).execute()
+
+    const r = await resumoDeVendas()
+
+    // A INVARIANTE, que vale com qualquer quantidade de linhas de outros
+    // arquivos no banco: o numero grande do topo da tela e SOMADO das linhas
+    // por canal, em JavaScript, justamente para nao poder divergir delas. Duas
+    // consultas separadas rodariam em instantes diferentes e uma venda que
+    // entrasse no meio faria a tela do dono da empresa nao fechar sozinha.
+    expect(r.pedidosPagos).toBe(r.porCanal.reduce((acc, c) => acc + c.pedidos, 0))
+    expect(r.faturamentoCentavos).toBe(r.porCanal.reduce((acc, c) => acc + c.totalCentavos, 0))
+
+    const presencial = r.porCanal.find((c) => c.canal === 'presencial')
+    expect(presencial).toBeDefined()
+    expect(presencial!.pedidos).toBeGreaterThanOrEqual(1)
+    expect(presencial!.totalCentavos).toBeGreaterThanOrEqual(PRECO_KIT_CENTAVOS)
+
+    const pix = r.porMetodo.find((m) => m.metodo === 'pix')
+    expect(pix).toBeDefined()
+    expect(pix!.pedidos).toBeGreaterThanOrEqual(1)
   })
 })

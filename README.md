@@ -61,6 +61,19 @@ Docker; os valores prontos estao no `.env.example`.
 | `npm run db:up` | Sobe o Postgres local (docker compose) |
 | `npm run db:migrate` | Aplica as migrations pendentes |
 | `npm run db:types` | Regenera os tipos do banco |
+| `npm run usuario:criar` | Cria (ou troca a senha de) um operador do painel/balcao |
+
+Criar o primeiro administrador — a senha e pedida pelo terminal, com eco
+desligado, e **nunca** aceita por argumento (argumento fica no historico do
+shell e na lista de processos):
+
+```bash
+npm run usuario:criar -- --nome "Marcos" --email admin@exemplo.com --papel admin
+```
+
+Papeis: `admin` (painel `/admin` + tudo do vendedor) e `vendedor` (balcao
+`/venda`). Rodar de novo para o mesmo e-mail troca a senha e derruba as
+sessoes abertas daquela pessoa.
 
 Os testes rodam **contra o Postgres real**, nao contra mock: as garantias
 que mais importam aqui (unicidade, CHECK, triggers de imutabilidade) sao do

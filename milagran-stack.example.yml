@@ -43,6 +43,41 @@ services:
       - EMAIL_FROM=
       - EMAIL_TO=
       - ENVIAR_CONFIRMACAO=false
+      # Mercado Pago. ATE 16/08/2026 ESTAS QUATRO NAO EXISTIAM AQUI, e o
+      # efeito era silencioso e total: o container subia, a loja aparecia, o
+      # comprador chegava ate /pedido/<token> e a tela dizia "o pagamento
+      # ainda esta sendo liberado" -- porque MERCADOPAGO_PUBLIC_KEY vinha
+      # vazia. Nao havia erro em log nenhum. Pagamento estava morto no ar.
+      #
+      # O PREFIXO DO ACCESS TOKEN DECIDE O AMBIENTE (TEST- = sandbox,
+      # APP_USR- = producao). Nao existe flag separada; trocar de sandbox
+      # para producao e trocar o valor em /root/.milagran-mp-access-token e
+      # rodar este gerador de novo.
+      - MERCADOPAGO_ACCESS_TOKEN=
+      - MERCADOPAGO_PUBLIC_KEY=
+      # Sem este segredo, POST /api/webhooks/mercadopago RECUSA tudo com 503
+      # de proposito: sem assinatura nao ha como distinguir notificacao
+      # legitima de POST forjado, e um forjado marcaria pedido como pago.
+      # Consequencia de deixar vazio: nenhum pagamento e conciliado, nenhum
+      # estoque e baixado, nenhuma comissao e creditada.
+      - MERCADOPAGO_WEBHOOK_SECRET=
+      # Monta a notification_url enviada ao Mercado Pago e o link do e-mail de
+      # confirmacao. Fixo no modelo, e nao parametro do gerador, pela mesma
+      # razao do dominio nas labels do Traefik (ver o cabecalho de
+      # deploy/make-milagran-stack.sh). Precisa ser o APEX, nunca www: o
+      # cookie de atribuicao usa o prefixo __Host-, que nao atravessa
+      # subdominio -- em www a venda perde o representante.
+      - APP_URL=https://milagranoficial.com.br
+      # Frete (Clube Envios). Vazias, a cotacao lanca FreteNaoConfiguradoError
+      # e /api/frete responde 503 com mensagem legivel -- o checkout online
+      # PARA, de proposito. Nunca cai para frete zero: ver o cabecalho de
+      # src/components/linha-frete.tsx. A venda presencial nao depende destas.
+      - CLUBE_ENVIOS_TOKEN=
+      - CLUBE_ENVIOS_CLIENTE_ID=
+      - CEP_ORIGEM_EXPEDICAO=
+      # Vazia = producao (https://apis.clubeenvios.com.br). Preencher so para
+      # apontar a homologacao (https://apishmg.clubeenvios.com.br).
+      - CLUBE_ENVIOS_BASE_URL=
       - NODE_ENV=production
       - PORT=3000
       - TZ=America/Sao_Paulo

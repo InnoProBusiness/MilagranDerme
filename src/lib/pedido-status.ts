@@ -65,9 +65,37 @@ const TRANSICOES: Record<PedidoStatus, readonly PedidoStatus[]> = {
   aguardando_pagamento: ['pago', 'pendente', 'cancelado'],
   // Depois de pago, o dinheiro so sai por reembolso — nunca por
   // 'cancelado', que nao move o livro-razao de comissao da mesma forma.
-  pago: ['em_preparacao', 'enviado', 'reembolsado'],
+  //
+  // MUDANCA DELIBERADA DE REGRA (16/08/2026). Ate aqui esta lista era
+  // ['em_preparacao', 'enviado', 'reembolsado'] e 'pago' -> 'entregue' era
+  // PROIBIDO de proposito: no fluxo online, um pedido que pulasse de pago a
+  // entregue sem passar por 'enviado' seria quase sempre um clique errado no
+  // painel, e a proibicao pegava esse erro.
+  //
+  // O documento do cliente de 16/08/2026 (§2) criou um segundo fluxo em que o
+  // pulo e o caminho CERTO: na venda presencial do evento e "comprou → pagou →
+  // levou na hora". Nao ha separacao, nao ha postagem, nao ha transportadora —
+  // o comprador sai do balcao com o kit na mao, e o pedido tem que registrar
+  // isso no mesmo minuto em que o webhook confirma o pagamento. Sem esta
+  // aresta, a operacao do evento teria que mentir passando por 'enviado' para
+  // conseguir marcar 'entregue', e o relatorio de logistica passaria a contar
+  // como postados kits que nunca viram os Correios.
+  //
+  // O que a mudanca CUSTA: o painel online perde aquela rede de protecao
+  // contra o clique errado. Quem quiser recupera-la tem que faze-lo olhando
+  // pedidos.canal (migrations/1755300100000_pedidos_canal_logistica.sql), e
+  // nao removendo a aresta daqui — remover quebra a venda presencial inteira.
+  pago: ['em_preparacao', 'enviado', 'entregue', 'reembolsado'],
   em_preparacao: ['enviado', 'reembolsado'],
-  enviado: ['entregue', 'reembolsado'],
+  // 'enviado' -> 'entregue' continua direto, alem do caminho por
+  // 'em_transito': nem toda transportadora emite o evento intermediario, e o
+  // pedido que chega ao destino sem ele nao pode ficar preso em 'enviado'.
+  enviado: ['em_transito', 'entregue', 'reembolsado'],
+  // Nao ha volta de 'em_transito' para 'enviado'. O rastreio pode oscilar
+  // (objeto que retorna a um centro de distribuicao continua em transito), e
+  // regredir o status por causa disso trocaria a tela do comprador para tras
+  // sem que nada de real tenha acontecido.
+  em_transito: ['entregue', 'reembolsado'],
   entregue: ['reembolsado'],
   cancelado: [],
   reembolsado: [],
@@ -134,8 +162,82 @@ export function geraCreditoDeComissao(de: PedidoStatus, para: PedidoStatus): boo
 /**
  * O pedido acabou de sair de um estado pago para um que desfaz a venda?
  * O credito precisa ser revertido no livro-razao.
+ *
+ * 'em_transito' entrou na lista junto com o valor novo do ENUM
+ * (migrations/1755300200000_status_em_transito.sql): ele e um estado tao pago
+ * quanto 'enviado', e um chargeback que chegue com o objeto na rua tem que
+ * estornar a comissao igual. Esquecer um estado aqui nao quebra nada de forma
+ * visivel — so deixa credito de venda desfeita parado no saldo do
+ * representante, que e dinheiro pago por venda que nao existe.
  */
 export function geraEstornoDeComissao(de: PedidoStatus, para: PedidoStatus): boolean {
-  const estavaPago = de === 'pago' || de === 'em_preparacao' || de === 'enviado' || de === 'entregue'
+  const estavaPago = de === 'pago' || de === 'em_preparacao' || de === 'enviado'
+    || de === 'em_transito' || de === 'entregue'
   return estavaPago && (para === 'reembolsado' || para === 'cancelado')
+}
+
+/**
+ * O que a tela de acompanhamento do comprador diz sobre cada status.
+ *
+ * FONTE UNICA, pelo mesmo motivo de src/components/linha-frete.tsx: estes
+ * textos vinham de um mapa `ROTULOS` local dentro de
+ * src/app/pedido/[token]/page.tsx, e a partir de agora as telas de admin (§17)
+ * e o balcao do evento (§10) mostram os mesmos estados. Tres copias do mapa
+ * divergem na primeira vez que alguem reescrever uma frase em uma delas, e o
+ * comprador que ligar para a Milagran ouviria da operacao uma descricao
+ * diferente da que esta lendo na propria tela.
+ *
+ * As `descricao` absorveram tambem os dois blocos `confirmacao__aviso` que a
+ * pagina escrevia na mao para 'pago' e 'reembolsado' — os textos estao aqui
+ * palavra por palavra para que a migracao daquela pagina nao perca nada.
+ *
+ * Os sete primeiros sao os estados de §12; 'cancelado' e 'reembolsado'
+ * completam o ENUM. O tipo Record<PedidoStatus, ...> e o que garante a
+ * cobertura: um valor novo no ENUM pedido_status quebra o build aqui em vez de
+ * renderizar `undefined` na tela do comprador.
+ *
+ * Texto voltado ao comprador: acentuacao completa.
+ */
+export const ROTULOS_STATUS: Record<PedidoStatus, { titulo: string; descricao: string }> = {
+  pendente: {
+    titulo: 'Aguardando pagamento',
+    descricao: 'Recebemos o seu pedido. Finalize o pagamento para garantir o seu kit.',
+  },
+  aguardando_pagamento: {
+    titulo: 'Aguardando confirmação do pagamento',
+    descricao: 'O pagamento foi iniciado e estamos aguardando a confirmação do provedor. No Pix isso costuma levar poucos minutos.',
+  },
+  pago: {
+    titulo: 'Pagamento confirmado',
+    descricao: 'Pagamento confirmado. Você receberá um e-mail com os detalhes e avisaremos assim que o pedido for enviado.',
+  },
+  em_preparacao: {
+    titulo: 'Em preparação',
+    descricao: 'Seu kit está sendo separado e embalado para o envio.',
+  },
+  enviado: {
+    titulo: 'Enviado',
+    descricao: 'Seu pedido foi postado e já saiu da nossa expedição.',
+  },
+  em_transito: {
+    titulo: 'Em trânsito',
+    descricao: 'Seu pedido está a caminho do endereço informado. Acompanhe pelo código de rastreio.',
+  },
+  entregue: {
+    titulo: 'Entregue',
+    descricao: 'Seu pedido foi entregue. Obrigado por comprar com a Milagran!',
+  },
+  cancelado: {
+    // "nenhum valor foi cobrado" so e verdade por causa da tabela TRANSICOES
+    // acima: 'pago' NAO vai para 'cancelado', e um pedido so chega a
+    // 'cancelado' vindo de 'pendente' ou 'aguardando_pagamento'. Se algum dia
+    // alguem abrir essa aresta, esta frase vira mentira para quem ja pagou —
+    // trocar as duas coisas no mesmo commit.
+    titulo: 'Cancelado',
+    descricao: 'Este pedido foi cancelado e nenhum valor foi cobrado.',
+  },
+  reembolsado: {
+    titulo: 'Reembolsado',
+    descricao: 'Este pedido foi reembolsado. O valor volta para a mesma forma de pagamento usada na compra, no prazo do seu banco.',
+  },
 }

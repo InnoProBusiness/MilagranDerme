@@ -35,6 +35,38 @@ export type EntradaEndereco = {
  * compra grava o endereco daquela compra, porque o pedido antigo tem que
  * continuar mostrando para onde foi entregue.
  *
+ * ENDERECO `null` = VENDA PRESENCIAL (§10 do documento de 16/08/2026): o
+ * balcao do evento nao pede endereco de entrega porque nao ha entrega nenhuma
+ * — o comprador paga e sai com o kit na mao. Nesse caso a funcao grava (ou
+ * atualiza) o cliente exatamente como sempre fez, nao toca em `enderecos` e
+ * devolve `enderecoId: null`. Quem chama com endereco continua com o
+ * comportamento anterior, linha por linha: uma linha nova em `enderecos` por
+ * compra.
+ *
+ * A alternativa — exigir endereco sempre e deixar a tela do vendedor inventar
+ * um ("Balcao do evento", CEP 00000000) — foi recusada por dois motivos, e
+ * vale escrever os dois porque o proximo a mexer aqui vai considerar de novo.
+ * Primeiro, o banco recusa: endereco_cep_digitos e endereco_uf_valida
+ * (migrations/1755000100000_clientes.sql) so aceitam 8 digitos e uma UF de
+ * verdade, entao o preenchimento teria que ser um CEP plausivel mas falso.
+ * Segundo, e o motivo que importa: um endereco forjado entra no cadastro de
+ * uma pessoa REAL e nao se distingue mais de um endereco que ela declarou. A
+ * tela de logistica (listarLogisticaAdmin, src/repositories/pedidos.ts) leria
+ * a venda de balcao como pedido com entrega pendente para um lugar que nao
+ * existe, e a expedicao gastaria tempo atras de um pacote que ninguem deve
+ * despachar.
+ *
+ * A COERENCIA ENTRE CANAL E ENDERECO NAO E DECIDIDA AQUI. Esta funcao aceita
+ * `null` de quem pedir; quem recusa a combinacao errada e o banco, pelo CHECK
+ * pedido_online_tem_endereco
+ * (migrations/1755300100000_pedidos_canal_logistica.sql): pedido com
+ * canal = 'online' e endereco_id NULL nao entra. Ou seja, passar `null` num
+ * fluxo online nao produz um pedido mudo sem entrega — produz um erro no
+ * INSERT de `pedidos`, dentro da mesma transacao, e o rollback leva o cliente
+ * junto. Hoje sao dois chamadores: src/app/api/pedidos/route.ts (online,
+ * sempre com endereco) e src/app/api/vendas-presenciais/route.ts (balcao,
+ * sempre `null`).
+ *
  * Se o e-mail ja pertence a um cliente cadastrado e o CPF enviado agora
  * diverge do CPF gravado, a funcao LANCA em vez de sobrescrever. CPF e
  * documento de identidade — uma caixa de e-mail de familia, um endereco
@@ -59,9 +91,9 @@ export type EntradaEndereco = {
  */
 export async function salvarClienteComEndereco(
   c: EntradaCliente,
-  e: EntradaEndereco,
+  e: EntradaEndereco | null,
   trx?: Transaction<DB>,
-): Promise<{ clienteId: string; enderecoId: string }> {
+): Promise<{ clienteId: string; enderecoId: string | null }> {
   const executar = async (t: Transaction<DB>) => {
     const existente = await t.selectFrom('clientes')
       .select(['id', 'cpf'])
@@ -85,11 +117,27 @@ export async function salvarClienteComEndereco(
       clienteId = novo.id
     }
 
-    const endereco = await t.insertInto('enderecos')
-      .values({ cliente_id: clienteId, ...e })
-      .returning('id').executeTakeFirstOrThrow()
+    // O INSERT e CONDICIONAL, e so ele: nada acima muda por causa do canal.
+    // Escrever isto como dois caminhos completos ("presencial faz X, online
+    // faz Y") duplicaria a busca por lower(email), a comparacao de CPF e o
+    // UPDATE de nome/whatsapp — e a proxima regra de identidade a mudar
+    // entraria em um dos dois ramos. CpfDivergenteError precisa valer igual
+    // no balcao e na loja: e no balcao, com fila e pressa, que alguem digita
+    // o e-mail de outra pessoa.
+    //
+    // `executeTakeFirstOrThrow` continua no ramo com endereco. Um INSERT que
+    // nao devolve linha e falha de infraestrutura, nao "cliente sem
+    // endereco" — o unico jeito de nao haver endereco e o chamador ter
+    // pedido `null`, explicitamente, la em cima.
+    let enderecoId: string | null = null
+    if (e !== null) {
+      const endereco = await t.insertInto('enderecos')
+        .values({ cliente_id: clienteId, ...e })
+        .returning('id').executeTakeFirstOrThrow()
+      enderecoId = endereco.id
+    }
 
-    return { clienteId, enderecoId: endereco.id }
+    return { clienteId, enderecoId }
   }
 
   if (trx) return executar(trx)

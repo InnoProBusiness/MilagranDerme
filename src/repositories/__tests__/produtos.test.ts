@@ -11,7 +11,10 @@ import { formatarBRL } from '@/lib/money'
 // DELETE aqui pode apagar o kit de baixo do pedidos.test.ts no meio de uma
 // insercao. Escopar por slug, como os outros arquivos ja fazem, evita as
 // duas colisoes.
-const SLUGS = ['kit-1', 'kit-3', 'kit-antigo', 'kit-carimbo', 'kit-gratis', 'kit-empate-a', 'kit-empate-z'] as const
+const SLUGS = [
+  'kit-1', 'kit-3', 'kit-antigo', 'kit-carimbo', 'kit-gratis',
+  'kit-empate-a', 'kit-empate-z', 'kit-dimensoes', 'kit-dimensao-invalida',
+] as const
 
 async function semear() {
   const db = getDb()
@@ -122,6 +125,91 @@ describe('repositorio de produtos', () => {
     expect(l.atualizado_em.getTime()).toBeGreaterThan(antigo.getTime())
   })
 
+  // Peso e dimensoes existem no cadastro por causa da cotacao de frete do
+  // Clube Envios (§13 do documento de 16/08/2026, src/lib/frete.ts): os
+  // quatro valores vao no corpo da requisicao e NAO podem ser inventados na
+  // rota. Por isso sobem por aqui, junto do preco.
+  it('DINHEIRO: as quatro dimensoes chegam do banco, cada uma na sua coluna', async () => {
+    // Quatro valores DIFERENTES entre si e diferentes dos DEFAULTs da
+    // migration (500 / 12 / 16 / 20), de proposito. Com valores iguais, ou
+    // iguais ao default, uma troca de largura com comprimento no mapeamento
+    // de paraKit() passaria despercebida — e trocar duas medidas muda o peso
+    // cubado, ou seja, muda o valor do frete cobrado do comprador.
+    await getDb().insertInto('kits').values({
+      slug: 'kit-dimensoes', nome: 'Kit com medidas', preco_centavos: 1000,
+      unidades: 1, sku: 'MG-DIM', ordem: 60, ativo: true,
+      peso_gramas: 1234, altura_cm: 7, largura_cm: 9, comprimento_cm: 11,
+    }).execute()
+
+    const kit = await buscarKitAtivoPorSlug('kit-dimensoes')
+    expect(kit).not.toBeNull()
+    expect({
+      pesoGramas: kit!.pesoGramas, alturaCm: kit!.alturaCm,
+      larguraCm: kit!.larguraCm, comprimentoCm: kit!.comprimentoCm,
+    }).toEqual({ pesoGramas: 1234, alturaCm: 7, larguraCm: 9, comprimentoCm: 11 })
+
+    // number, nunca string. integer e smallint chegam como number pelo
+    // driver do Postgres, mas um NUMERIC chegaria como string e entraria no
+    // JSON da cotacao entre aspas — mesmo cuidado do teste de precoCentavos
+    // acima.
+    for (const v of [kit!.pesoGramas, kit!.alturaCm, kit!.larguraCm, kit!.comprimentoCm]) {
+      expect(typeof v).toBe('number')
+    }
+
+    // A vitrine e a rota de frete leem por caminhos diferentes. Hoje os dois
+    // passam pelo mesmo paraKit(), mas se alguem trocar um dos `selectAll()`
+    // por uma lista explicita de colunas, as dimensoes somem so de um lado —
+    // e o lado que some e o que vira frete zero ou erro em producao.
+    const daLista = (await listarKitsAtivos()).find((k) => k.slug === 'kit-dimensoes')
+    expect(daLista).toBeDefined()
+    expect({
+      pesoGramas: daLista!.pesoGramas, alturaCm: daLista!.alturaCm,
+      larguraCm: daLista!.larguraCm, comprimentoCm: daLista!.comprimentoCm,
+    }).toEqual({ pesoGramas: 1234, alturaCm: 7, larguraCm: 9, comprimentoCm: 11 })
+  })
+
+  it('DINHEIRO: todo kit ativo chega com as quatro dimensoes positivas', async () => {
+    // Sem numero fixo de proposito: os DEFAULTs de hoje sao palpite
+    // declarado e vao ser corrigidos pela expedicao antes de 25/08
+    // (migrations/1755300600000_kit_dimensoes.sql). Travar 500/12/16/20 aqui
+    // faria o teste ficar vermelho justamente no commit que conserta o dado.
+    // O que precisa continuar verdadeiro para sempre e outra coisa: nenhum
+    // kit ativo chega a cotacao com dimensao ausente, zerada ou undefined —
+    // inclusive o kit de producao e os kits que os outros arquivos de teste
+    // semeiam sem informar dimensao nenhuma, que herdam o DEFAULT do banco.
+    const kits = await listarKitsAtivos()
+    expect(kits.length).toBeGreaterThan(0)
+    for (const k of kits) {
+      expect(k.pesoGramas, `peso do kit ${k.slug}`).toBeGreaterThan(0)
+      expect(k.alturaCm, `altura do kit ${k.slug}`).toBeGreaterThan(0)
+      expect(k.larguraCm, `largura do kit ${k.slug}`).toBeGreaterThan(0)
+      expect(k.comprimentoCm, `comprimento do kit ${k.slug}`).toBeGreaterThan(0)
+    }
+  })
+
+  it('o banco rejeita dimensao zerada em qualquer uma das quatro colunas', async () => {
+    // Um caso por coluna, todos com o MESMO slug: cada INSERT falha, entao
+    // nenhum deles deixa linha para o proximo esbarrar em kits_slug_unico.
+    // Zero e o valor perigoso e nao o negativo — e o que sai de um campo de
+    // formulario vazio, e uma dimensao zerada zera o peso cubado sem
+    // levantar suspeita nenhuma na tela.
+    const base = {
+      slug: 'kit-dimensao-invalida', nome: 'Sem medida', preco_centavos: 1000,
+      unidades: 1, sku: 'MG-DIMX', ordem: 61, ativo: true,
+    }
+    const casos = [
+      { valores: { peso_gramas: 0 }, constraint: /kits_peso_positivo/ },
+      { valores: { altura_cm: 0 }, constraint: /kits_altura_positiva/ },
+      { valores: { largura_cm: 0 }, constraint: /kits_largura_positiva/ },
+      { valores: { comprimento_cm: 0 }, constraint: /kits_comprimento_positivo/ },
+    ]
+    for (const caso of casos) {
+      await expect(
+        getDb().insertInto('kits').values({ ...base, ...caso.valores }).execute(),
+      ).rejects.toThrow(caso.constraint)
+    }
+  })
+
   it('impede preco zero ou negativo', async () => {
     await expect(
       getDb().insertInto('kits').values({
@@ -143,5 +231,20 @@ describe('kit de producao', () => {
   it('o registro ANVISA ainda nao foi preenchido — divida conhecida', async () => {
     const kit = await buscarKitAtivoPorSlug('kit-milagran')
     expect(kit!.anvisaRegistro).toBeNull()
+  })
+
+  // Divida da mesma familia da de cima, e por isso vizinha dela. O kit que
+  // vai ser vendido em 25/08 carrega HOJE o palpite de 16/08 (500 g,
+  // 12 x 16 x 20 cm) herdado do DEFAULT de
+  // migrations/1755300600000_kit_dimensoes.sql — ninguem pesou nem mediu a
+  // caixa. O teste assevera que os quatro valores existem e sao usaveis pela
+  // cotacao, sem congelar os numeros: quando a expedicao medir e corrigir, o
+  // commit que conserta o dado nao pode deixar a suite vermelha.
+  it('DINHEIRO: o kit de producao ja carrega peso e dimensoes para a cotacao de frete', async () => {
+    const kit = await buscarKitAtivoPorSlug('kit-milagran')
+    expect(kit!.pesoGramas).toBeGreaterThan(0)
+    expect(kit!.alturaCm).toBeGreaterThan(0)
+    expect(kit!.larguraCm).toBeGreaterThan(0)
+    expect(kit!.comprimentoCm).toBeGreaterThan(0)
   })
 })

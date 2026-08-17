@@ -117,6 +117,7 @@ const CODIGOS_RESGATE = ['MARIA10', 'EXPIRADO', 'DESLIGADO', 'LIMITE1'] as const
 
 describe('resgate de cupom', () => {
   let idCliente: string
+  let idEndereco: string
   let idCupomMaria: string
   let idPedido: string
   let idKit: string
@@ -189,6 +190,19 @@ describe('resgate de cupom', () => {
     }).returning('id').executeTakeFirstOrThrow()
     idCliente = cliente.id
 
+    // Endereco passou a ser exigido pelo banco em pedido do canal online
+    // (constraint pedido_online_tem_endereco, em
+    // migrations/1755300100000_pedidos_canal_logistica.sql). O pedido logo
+    // abaixo existe so para o teste de limite por cliente, mas continua sendo
+    // um pedido online de verdade e precisa ter para onde ser despachado.
+    // Nao entra em limparResgate: enderecos.cliente_id e ON DELETE CASCADE,
+    // entao o DELETE do cliente ja leva esta linha junto.
+    const endereco = await db.insertInto('enderecos').values({
+      cliente_id: cliente.id, cep: '01310100', rua: 'Avenida Paulista',
+      numero: '1000', bairro: 'Bela Vista', cidade: 'Sao Paulo', estado: 'SP',
+    }).returning('id').executeTakeFirstOrThrow()
+    idEndereco = endereco.id
+
     // representante ativo — o link do cupom para comissao continua valendo.
     const cupomMaria = await db.insertInto('cupons').values({
       codigo: 'MARIA10', tipo: 'percentual', valor: 10, representante_id: repAtiva.id, ativo: true,
@@ -216,10 +230,19 @@ describe('resgate de cupom', () => {
     // menos um item (pedido_itens_obrigatorios_trg), entao usa criarPedido
     // em vez de um INSERT cru — ver nota no topo do arquivo pedidos.test.ts.
     const pedido = await criarPedido({
+      // `canal` e obrigatorio desde o Plano 4 e e um eixo INDEPENDENTE de
+      // `origem`: origem e atribuicao de comissao (quem trouxe a venda),
+      // canal e onde a venda aconteceu. Ver o CHECK pedido_origem_coerente em
+      // migrations/1754900300000_pedidos.sql, que amarra cada valor de origem
+      // a presenca ou ausencia de representante_id — e por isso que
+      // 'presencial' nunca podia entrar naquele ENUM.
+      canal: 'online',
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_RESGATE_CENTAVOS) }],
+      clienteId: idCliente,
+      enderecoId: idEndereco,
     })
     idPedido = pedido.id
   })

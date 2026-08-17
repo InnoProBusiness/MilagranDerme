@@ -821,3 +821,873 @@ main{position:relative;z-index:1;}
   .sticky-cta{display:block;}
   body{padding-bottom:76px;}
 }
+
+/* =============================================================================
+   DESIGN SYSTEM DA LOJA DE LANCAMENTO (evento de 25/08/2026)
+   =============================================================================
+
+   ESTE ARQUIVO E O DONO DO VISUAL DO APP ROUTER. `public/styles.css` serve
+   APENAS a landing page estatica de recrutamento (public/seja-representante.html),
+   que nao passa pelo build do Next e nao ve uma linha daqui.
+
+   Ate 16/08/2026 os dois arquivos eram quase identicos: `globals.css` nasceu
+   como copia de `styles.css` porque "/" era um rewrite para a LP e o
+   comentario de next.config.ts previa que os dois "so convergem quando a
+   vitrine substituir a LP". O contrario aconteceu — a LOJA assumiu "/", a LP
+   continuou viva em /seja-representante.html com o proprio CSS, e daqui para
+   frente as duas identidades sao diferentes de proposito:
+
+     - o que esta ACIMA desta linha e o traco herdado da LP (hero, kit-card,
+       faq-item, form, footer-grid...). A home da loja reusa varios desses
+       blocos de proposito, entao eles ficam;
+     - o que esta ABAIXO desta linha e da loja e NAO existe em styles.css.
+
+   DIVERGENCIA ASSUMIDA: estilo novo entra em um lado so. Copiar daqui para
+   `public/styles.css` (ou o inverso) recria o acoplamento que ja custou uma
+   confusao de identidade de marca para os buscadores.
+
+   MAPA DE BLOCO -> TELA (para quem for escrever os componentes):
+     .pular-conteudo .conteudo .cabecalho .rodape  chrome de todas as rotas
+     .hero--loja .preco-lancamento .pagamentos-aceitos .entrega-opcoes
+       .aviso-prevenda  ................. src/app/page.tsx (§6, §7, §8, §18)
+     .escassez ......................... vitrine + contador-estoque (§5, §11)
+     .frete-opcoes ..................... checkout, passo 3 (§13)
+     .linha-tempo ...................... /pedido/[token] (§12)
+     .venda ............................ balcao do evento (§10)
+     .entrar ........................... login de admin/vendedor
+     .admin .cartao .tabela .etiqueta .. painel administrativo (§17)
+     .aviso ............................ mensagens de erro/estado em qualquer tela
+
+   Nomes em portugues porque sao blocos de LOJA — a convencao do projeto e:
+   marketing em ingles (.hero, .kit-card), loja em portugues (.vitrine__resumo,
+   .checkout__passo).
+   ========================================================================== */
+
+/*
+  Tokens NOVOS. Os originais continuam no topo do arquivo (a parte que ainda
+  espelha a LP) e nao foram tocados; o que a loja precisou a mais mora aqui,
+  junto dos blocos que os usam.
+
+  As tres primeiras linhas REDEFINEM --serif/--script/--sans de proposito: o
+  next/font (src/app/layout.tsx) publica as familias self-hosted em
+  --fonte-serif/--fonte-script/--fonte-sans, e elas entram na frente da mesma
+  pilha de antes. O fallback DENTRO do var() nao e decorativo — nos testes de
+  componente (jsdom) o layout nao roda, ninguem define --fonte-*, e sem ele a
+  declaracao inteira ficaria invalida.
+*/
+:root{
+  --serif: var(--fonte-serif, 'Playfair Display'), 'Cormorant Garamond', serif;
+  --script: var(--fonte-script, 'Cormorant Garamond'), serif;
+  --sans: var(--fonte-sans, 'Jost'), sans-serif;
+
+  --bg-elevado: #1a1613;
+  --line-forte: rgba(201,162,77,0.45);
+  --zebra: rgba(255,255,255,0.022);
+  --raio: 2px;
+
+  /* Escala de urgencia do estoque presencial (§5, §11). Sai do dourado de
+     propria vontade: o dourado e a cor da marca e do "tudo bem", entao usa-lo
+     tambem para alarme apagaria a diferenca entre anunciar o lote e avisar que
+     ele esta acabando. */
+  --alerta: #e8b45a;
+  --urgente: #e0894a;
+  --esgotado: #e07a6b;
+  --esgotado-tinta: #ffd9d2;
+}
+
+/* ---------- utilitarios ---------- */
+
+/*
+  Visivel so para leitor de tela. Existe separado de .hp-field (que e o
+  honeypot do formulario da LP) porque os dois escondem por motivos opostos:
+  o honeypot esconde de TODO MUNDO, inclusive do leitor de tela; este esconde
+  dos olhos e mantem para a tecnologia assistiva.
+*/
+.oculto-visual{
+  position:absolute;
+  width:1px;height:1px;
+  padding:0;margin:-1px;
+  overflow:hidden;
+  clip-path:inset(50%);
+  white-space:nowrap;
+  border:0;
+}
+
+/* Primeiro elemento focavel da pagina: pula o chrome e joga o teclado no
+   conteudo. So aparece quando recebe foco. */
+.pular-conteudo{
+  position:absolute;
+  left:-9999px;
+  top:0;
+  z-index:80;
+}
+.pular-conteudo:focus{
+  left:16px;
+  top:16px;
+  position:fixed;
+  background:var(--bg-panel);
+  border:1px solid var(--gold);
+  color:var(--gold-light);
+  padding:12px 18px;
+  font-size:13px;
+  letter-spacing:1.5px;
+  text-transform:uppercase;
+}
+
+.conteudo{
+  position:relative;
+  z-index:1;
+  min-height:55vh;
+}
+
+/* ---------- CHROME: CABECALHO ---------- */
+/*
+  Sticky, nao fixed. O .site-header da LP e `position:fixed` e conta com o
+  padding-top de 120px de .section para nao cobrir nada — o que funciona numa
+  pagina de rolagem unica e atrapalha no painel administrativo, onde a tabela
+  e a tela inteira. Sticky mantem o cabecalho ao alcance sem tirar altura util
+  de ninguem.
+*/
+.cabecalho{
+  position:sticky;
+  top:0;
+  z-index:60;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:12px clamp(16px,4vw,40px);
+  background:rgba(11,10,8,0.88);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--line);
+}
+.cabecalho__marca{display:flex;align-items:center;gap:12px;}
+.cabecalho__logo{width:44px;height:44px;}
+.cabecalho__nome{
+  display:block;
+  font-family:var(--serif);
+  font-size:14px;
+  letter-spacing:3px;
+  text-transform:uppercase;
+  color:var(--gold-light);
+  line-height:1.2;
+}
+.cabecalho__sub{
+  display:block;
+  font-family:var(--script);
+  font-style:italic;
+  font-size:12px;
+  letter-spacing:2px;
+  color:var(--gold);
+  line-height:1.2;
+}
+.cabecalho__acoes{display:flex;align-items:center;gap:clamp(10px,2vw,20px);}
+.cabecalho__link{
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  transition:color .3s ease;
+}
+.cabecalho__link:hover{color:var(--gold-light);}
+.cabecalho .btn{padding:11px 22px;}
+
+/* ---------- CHROME: RODAPE ---------- */
+.rodape{
+  position:relative;
+  z-index:1;
+  border-top:1px solid var(--line);
+  background:var(--bg-panel);
+  padding:54px clamp(16px,4vw,40px) 30px;
+}
+.rodape__grid{
+  max-width:var(--maxw);
+  margin:0 auto;
+  display:grid;
+  grid-template-columns:1.4fr 1fr 1.2fr;
+  gap:40px;
+}
+.rodape__coluna h2{
+  font-family:var(--sans);
+  font-size:11px;
+  font-weight:500;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--gold);
+  margin:0 0 14px;
+}
+.rodape__marca{
+  font-family:var(--serif);
+  font-size:15px;
+  letter-spacing:3px;
+  text-transform:uppercase;
+  color:var(--gold-light);
+}
+.rodape__coluna p{color:var(--ink-muted);font-size:14px;margin:0 0 8px;line-height:1.7;}
+.rodape__lista li{margin-bottom:8px;}
+.rodape__lista a{color:var(--ink-muted);font-size:14px;transition:color .3s ease;}
+.rodape__lista a:hover{color:var(--gold-light);}
+
+/*
+  §14 e explicito: representante NAO e o foco da pagina de lancamento. Por isso
+  este bloco e uma moldura fina com link de texto, e NAO um .btn--solid: um
+  botao dourado aqui competiria com a CTA de compra, que e a razao de a loja
+  existir. Discricao e requisito, nao economia de CSS.
+*/
+.rodape__representante{
+  border:1px solid var(--line);
+  padding:18px 20px;
+  border-radius:var(--raio);
+}
+.rodape__representante p{margin:0 0 10px;font-size:13.5px;}
+.rodape__cta{
+  display:inline-block;
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--gold);
+  border-bottom:1px solid var(--line);
+  padding-bottom:3px;
+  transition:color .3s ease, border-color .3s ease;
+}
+.rodape__cta:hover{color:var(--gold-light);border-bottom-color:var(--gold);}
+.rodape__legal{
+  max-width:var(--maxw);
+  margin:34px auto 0;
+  padding-top:20px;
+  border-top:1px solid var(--line);
+  display:flex;
+  justify-content:space-between;
+  flex-wrap:wrap;
+  gap:10px;
+  font-size:12px;
+  color:var(--ink-muted);
+}
+
+/* ---------- HOME DA LOJA (§6, §7, §8, §18) ---------- */
+/*
+  O .hero herdado da LP tem min-height:100vh — desenho de pagina de captacao,
+  onde a primeira tela e so promessa. Na loja o preco e a CTA precisam caber
+  na primeira dobra: quem chega pelo QR Code do evento veio comprar.
+*/
+.hero--loja{
+  min-height:auto;
+  padding:56px 20px 24px;
+}
+.hero--loja .hero__title{margin-bottom:18px;}
+
+.preco-lancamento{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+  margin:26px 0 22px;
+}
+.preco-lancamento__valor{
+  font-family:var(--serif);
+  font-size:clamp(40px,8vw,68px);
+  line-height:1;
+  background:linear-gradient(180deg, var(--gold-light), var(--gold));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+/* §9: o valor unitario tem linha propria e nunca some quando a quantidade e 1
+   — e a unica forma de o comprador conferir a conta de 2, 3 ou 10 kits. */
+.preco-lancamento__unitario{
+  font-size:14px;
+  color:var(--ink-muted);
+}
+.preco-lancamento__parcela{
+  font-size:14.5px;
+  color:var(--ink);
+}
+.preco-lancamento__nota{
+  font-size:12.5px;
+  color:var(--ink-muted);
+  max-width:420px;
+  text-align:center;
+}
+
+.pagamentos-aceitos{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  justify-content:center;
+  margin:0 0 8px;
+}
+.pagamento-chip{
+  border:1px solid var(--line);
+  border-radius:30px;
+  padding:8px 18px;
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--gold-light);
+}
+.pagamento-chip__nota{
+  display:block;
+  font-size:10.5px;
+  letter-spacing:.5px;
+  text-transform:none;
+  color:var(--ink-muted);
+}
+
+/* §7: os DOIS caminhos de entrega lado a lado, com o mesmo peso visual —
+   levar na hora no evento e receber em casa. --destaque existe para a tela
+   marcar qual dos dois esta disponivel agora (o presencial deixa de estar
+   quando o estoque zera), nunca para vender um dos dois por padrao. */
+.entrega-opcoes{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:22px;
+}
+.entrega-card{
+  border:1px solid var(--line);
+  background:var(--bg-panel);
+  padding:30px 26px;
+  border-radius:var(--raio);
+}
+.entrega-card--destaque{
+  border-color:var(--gold);
+  background:linear-gradient(160deg, rgba(201,162,77,0.10), transparent), var(--bg-panel);
+}
+.entrega-card--indisponivel{opacity:.55;}
+.entrega-card__titulo{font-size:19px;color:var(--gold-light);margin:0 0 8px;}
+.entrega-card__prazo{
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--gold);
+  margin:0 0 14px;
+}
+.entrega-card p{color:var(--ink-muted);font-size:14.5px;margin:0 0 10px;}
+.entrega-card__lista li{
+  position:relative;
+  padding-left:20px;
+  margin-bottom:8px;
+  font-size:14px;
+  color:var(--ink-muted);
+}
+.entrega-card__lista li::before{
+  content:"—";
+  position:absolute;left:0;top:0;
+  color:var(--gold-deep);
+}
+
+/* §3: o pedido online so e enviado depois do lancamento oficial. E promessa de
+   prazo, entao aparece na home E no checkout com a mesma cara — barra lateral
+   dourada, nunca escondida num rodape de letra miuda. */
+.aviso-prevenda{
+  border:1px solid var(--line);
+  border-left:3px solid var(--gold);
+  background:linear-gradient(90deg, rgba(201,162,77,0.10), transparent);
+  padding:16px 20px;
+  font-size:15px;
+  color:var(--ink);
+  border-radius:var(--raio);
+}
+.aviso-prevenda strong{color:var(--gold-light);font-weight:500;}
+
+/* ---------- ESCASSEZ (§5, §11) ---------- */
+/*
+  Os quatro niveis sao os de src/lib/escassez.ts (normal | poucos | ultimos |
+  esgotado) e o modificador usa o valor EXATO do tipo NivelEscassez, para a
+  tela montar a classe por template string sem mapa intermediario.
+
+  A escala de cor sobe junto com a urgencia: dourado (normal) -> ambar
+  (poucos) -> laranja (ultimos) -> vermelho preenchido (esgotado). ESGOTADO
+  precisa ser inconfundivel a um metro de distancia: e o unico nivel com fundo
+  preenchido, borda de 2px e selo em caixa alta, porque e o unico que muda o
+  que o comprador PODE fazer (a CTA vira "COMPRAR ONLINE"). Um esgotado que
+  parecesse "quase acabando" mandaria gente para a fila do balcao atras de kit
+  que nao existe mais.
+*/
+.escassez{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  border:1px solid var(--line);
+  border-radius:var(--raio);
+  background:var(--bg-panel);
+  padding:14px 18px;
+}
+.escassez__pulso{
+  flex:0 0 auto;
+  width:10px;height:10px;
+  border-radius:50%;
+  background:currentColor;
+  box-shadow:0 0 0 4px rgba(201,162,77,0.18);
+}
+.escassez__numero{
+  font-family:var(--serif);
+  font-size:clamp(26px,5vw,40px);
+  line-height:1;
+  color:currentColor;
+}
+.escassez__mensagem{
+  font-size:14.5px;
+  color:var(--ink-muted);
+  margin:0;
+}
+.escassez__selo{
+  font-size:13px;
+  font-weight:500;
+  letter-spacing:4px;
+  text-transform:uppercase;
+}
+/* O contador faz polling de 15s; enquanto a resposta nao volta, o bloco fica
+   levemente apagado em vez de piscar numero novo do nada. */
+.escassez[aria-busy="true"]{opacity:.7;}
+
+.escassez--normal{color:var(--gold-light);}
+.escassez--poucos{
+  color:var(--alerta);
+  border-color:rgba(232,180,90,0.45);
+}
+.escassez--ultimos{
+  color:var(--urgente);
+  border-color:rgba(224,137,74,0.55);
+  background:linear-gradient(90deg, rgba(224,137,74,0.10), transparent), var(--bg-panel);
+}
+.escassez--ultimos .escassez__pulso{
+  box-shadow:0 0 0 4px rgba(224,137,74,0.22);
+  animation:pulsar 1.6s ease-in-out infinite;
+}
+.escassez--esgotado{
+  color:var(--esgotado-tinta);
+  border:2px solid var(--esgotado);
+  background:linear-gradient(120deg, rgba(224,122,107,0.22), rgba(224,122,107,0.08));
+}
+.escassez--esgotado .escassez__mensagem{color:var(--esgotado-tinta);}
+/* Nada mais esta "ao vivo" quando o lote acabou: o ponto pulsante sai de cena
+   para o bloco nao continuar parecendo um contador em movimento. */
+.escassez--esgotado .escassez__pulso{display:none;}
+
+@keyframes pulsar{
+  0%,100%{opacity:1;}
+  50%{opacity:.35;}
+}
+
+/* ---------- OPCOES DE FRETE (checkout, passo 3 — §13) ---------- */
+.frete-opcoes{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  margin:10px 0 18px;
+}
+.frete-opcao{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  border:1px solid var(--line);
+  border-radius:var(--raio);
+  padding:14px 16px;
+  cursor:pointer;
+  transition:border-color .3s ease, background .3s ease;
+}
+.frete-opcao:hover{border-color:var(--gold);}
+.frete-opcao input{accent-color:var(--gold);}
+.frete-opcao--escolhida{
+  border-color:var(--gold);
+  background:rgba(201,162,77,0.06);
+}
+.frete-opcao__nome{font-size:14.5px;color:var(--ink);}
+.frete-opcao__prazo{display:block;font-size:12.5px;color:var(--ink-muted);}
+.frete-opcao__valor{
+  margin-left:auto;
+  font-size:15.5px;
+  color:var(--gold-light);
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+
+/* ---------- LINHA DO TEMPO DO PEDIDO (§12) ---------- */
+/*
+  Os sete estados de §12 na ordem do fluxo. O modificador diz onde o pedido
+  esta: --feito (ja passou), --atual (agora), --futuro (ainda vem) e
+  --interrompido (cancelado/reembolsado, que encerram a linha).
+  --futuro fica apagado de proposito: e previsao, nao fato consumado.
+*/
+.linha-tempo{
+  position:relative;
+  padding-left:30px;
+  margin:26px 0;
+}
+.linha-tempo::before{
+  content:"";
+  position:absolute;
+  left:7px;top:8px;bottom:8px;
+  width:1px;
+  background:var(--line);
+}
+.linha-tempo__item{position:relative;padding-bottom:24px;}
+.linha-tempo__item:last-child{padding-bottom:0;}
+.linha-tempo__marcador{
+  position:absolute;
+  left:-30px;top:4px;
+  width:15px;height:15px;
+  border-radius:50%;
+  border:1px solid var(--line);
+  background:var(--bg);
+}
+.linha-tempo__titulo{
+  font-family:var(--serif);
+  font-size:17px;
+  color:var(--ink-muted);
+  margin:0;
+}
+.linha-tempo__descricao{
+  font-size:14px;
+  color:var(--ink-muted);
+  margin:6px 0 0;
+  line-height:1.7;
+}
+.linha-tempo__quando{
+  display:block;
+  font-size:11.5px;
+  letter-spacing:1.5px;
+  text-transform:uppercase;
+  color:var(--gold-deep);
+  margin-top:4px;
+}
+.linha-tempo__item--feito .linha-tempo__marcador{background:var(--gold);border-color:var(--gold);}
+.linha-tempo__item--feito .linha-tempo__titulo{color:var(--ink);}
+.linha-tempo__item--atual .linha-tempo__marcador{
+  background:var(--gold-light);
+  border-color:var(--gold-light);
+  box-shadow:0 0 0 4px rgba(201,162,77,0.22);
+}
+.linha-tempo__item--atual .linha-tempo__titulo{color:var(--gold-light);}
+.linha-tempo__item--futuro{opacity:.5;}
+.linha-tempo__item--interrompido .linha-tempo__marcador{background:var(--esgotado);border-color:var(--esgotado);}
+.linha-tempo__item--interrompido .linha-tempo__titulo{color:var(--esgotado-tinta);}
+
+/* ---------- BALCAO DO EVENTO (§10) ---------- */
+/*
+  Esta tela e operada EM PE, com fila na frente, num celular ou notebook que o
+  vendedor olha de longe entre um comprador e outro. Todo o tamanho abaixo e
+  deliberado: o desfecho da venda (aprovada ou erro) tem que ser legivel sem
+  aproximar o rosto da tela.
+
+  APROVADA e ERRO tem o MESMO peso visual, por decisao explicita. A tentacao
+  de deixar o erro discreto e o que produz o pior desfecho possivel aqui: kit
+  entregue com a venda nao registrada.
+*/
+.venda{max-width:760px;}
+.venda__topo{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:16px;
+  flex-wrap:wrap;
+  margin-bottom:24px;
+  padding-bottom:16px;
+  border-bottom:1px solid var(--line);
+}
+.venda__vendedor{
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  margin:0;
+}
+.venda__campos{display:flex;flex-direction:column;gap:16px;margin-bottom:24px;}
+.venda__acoes{display:flex;gap:14px;flex-wrap:wrap;}
+/* Alvo de toque grande: o vendedor confirma a venda com o polegar, em pe. */
+.venda__acoes .btn{
+  flex:1 1 240px;
+  text-align:center;
+  font-size:15px;
+  padding:20px 28px;
+}
+
+.venda__desfecho{margin-top:28px;}
+.venda__aprovada{
+  border:2px solid var(--success);
+  background:linear-gradient(160deg, rgba(127,191,127,0.20), transparent), var(--bg-panel);
+  padding:clamp(28px,6vw,56px) clamp(20px,4vw,40px);
+  text-align:center;
+  border-radius:var(--raio);
+}
+.venda__aprovada-titulo{
+  font-family:var(--serif);
+  font-size:clamp(42px,11vw,104px);
+  line-height:1;
+  letter-spacing:6px;
+  text-transform:uppercase;
+  color:var(--success);
+  margin:0;
+}
+.venda__aprovada-detalhe{
+  font-size:clamp(16px,2.6vw,22px);
+  color:var(--ink);
+  margin:18px 0 0;
+}
+.venda__erro{
+  border:2px solid var(--esgotado);
+  background:linear-gradient(160deg, rgba(224,122,107,0.20), transparent), var(--bg-panel);
+  padding:clamp(24px,5vw,48px) clamp(20px,4vw,40px);
+  text-align:center;
+  border-radius:var(--raio);
+}
+.venda__erro-titulo{
+  font-family:var(--serif);
+  font-size:clamp(32px,8vw,72px);
+  line-height:1.05;
+  letter-spacing:4px;
+  text-transform:uppercase;
+  color:var(--esgotado);
+  margin:0;
+}
+.venda__erro-detalhe{
+  font-size:clamp(15px,2.4vw,20px);
+  color:var(--esgotado-tinta);
+  margin:16px 0 0;
+}
+/* Contador de kits restantes ao lado do desfecho: depois de "APROVADA" o
+   vendedor precisa saber, no mesmo olhar, se ainda ha kit para o proximo da
+   fila. */
+.venda__restantes{
+  display:flex;
+  align-items:baseline;
+  gap:10px;
+  margin-top:20px;
+  justify-content:center;
+}
+.venda__restantes-numero{
+  font-family:var(--serif);
+  font-size:clamp(30px,6vw,52px);
+  line-height:1;
+  color:var(--gold-light);
+}
+.venda__restantes-rotulo{
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+}
+
+/* ---------- LOGIN (/entrar) ---------- */
+.entrar{max-width:420px;margin:0 auto;}
+.entrar h1{font-size:clamp(24px,4vw,32px);margin-bottom:8px;}
+.entrar__lede{color:var(--ink-muted);font-size:14.5px;margin:0 0 26px;}
+.entrar .form__field{margin-bottom:16px;}
+.entrar__submit{width:100%;text-align:center;}
+
+/* ---------- PAINEL ADMINISTRATIVO (§17) ---------- */
+/*
+  Largura propria, maior que --maxw (1180px): --maxw e medida de coluna de
+  leitura, e aqui o conteudo e tabela densa de 8 a 12 colunas. Espremer a
+  tabela na largura de texto so empurraria toda a leitura para a rolagem
+  horizontal.
+*/
+.admin{
+  max-width:1400px;
+  margin:0 auto;
+  padding:36px clamp(16px,3vw,32px) 80px;
+}
+.admin__topo{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-end;
+  gap:20px;
+  flex-wrap:wrap;
+  margin-bottom:24px;
+}
+.admin__titulo{font-size:clamp(23px,3vw,32px);margin:0;}
+.admin__lede{color:var(--ink-muted);font-size:14px;margin:6px 0 0;}
+
+.admin__abas{
+  display:flex;
+  gap:2px;
+  border-bottom:1px solid var(--line);
+  margin-bottom:28px;
+  overflow-x:auto;
+}
+.admin__aba{
+  padding:12px 18px;
+  font-size:12.5px;
+  letter-spacing:1.5px;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  border-bottom:2px solid transparent;
+  white-space:nowrap;
+  transition:color .3s ease, border-color .3s ease;
+}
+.admin__aba:hover{color:var(--gold-light);}
+/* aria-current="page" e o que marca a aba ativa — o estilo segue o atributo de
+   acessibilidade em vez de uma classe --ativa paralela, para nao existir a
+   possibilidade de a aba parecer ativa sem se anunciar como tal. */
+.admin__aba[aria-current="page"]{
+  color:var(--gold-light);
+  border-bottom-color:var(--gold);
+}
+
+.admin__cartoes{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+  gap:16px;
+  margin-bottom:32px;
+}
+.cartao{
+  border:1px solid var(--line);
+  background:var(--bg-panel);
+  padding:20px 22px;
+  border-radius:var(--raio);
+}
+.cartao--alerta{border-color:var(--urgente);}
+.cartao__rotulo{
+  font-size:11px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  margin:0 0 10px;
+}
+.cartao__valor{
+  font-family:var(--serif);
+  font-size:clamp(24px,3vw,32px);
+  line-height:1.1;
+  color:var(--gold-light);
+  margin:0;
+  font-variant-numeric:tabular-nums;
+}
+.cartao__nota{font-size:12.5px;color:var(--ink-muted);margin:8px 0 0;}
+
+/*
+  ROLAGEM HORIZONTAL MORA AQUI, NUNCA NO <body>. O body e `overflow-x:hidden`
+  (topo do arquivo), e hidden CLIPA — nao rola: uma tabela larga fora deste
+  container nao ganharia barra, ficaria com as ultimas colunas inalcancaveis.
+  O `min-width` da tabela e o que forca a barra a aparecer neste elemento em
+  vez de a tabela se espremer ate ficar ilegivel.
+*/
+.tabela-rolagem{
+  overflow-x:auto;
+  border:1px solid var(--line);
+  border-radius:var(--raio);
+  background:var(--bg-panel);
+}
+.tabela{
+  width:100%;
+  min-width:760px;
+  border-collapse:collapse;
+  font-size:13.5px;
+}
+.tabela--larga{min-width:1100px;}
+.tabela th{
+  position:sticky;
+  top:0;
+  z-index:1;
+  background:var(--bg-elevado);
+  text-align:left;
+  font-family:var(--sans);
+  font-size:11px;
+  font-weight:500;
+  letter-spacing:1.5px;
+  text-transform:uppercase;
+  color:var(--gold);
+  padding:12px 14px;
+  border-bottom:1px solid var(--line);
+  white-space:nowrap;
+}
+.tabela td{
+  padding:11px 14px;
+  border-bottom:1px solid rgba(201,162,77,0.12);
+  color:var(--ink);
+  vertical-align:top;
+}
+.tabela tbody tr:nth-child(even){background:var(--zebra);}
+.tabela tbody tr:last-child td{border-bottom:none;}
+/* Dinheiro e quantidade alinhados a direita com numeral tabular: e o que
+   permite comparar duas linhas de olho, sem ler digito por digito. */
+.tabela__num{
+  text-align:right;
+  white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.tabela__secundario{display:block;font-size:12px;color:var(--ink-muted);}
+.tabela__vazio{
+  padding:34px 20px;
+  text-align:center;
+  color:var(--ink-muted);
+  font-size:14px;
+}
+
+/*
+  Etiqueta de status. Os modificadores usam EXATAMENTE os valores do ENUM
+  pedido_status (snake_case, sem acento) para a tela montar
+  `etiqueta etiqueta--${status}` sem mapa intermediario. Renomear um valor do
+  ENUM obriga a renomear aqui — e o preco de nao ter um segundo dicionario de
+  status vivendo no CSS.
+*/
+.etiqueta{
+  display:inline-block;
+  padding:3px 10px;
+  border:1px solid currentColor;
+  border-radius:20px;
+  font-size:11px;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  white-space:nowrap;
+}
+.etiqueta--pendente,
+.etiqueta--aguardando_pagamento{color:var(--alerta);}
+.etiqueta--pago{color:var(--success);}
+.etiqueta--em_preparacao,
+.etiqueta--enviado,
+.etiqueta--em_transito{color:var(--gold-light);}
+.etiqueta--entregue{color:var(--success);background:rgba(127,191,127,0.12);}
+.etiqueta--cancelado{color:var(--ink-muted);}
+.etiqueta--reembolsado{color:var(--esgotado);}
+/* Canal da venda (§17): presencial e online lado a lado na mesma tabela. */
+.etiqueta--presencial{color:var(--gold);}
+.etiqueta--online{color:var(--ink-muted);}
+
+/* ---------- AVISOS E MENSAGENS ASSINCRONAS ---------- */
+/*
+  Bloco unico para "algo aconteceu e a tela precisa dizer". Usado com
+  role="status" (assincrono, nao urgente) ou role="alert" (erro que bloqueia).
+  Sem variante "vazio bonito": ESTADO VAZIO E HONESTO neste projeto — quando
+  nao ha dado, a tela diz que nao ha, nunca preenche com valor inventado.
+*/
+.aviso{
+  border:1px solid var(--line);
+  border-left:3px solid var(--gold);
+  border-radius:var(--raio);
+  background:var(--bg-panel);
+  padding:14px 18px;
+  font-size:14.5px;
+  color:var(--ink);
+  line-height:1.7;
+}
+.aviso--sucesso{border-left-color:var(--success);}
+.aviso--atencao{border-left-color:var(--alerta);}
+.aviso--erro{border-left-color:var(--esgotado);color:var(--esgotado-tinta);}
+.aviso__titulo{
+  display:block;
+  font-size:12px;
+  letter-spacing:2px;
+  text-transform:uppercase;
+  color:var(--gold);
+  margin-bottom:6px;
+}
+.aviso--erro .aviso__titulo{color:var(--esgotado);}
+
+/* ---------- RESPONSIVO DOS BLOCOS NOVOS ---------- */
+@media (max-width: 900px){
+  .rodape__grid{grid-template-columns:1fr;gap:28px;}
+  .entrega-opcoes{grid-template-columns:1fr;}
+}
+@media (max-width: 560px){
+  .cabecalho{padding:10px 16px;}
+  .cabecalho__logo{width:38px;height:38px;}
+  .cabecalho__sub{display:none;}
+  .cabecalho .btn{padding:10px 16px;font-size:11.5px;letter-spacing:1.5px;}
+  .escassez{flex-wrap:wrap;gap:10px;}
+  .venda__aprovada-titulo{letter-spacing:3px;}
+  .venda__erro-titulo{letter-spacing:2px;}
+  .admin{padding:24px 14px 60px;}
+}
+@media (prefers-reduced-motion: reduce){
+  /* O pulso de 'ultimos' e enfase, nao informacao: a cor e o texto ja dizem
+     tudo. Quem pediu menos movimento nao perde nada ao perde-lo. */
+  .escassez--ultimos .escassez__pulso{animation:none;}
+}
