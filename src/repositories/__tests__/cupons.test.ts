@@ -296,9 +296,16 @@ describe('resgate de cupom', () => {
       const r = await resgatarCupom('LIMITE1', deInteiro(100000), idCliente, trx)
       if (r.ok) {
         await new Promise((res) => setTimeout(res, 50))
+        // cliente_id/endereco_id nao sao enfeite: pedido_online_tem_endereco
+        // (migrations/1755300100000_pedidos_canal_logistica.sql) recusa
+        // pedido do canal online — que e o DEFAULT da coluna — sem endereco
+        // de entrega. Este INSERT e cru de proposito (o teste precisa da
+        // linha dentro da transacao do resgate, sem passar por criarPedido),
+        // entao ele carrega a mao o que o resto do arquivo ja obtem de graca.
         const pedido = await trx.insertInto('pedidos').values({
           origem: 'casa', subtotal_centavos: 100000, desconto_centavos: 0,
           frete_centavos: 0, total_centavos: 100000,
+          cliente_id: idCliente, endereco_id: idEndereco,
         }).returning('id').executeTakeFirstOrThrow()
         // pedido_itens_obrigatorios_trg (Tarefa 1) exige ao menos um item no
         // COMMIT desta transacao — um INSERT INTO pedidos cru, sem item,
