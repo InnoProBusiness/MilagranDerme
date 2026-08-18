@@ -57,10 +57,10 @@ const KIT: Kit = {
   anvisaRegistro: null,
   ativo: true,
   ordem: 1,
-  pesoGramas: 500,
-  alturaCm: 12,
-  larguraCm: 16,
-  comprimentoCm: 20,
+  pesoGramas: 760,
+  alturaCm: 6,
+  larguraCm: 18,
+  comprimentoCm: 23,
 }
 
 function saldoPresencial(disponivel: number, total = 50): SaldoEstoque {

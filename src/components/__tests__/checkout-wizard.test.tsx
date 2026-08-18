@@ -28,7 +28,7 @@ const KIT: Kit = {
   // wizard nao os exibe nem os envia no POST — quem cota e o servidor, a
   // partir do CEP —, mas o fixture e tipado como `Kit` de proposito e por
   // isso precisa da forma completa.
-  pesoGramas: 500, alturaCm: 12, larguraCm: 16, comprimentoCm: 20,
+  pesoGramas: 760, alturaCm: 6, larguraCm: 18, comprimentoCm: 23,
 }
 
 const TOKEN_DO_PEDIDO = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'

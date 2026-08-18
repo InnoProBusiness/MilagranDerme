@@ -43,7 +43,7 @@ const KIT: Kit = {
   // O balcao nao cota frete nenhum (venda presencial nao tem entrega), mas o
   // fixture e tipado como `Kit` de proposito e por isso precisa da forma
   // inteira — inclusive peso e dimensoes, que existem para a cotacao online.
-  pesoGramas: 500, alturaCm: 12, larguraCm: 16, comprimentoCm: 20,
+  pesoGramas: 760, alturaCm: 6, larguraCm: 18, comprimentoCm: 23,
 }
 
 const VENDEDOR = { nome: 'Ana Souza', papel: 'vendedor' } as const

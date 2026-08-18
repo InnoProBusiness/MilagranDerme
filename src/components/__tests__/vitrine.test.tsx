@@ -27,7 +27,7 @@ const KITS = [{
   // nenhum dos quatro — ela nao conhece o CEP do visitante e por isso nao
   // cota nada —, mas o fixture precisa ser um Kit inteiro para o compilador
   // continuar cobrando a forma do tipo aqui.
-  pesoGramas: 500, alturaCm: 12, larguraCm: 16, comprimentoCm: 20,
+  pesoGramas: 760, alturaCm: 6, larguraCm: 18, comprimentoCm: 23,
 }]
 
 // O TAMANHO DO LOTE E O DO EVENTO (50 kits, §2/§4 — migrations/1755300700000_seed_estoque.sql),
