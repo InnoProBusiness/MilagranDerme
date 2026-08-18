@@ -180,8 +180,8 @@ describe('normalizacao da resposta de cotacao', () => {
 
     expect(cotacao.idCotacao).toBe(9876)
     expect(cotacao.opcoes).toEqual([
-      { idServico: 3, idTransportadora: 7, transportadora: 'Correios', valor: 2345, prazoDias: 5 },
-      { idServico: 4, idTransportadora: 9, transportadora: 'Jadlog', valor: 1990, prazoDias: 8 },
+      { idServico: 3, idTransportadora: 7, transportadora: 'Correios', servico: '', valor: 2345, prazoDias: 5 },
+      { idServico: 4, idTransportadora: 9, transportadora: 'Jadlog', servico: '', valor: 1990, prazoDias: 8 },
     ])
     // 23.45 * 100 em ponto flutuante da 2344.9999...; o valor gravado em
     // pedidos.frete_centavos e congelado, entao tem que ser inteiro exato.
@@ -211,7 +211,7 @@ describe('normalizacao da resposta de cotacao', () => {
 
     expect(cotacao.idCotacao).toBe(555)
     expect(cotacao.opcoes[0]).toEqual({
-      idServico: 8, idTransportadora: null, transportadora: 'Loggi', valor: 1230, prazoDias: 2,
+      idServico: 8, idTransportadora: null, transportadora: 'Loggi', servico: '', valor: 1230, prazoDias: 2,
     })
   })
 
@@ -255,6 +255,99 @@ describe('normalizacao da resposta de cotacao', () => {
     const cotacao = await cotarFrete(ENTRADA)
 
     expect(cotacao.opcoes[0]?.transportadora).toBe('')
+  })
+})
+
+/**
+ * A RESPOSTA DE VERDADE, copiada de uma cotacao de producao feita em
+ * 17/08/2026 (cliente 3727, origem 74693158, destino 01310100, kit de 500 g e
+ * 12x16x20 cm). Nada aqui foi inventado nem simplificado.
+ *
+ * Ate esta data o arquivo inteiro assentava sobre um palpite — o cabecalho de
+ * src/lib/frete.ts dizia, com todas as letras, que a primeira chamada real
+ * confirmaria ou corrigiria os apelidos. Ela corrigiu: o envelope e `valores`,
+ * que nao estava em CONTAINERS_SERVICOS, e a cotacao inteira caia em
+ * CotacaoIlegivelError. O checkout online nunca teria passado do passo 3.
+ *
+ * Este bloco existe para que a proxima mudanca de contrato do provedor apareca
+ * como teste vermelho, e nao como "frete indisponivel" no dia da venda.
+ */
+const RESPOSTA_REAL_DO_CLUBE_ENVIOS = {
+  id_cotacao: '697040',
+  valores: [
+    { id_servico: '2', servico: 'PAC', transportadora: 'CLUBE ENVIOS - Correios', id_transportadora: '1', seguro_incluso: 'N', prazo: '6', valor_frete: '29,39' },
+    { id_servico: '66', servico: 'LATAM CARGO', transportadora: 'CLUBE ENVIOS - Latam', id_transportadora: '8', seguro_incluso: 'S', prazo: '3', valor_frete: '31,80' },
+    { id_servico: '10', servico: 'ECOMM CORP', transportadora: 'CLUBE ENVIOS - Azul', id_transportadora: '5', seguro_incluso: 'S', prazo: '3', valor_frete: '34,97' },
+    { id_servico: '8', servico: 'EXPRESSO', transportadora: 'CLUBE ENVIOS - Azul', id_transportadora: '5', seguro_incluso: 'S', prazo: '2', valor_frete: '57,72' },
+    { id_servico: '1', servico: 'SEDEX', transportadora: 'CLUBE ENVIOS - Correios', id_transportadora: '1', seguro_incluso: 'N', prazo: '2', valor_frete: '64,91' },
+  ],
+}
+
+describe('resposta real do Clube Envios', () => {
+  it('le as cinco opcoes do envelope `valores`', async () => {
+    stubarFetch(RESPOSTA_REAL_DO_CLUBE_ENVIOS)
+
+    const cotacao = await cotarFrete(ENTRADA)
+
+    expect(cotacao.idCotacao).toBe(697040)
+    expect(cotacao.opcoes).toHaveLength(5)
+  })
+
+  /**
+   * DINHEIRO, e o erro que custaria 100x. O provedor devolve "29,39" — string
+   * com VIRGULA decimal, o formato brasileiro. Se `decimalDe` nao tratasse a
+   * virgula, `Number("29,39")` daria NaN; se o valor fosse lido como centavos
+   * inteiros, R$ 29,39 viraria R$ 0,29. A coluna pedidos.frete_centavos e
+   * congelada no INSERT, entao qualquer um dos dois erros seria permanente
+   * pedido a pedido.
+   */
+  it('DINHEIRO: "29,39" vira 2939 centavos, nao NaN e nao 29', async () => {
+    stubarFetch(RESPOSTA_REAL_DO_CLUBE_ENVIOS)
+
+    const cotacao = await cotarFrete(ENTRADA)
+    const pac = cotacao.opcoes[0]
+
+    expect(pac?.valor).toBe(2939)
+    expect(Number.isInteger(pac?.valor)).toBe(true)
+    expect(cotacao.opcoes[4]?.valor).toBe(6491)
+  })
+
+  it('converte id e prazo que chegam como string', async () => {
+    stubarFetch(RESPOSTA_REAL_DO_CLUBE_ENVIOS)
+
+    const cotacao = await cotarFrete(ENTRADA)
+
+    expect(cotacao.opcoes[0]).toMatchObject({
+      idServico: 2, idTransportadora: 1, prazoDias: 6,
+      transportadora: 'CLUBE ENVIOS - Correios', servico: 'PAC',
+    })
+  })
+
+  /**
+   * O motivo de `servico` existir: DUAS duplas chegam com o mesmo campo
+   * `transportadora`. Sem capturar o servico, a tela mostraria
+   * "CLUBE ENVIOS - Correios" duas vezes e "CLUBE ENVIOS - Azul" duas vezes,
+   * e o comprador teria que deduzir a diferenca pelo preco.
+   */
+  it('o servico desempata opcoes da mesma transportadora', async () => {
+    stubarFetch(RESPOSTA_REAL_DO_CLUBE_ENVIOS)
+
+    const { opcoes } = await cotarFrete(ENTRADA)
+
+    const correios = opcoes.filter((o) => o.transportadora === 'CLUBE ENVIOS - Correios')
+    expect(correios).toHaveLength(2)
+    expect(correios.map((o) => o.servico).sort()).toEqual(['PAC', 'SEDEX'])
+
+    // E nenhuma das cinco fica sem nome de servico.
+    expect(opcoes.every((o) => o.servico !== '')).toBe(true)
+  })
+
+  it('a mais barata das cinco e o PAC', async () => {
+    stubarFetch(RESPOSTA_REAL_DO_CLUBE_ENVIOS)
+
+    const cotacao = await cotarFrete(ENTRADA)
+
+    expect(opcaoMaisBarata(cotacao)).toMatchObject({ servico: 'PAC', valor: 2939 })
   })
 })
 

@@ -97,11 +97,11 @@ vi.mock('@/lib/frete', async (importOriginal) => {
  * um total redondo sem que nenhuma assercao pisque.
  */
 const OPCAO_PAC: OpcaoDeFrete = {
-  idServico: 3, idTransportadora: 1, transportadora: 'Correios PAC',
+  idServico: 3, idTransportadora: 1, transportadora: 'Correios', servico: 'PAC',
   valor: deInteiro(2350), prazoDias: 8,
 }
 const OPCAO_SEDEX: OpcaoDeFrete = {
-  idServico: 4, idTransportadora: 1, transportadora: 'Correios SEDEX',
+  idServico: 4, idTransportadora: 1, transportadora: 'Correios', servico: 'SEDEX',
   valor: deInteiro(4990), prazoDias: 3,
 }
 

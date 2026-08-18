@@ -102,11 +102,21 @@ function stubarFetch(responder: (url: string, corpo: unknown) => Response): void
  * src/lib/frete.ts procura por lista de apelidos — a primeira chamada real em
  * homologacao pode corrigir aquela lista, e este e o lugar que acompanha.
  */
+/**
+ * NA FORMA REAL DO PROVEDOR, conferida contra uma cotacao de producao em
+ * 17/08/2026: envelope `valores`, TUDO em string, preco com VIRGULA decimal e
+ * o nome do servico separado do nome da transportadora.
+ *
+ * Antes deste commit o fixture era uma aproximacao inventada (envelope
+ * `cotacao`, numeros nativos) e por isso a rota passava no teste enquanto
+ * falharia em producao. Um duble que nao se parece com o original so testa a
+ * si mesmo.
+ */
 const CORPO_COTACAO_OK = {
-  id_cotacao: 987,
-  cotacao: [
-    { id_servico: 3, id_transportadora: 1, transportadora: 'Correios PAC', valor: 23.50, prazo: 8 },
-    { id_servico: 4, id_transportadora: 1, transportadora: 'Correios SEDEX', valor: 49.90, prazo: 3 },
+  id_cotacao: '987',
+  valores: [
+    { id_servico: '3', id_transportadora: '1', transportadora: 'CLUBE ENVIOS - Correios', servico: 'PAC', prazo: '8', valor_frete: '23,50' },
+    { id_servico: '4', id_transportadora: '1', transportadora: 'CLUBE ENVIOS - Correios', servico: 'SEDEX', prazo: '3', valor_frete: '49,90' },
   ],
 }
 
@@ -464,14 +474,16 @@ describe('rotas publicas do lancamento', () => {
       }))
       expect(r.status).toBe(200)
 
-      // DINHEIRO: o provedor respondeu em REAIS DECIMAIS (23.50 / 49.90) e a
-      // rota devolve CENTAVOS INTEIROS. Um erro de fator 100 aqui vira frete
-      // cem vezes maior (ou menor) na tela do comprador sem quebrar nada.
-      // Corpo inteiro: nem `idCotacao` nem `idTransportadora` atravessam.
+      // DINHEIRO: o provedor respondeu com STRING E VIRGULA ("23,50" / "49,90")
+      // e a rota devolve CENTAVOS INTEIROS. Um erro de fator 100 aqui vira
+      // frete cem vezes maior (ou menor) na tela do comprador sem quebrar nada.
+      // Corpo inteiro: nem `idCotacao` nem `idTransportadora` atravessam, e
+      // `servico` atravessa porque e o que separa PAC de SEDEX na tela — as
+      // duas opcoes chegam com a MESMA transportadora.
       expect(await r.json()).toEqual({
         opcoes: [
-          { idServico: 3, transportadora: 'Correios PAC', valorCentavos: 2350, prazoDias: 8 },
-          { idServico: 4, transportadora: 'Correios SEDEX', valorCentavos: 4990, prazoDias: 3 },
+          { idServico: 3, transportadora: 'CLUBE ENVIOS - Correios', servico: 'PAC', valorCentavos: 2350, prazoDias: 8 },
+          { idServico: 4, transportadora: 'CLUBE ENVIOS - Correios', servico: 'SEDEX', valorCentavos: 4990, prazoDias: 3 },
         ],
       })
 

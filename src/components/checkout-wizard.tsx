@@ -41,6 +41,8 @@ type Endereco = {
 type OpcaoDeFreteNaTela = {
   idServico: number
   transportadora: string
+  /** "PAC", "SEDEX". Vazio quando o provedor nao informa. */
+  servico: string
   valor: Centavos
   prazoDias: number
 }
@@ -172,6 +174,7 @@ function lerOpcoesDeFrete(corpo: unknown): OpcaoDeFreteNaTela[] {
 
     const idServico = o.idServico
     const transportadora = texto(o.transportadora)
+    const servico = texto(o.servico)
     const valorCentavos = o.valorCentavos
     const prazoDias = o.prazoDias
 
@@ -198,11 +201,28 @@ function lerOpcoesDeFrete(corpo: unknown): OpcaoDeFreteNaTela[] {
     opcoes.push({
       idServico,
       transportadora,
+      servico,
       valor: deInteiro(valorCentavos),
       prazoDias,
     })
   }
   return opcoes
+}
+
+/**
+ * Como a opcao de frete se apresenta no radio.
+ *
+ * Funcao pura e exportada porque e a regra que decide o que o comprador le ao
+ * escolher entre cinco linhas parecidas — merece teste direto, sem passar por
+ * clique nenhum.
+ *
+ * Ordem "Transportadora · Servico": o nome de quem entrega vem primeiro porque
+ * e o que a pessoa reconhece; o servico desempata. Quando so um dos dois
+ * existe, ele aparece sozinho, sem separador orfao.
+ */
+export function rotuloDaOpcao(o: { transportadora: string; servico: string }): string {
+  const partes = [o.transportadora.trim(), o.servico.trim()].filter((p) => p !== '')
+  return partes.length === 0 ? 'Envio' : partes.join(' · ')
 }
 
 function textoDePrazo(dias: number): string {
@@ -661,14 +681,21 @@ export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
                     />
                     <span className="frete-opcao__nome">
                       {/*
-                        Rotulo neutro quando a cotacao veio sem nome de
-                        transportadora. Um radio com o nome em branco fica
-                        clicavel mas ilegivel — o comprador escolhe entre duas
-                        linhas que so mostram preco. "Envio" nao inventa
-                        transportadora nenhuma (dizer "Correios" aqui seria
-                        chutar quem despacha) e mantem a opcao pagavel.
+                        TRANSPORTADORA E SERVICO JUNTOS, porque nenhum dos dois
+                        identifica a opcao sozinho. A cotacao real traz
+                        "CLUBE ENVIOS - Correios" para PAC e para SEDEX, e
+                        "CLUBE ENVIOS - Azul" para ECOMM CORP e EXPRESSO — com
+                        so o primeiro campo, o comprador ve duas linhas de nome
+                        identico e tem que deduzir a diferenca pelo preco.
+
+                        Rotulo neutro quando os dois vem vazios: um radio sem
+                        nome fica clicavel mas ilegivel. "Envio" nao inventa
+                        transportadora nenhuma (dizer "Correios" seria chutar
+                        quem despacha) e mantem a opcao pagavel — src/lib/frete.ts
+                        trata os dois campos como cosmeticos justamente para que
+                        a falta de um nome nunca derrube uma cotacao valida.
                       */}
-                      {o.transportadora === '' ? 'Envio' : o.transportadora}
+                      {rotuloDaOpcao(o)}
                       <span className="frete-opcao__prazo">{textoDePrazo(o.prazoDias)}</span>
                     </span>
                     <span className="frete-opcao__valor">{formatarBRL(o.valor)}</span>

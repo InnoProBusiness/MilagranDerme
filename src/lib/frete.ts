@@ -8,23 +8,35 @@ import { centavos, type Centavos } from '@/lib/money'
  * "nao houve resposta", variaveis de ambiente lidas DENTRO da funcao e uma
  * unica conversao de centavos para decimal no arquivo inteiro.
  *
- * O QUE E APOSTA AQUI, E POR QUE ISSO ESTA ESCRITO E NAO ESCONDIDO
+ * O CONTRATO REAL, CONFIRMADO EM 17/08/2026
  * ------------------------------------------------------------------
- * A documentacao publica do Clube Envios descreve o CORPO DA REQUISICAO de
- * POST /cotacao (campos exatos, replicados em `cotarFrete`) e o envelope de
- * ERRO (`{ result: false, messages }`). Ela NAO descreve o corpo de SUCESSO.
- * Sabe-se apenas que a resposta traz `id_cotacao` e uma lista de servicos com
- * `id_servico`, `id_transportadora` e `transportadora` — os nomes dos campos
- * de PRECO e PRAZO sao desconhecidos.
+ * A documentacao publica descreve o CORPO DA REQUISICAO de POST /cotacao e o
+ * envelope de ERRO (`{ result: false, messages }`), mas NAO o corpo de
+ * sucesso. Ele foi obtido de uma cotacao real de producao e esta congelado em
+ * RESPOSTA_REAL_DO_CLUBE_ENVIOS (src/lib/__tests__/frete.test.ts):
  *
- * Por isso a leitura da resposta e feita por lista de APELIDOS (ver as
- * constantes APELIDOS_*) e a lista de servicos e procurada nos containers
- * plausiveis (CONTAINERS_SERVICOS). Isso e um palpite declarado, nao um
- * contrato: a PRIMEIRA CHAMADA REAL EM HOMOLOGACAO
- * (https://apishmg.clubeenvios.com.br) confirma ou corrige os apelidos, e
- * este arquivo e o UNICO lugar do sistema que muda quando isso acontecer —
- * rotas, componentes e repositorios so conhecem `OpcaoDeFrete`, ja em
- * `Centavos` e dias inteiros.
+ *   { "id_cotacao": "697040",
+ *     "valores": [ { "id_servico": "2", "servico": "PAC",
+ *                    "transportadora": "CLUBE ENVIOS - Correios",
+ *                    "id_transportadora": "1", "seguro_incluso": "N",
+ *                    "prazo": "6", "valor_frete": "29,39" }, ... ] }
+ *
+ * TRES FATOS QUE ESSA CHAMADA ESTABELECEU, e que valem mais que qualquer
+ * suposicao anterior:
+ *   1. O envelope e `valores`. Ele NAO estava em CONTAINERS_SERVICOS, entao
+ *      toda cotacao caia em CotacaoIlegivelError e o checkout online travava
+ *      no passo 3.
+ *   2. Tudo chega como STRING, inclusive numeros: `id_servico: "2"`,
+ *      `prazo: "6"`.
+ *   3. O preco vem em REAIS COM VIRGULA decimal ("29,39"), nao em centavos
+ *      inteiros nem com ponto. `decimalDe` trata a virgula e `centavos()`
+ *      multiplica por 100 — a leitura estava certa, agora por evidencia.
+ *
+ * A leitura por lista de APELIDOS continua, e agora como REDE e nao como
+ * aposta: se o provedor renomear um campo, os apelidos absorvem a mudanca em
+ * vez de derrubar a venda. Este arquivo segue sendo o UNICO lugar do sistema
+ * que muda se o contrato mudar — rotas, componentes e repositorios so conhecem
+ * `OpcaoDeFrete`, ja em `Centavos` e dias inteiros.
  *
  * A REGRA QUE NAO PODE SER RELAXADA: quando um servico chega sem preco ou sem
  * prazo reconheciveis, este modulo lanca `CotacaoIlegivelError` com as chaves
@@ -36,13 +48,13 @@ import { centavos, type Centavos } from '@/lib/money'
  * depois — e vira prejuizo da Milagran em cada pedido enviado. Falhar alto e
  * barato: a rota devolve 503 `frete_indisponivel` e o comprador tenta de novo.
  *
- * UNIDADES (a outra armadilha): enviamos `valor_declarado` em REAIS DECIMAIS,
- * conforme a documentacao. A leitura do preco assume a MESMA unidade de volta
- * (reais decimais) e converte para `Centavos` com `centavos()`, que multiplica
- * por 100. Se a homologacao mostrar que o provedor devolve centavos inteiros,
- * a correcao e trocar `centavos()` por `deInteiro()` em `precoEmCentavos` — e
- * so ali. Trocar um pelo outro NAO e erro de compilacao (ver src/lib/money.ts):
- * e um frete 100x maior ou 100x menor sem nenhum aviso.
+ * UNIDADES — RESOLVIDO POR EVIDENCIA, nao mais por suposicao. Enviamos
+ * `valor_declarado` em reais decimais e o provedor devolve `valor_frete` na
+ * MESMA unidade, com virgula ("29,39" = R$ 29,39 = 2939 centavos).
+ * `precoEmCentavos` usa `centavos()`, que multiplica por 100, e esta correto.
+ * NAO trocar por `deInteiro()`: a troca nao e erro de compilacao (ver
+ * src/lib/money.ts) e produziria um frete 100x menor sem nenhum aviso. O teste
+ * "DINHEIRO: '29,39' vira 2939 centavos" existe para travar exatamente isso.
  */
 
 /**
@@ -70,8 +82,17 @@ const TIMEOUT_MS = 12_000
  */
 const PRAZO_MAXIMO_DIAS = 180
 
-/** Containers plausiveis para a lista de servicos dentro da resposta. */
-const CONTAINERS_SERVICOS = ['cotacao', 'servicos', 'dados', 'result'] as const
+/**
+ * 'valores' PRIMEIRO porque e o container REAL, confirmado na primeira cotacao
+ * de producao em 17/08/2026: a resposta e `{ id_cotacao, valores: [...] }`.
+ *
+ * Ate aqui a lista era um palpite declarado — o cabecalho deste arquivo dizia
+ * que a primeira chamada real confirmaria ou corrigiria os apelidos, e foi o
+ * que aconteceu: sem 'valores' a cotacao inteira caia em CotacaoIlegivelError
+ * e o checkout online nunca passava do passo 3. Os outros quatro ficam como
+ * rede para uma mudanca de envelope do provedor.
+ */
+const CONTAINERS_SERVICOS = ['valores', 'cotacao', 'servicos', 'dados', 'result'] as const
 
 const APELIDOS_ID_COTACAO = ['id_cotacao', 'idCotacao', 'cotacao_id'] as const
 const APELIDOS_ID_SERVICO = ['id_servico', 'idServico', 'servico_id'] as const
@@ -81,6 +102,17 @@ const APELIDOS_ID_TRANSPORTADORA = [
 const APELIDOS_TRANSPORTADORA = [
   'transportadora', 'nome_transportadora', 'transportadora_nome', 'nome',
 ] as const
+/**
+ * NOME DO SERVICO — "PAC", "SEDEX", "EXPRESSO". E o que distingue duas opcoes
+ * da MESMA transportadora, e sem ele a tela repete rotulo.
+ *
+ * A cotacao real de 17/08/2026 devolveu cinco opcoes e DUAS duplas com o mesmo
+ * campo `transportadora`: "CLUBE ENVIOS - Correios" para PAC (R$ 29,39, 6
+ * dias) e para SEDEX (R$ 64,91, 2 dias), e "CLUBE ENVIOS - Azul" para ECOMM
+ * CORP e EXPRESSO. O comprador via duas linhas de nome identico e precisava
+ * deduzir a diferenca pelo preco.
+ */
+const APELIDOS_SERVICO = ['servico', 'nome_servico', 'servico_nome', 'descricao'] as const
 const APELIDOS_VALOR = [
   'valor', 'valor_frete', 'vlrFrete', 'vlr_frete', 'preco', 'preco_frete', 'valorFrete',
 ] as const
@@ -133,6 +165,15 @@ export type OpcaoDeFrete = {
   idServico: number
   idTransportadora: number | null
   transportadora: string
+  /**
+   * "PAC", "SEDEX", "EXPRESSO". Vazio quando o provedor nao informa.
+   *
+   * COSMETICO como `transportadora`, e pela mesma razao nao derruba a cotacao
+   * — mas e ele que separa duas opcoes da mesma transportadora na tela. Quem
+   * decide como exibir e src/components/checkout-wizard.tsx; aqui so chega o
+   * dado cru.
+   */
+  servico: string
   valor: Centavos
   prazoDias: number
 }
@@ -401,6 +442,7 @@ function normalizarServico(item: unknown): OpcaoDeFrete {
     // Nome da transportadora e cosmetico: some da tela, nao some do bolso de
     // ninguem. Diferente de preco e prazo, nao derruba a cotacao.
     transportadora: textoDe(primeiroApelido(item, APELIDOS_TRANSPORTADORA)),
+    servico: textoDe(primeiroApelido(item, APELIDOS_SERVICO)),
     valor,
     prazoDias,
   }

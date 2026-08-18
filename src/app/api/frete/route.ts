@@ -223,6 +223,10 @@ export async function POST(req: Request) {
       opcoes: cotacao.opcoes.map((o) => ({
         idServico: o.idServico,
         transportadora: o.transportadora,
+        // "PAC", "SEDEX"... e o que separa duas opcoes da MESMA transportadora
+        // (a cotacao real traz Correios duas vezes, e Azul duas vezes). Sem
+        // ele a tela repete rotulo e o comprador escolhe pelo preco, adivinhando.
+        servico: o.servico,
         valorCentavos: o.valor,
         prazoDias: o.prazoDias,
       })),
