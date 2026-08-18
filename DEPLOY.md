@@ -117,22 +117,32 @@ Ordem importa: os tres primeiros itens sao pre-requisito para vender.
    uma lista de apelidos. Se os nomes reais forem outros, o erro
    `CotacaoIlegivelError` diz exatamente quais chaves chegaram — e o unico lugar
    a corrigir.
-3. **Operadores.** Nao ha senha em variavel de ambiente nem em migration. Crie
-   cada pessoa com, de dentro do container ou com `DIRECT_URL` apontando para o
-   banco:
+3. **Operadores.** Nao ha senha em variavel de ambiente nem em migration. O
+   comando abaixo foi TESTADO no container de producao em 18/08/2026 — e nao e
+   o `npm run` da maquina de desenvolvimento, porque a imagem standalone nao
+   carrega nem o diretorio scripts/ nem os scripts do package.json. O script e
+   copiado de /opt/milagran (a arvore do repo que o deploy sincroniza) para
+   DENTRO de /app, onde o node_modules do standalone mora — em qualquer outro
+   diretorio o `import 'pg'` nao resolve (ESM procura node_modules subindo a
+   partir do ARQUIVO, e NODE_PATH nao vale para ESM):
    ```
-   docker exec -it $(docker ps -qf name=milagran_app) \
-     npm run usuario:criar -- --nome "Fulano" --email fulano@exemplo.com --papel vendedor
+   APP=$(docker ps -qf name=milagran_app | head -1)
+   docker cp /opt/milagran/scripts/criar-usuario.mjs "$APP":/app/criar-usuario.mjs
+   docker exec -it "$APP" node /app/criar-usuario.mjs \
+     --nome "Fulano" --email fulano@exemplo.com --papel vendedor
    ```
-   A senha e pedida pelo terminal, com eco desligado. Rodar de novo para o mesmo
-   e-mail TROCA a senha e derruba as sessoes abertas daquela pessoa — e o
-   caminho de "esqueci a senha as 9h do dia 25".
+   (`--papel admin` para quem opera o painel. A conexao vem de DATABASE_URL,
+   que ja existe no container.)
+
+   A senha e pedida pelo terminal, com eco desligado. Rodar de novo para o
+   mesmo e-mail TROCA a senha e derruba as sessoes abertas daquela pessoa — e o
+   caminho de "esqueci a senha as 9h do dia 25". A copia em /app/ e efemera:
+   some no proximo redeploy, o que e o comportamento desejado.
 
    **O `-it` nao e opcional.** Sem TTY o comando nao consegue ler a senha; ate
    17/08/2026 ele imprimia o prompt, nao criava ninguem e encerrava com codigo
    de SUCESSO — o operador so descobriria no dia, com a fila formada, que o
-   vendedor nao consegue entrar. Hoje ele recusa com mensagem explicita, mas o
-   `-it` continua sendo o jeito certo de chamar.
+   vendedor nao consegue entrar. Hoje ele recusa com mensagem explicita.
 4. **Conferir peso e dimensoes do kit.** `migrations/1755300600000_kit_dimensoes.sql`
    semeia 500 g / 12 x 16 x 20 cm como **palpite declarado**, nao medida. Valor
    errado = frete cotado abaixo do custo real, e a diferenca sai da margem em
