@@ -21,7 +21,7 @@ const KITS = [{
   id: 'k1', slug: 'kit-milagran', nome: 'Kit Milagran',
   descricao: 'Kit de limpeza de pele instantanea.',
   precoCentavos: deInteiro(100000), unidades: 1, sku: 'MG-KIT-001',
-  anvisaRegistro: null, ativo: true, ordem: 1,
+  anvisaRegistro: null, anvisaDispensado: false, ativo: true, ordem: 1,
   // Peso e dimensoes fazem parte de Kit desde que a cotacao de frete passou
   // a le-los do cadastro (src/repositories/produtos.ts). A vitrine nao usa
   // nenhum dos quatro — ela nao conhece o CEP do visitante e por isso nao
@@ -144,6 +144,28 @@ describe('Vitrine', () => {
       />,
     )
     expect(screen.getByTestId('anvisa')).toHaveTextContent('25351.000123/2026-01')
+  })
+
+  /**
+   * A situacao REAL do kit do lancamento desde 18/08/2026: o cliente declarou
+   * o enquadramento na Lei 15.154/2025 (producao artesanal, dispensada de
+   * registro previo) e a migration 1755500000000 gravou a flag. "Em breve"
+   * prometia um numero que nunca vira; a tela agora afirma a dispensa, citando
+   * a lei — e NUNCA a palavra "aprovado", porque dispensa nao e aprovacao.
+   */
+  it('kit dispensado mostra a Lei 15.154/2025 em vez de "em breve"', () => {
+    render(
+      <Vitrine
+        kits={[{ ...KITS[0]!, anvisaDispensado: true }]}
+        representante={null}
+        escassez={null}
+      />,
+    )
+    const anvisa = screen.getByTestId('anvisa')
+    expect(anvisa).toHaveTextContent('Lei nº 15.154/2025')
+    expect(anvisa).toHaveTextContent(/dispensado de registro/i)
+    expect(anvisa).not.toHaveTextContent(/em breve/i)
+    expect(anvisa).not.toHaveTextContent(/aprovado/i)
   })
 
   it('identifica o representante quando a vitrine e dele', () => {

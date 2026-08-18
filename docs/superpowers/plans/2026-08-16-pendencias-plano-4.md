@@ -134,7 +134,12 @@ zero. Nada disso e defeito a corrigir no codigo — e configuracao que falta.
    lista:** medida errada = frete cotado abaixo do custo, e a diferenca sai da
    margem em TODO pedido online. Sem conserto depois — `frete_centavos` e
    congelado no INSERT pelo trigger de imutabilidade.
-4. **Registro ANVISA.** Continua NULL; a vitrine exibe "em breve".
+4. ~~**Registro ANVISA.**~~ **Resolvido por dispensa em 18/08/2026:** o cliente
+   declarou o enquadramento na Lei n. 15.154/2025 (producao artesanal) e a
+   migration `1755500000000_anvisa_dispensa.sql` gravou a flag. As telas
+   mostram a frase da lei via `src/lib/anvisa.ts`. Ressalva registrada no
+   checklist do DEPLOY.md: a isencao depende do regulamento da Anvisa (RDC+IN
+   em consulta publica out/2025) e a fiscalizacao sanitaria continua.
 
 ---
 

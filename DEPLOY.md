@@ -153,9 +153,17 @@ Ordem importa: os tres primeiros itens sao pre-requisito para vender.
    429. Decidir antes do dia 25: contador em Redis (a VPS ja roda um na stack
    `evolution`) ou isencao para o IP do local. So aumentar o numero nao resolve
    o caso de 200 pessoas. Ver `src/lib/rate-limit.ts`.
-9. **Registro ANVISA.** `kits.anvisa_registro` continua NULL e a vitrine exibe
-   "Registro ANVISA: em breve". Cosmetico sem regularizacao exibida nao pode ser
-   vendido no Brasil — obter o numero ou lancar assim conscientemente.
+9. **ANVISA — resolvido por dispensa em 18/08/2026.** O cliente declarou o
+   enquadramento na Lei n. 15.154/2025 (producao artesanal, dispensada de
+   registro previo) e `kits.anvisa_dispensado = true` foi gravado por migration
+   (`1755500000000_anvisa_dispensa.sql`). Home e vitrine exibem a frase da lei,
+   vinda de `src/lib/anvisa.ts` (fonte unica).
+   O QUE MANTER DE OLHO: a isencao vale "na forma de regulamento" da Anvisa
+   (RDC + IN com a lista de produtos elegiveis — consultas publicas 1352/1353
+   de out/2025). Conferir, quando o regulamento sair, se os produtos do kit
+   estao na lista e se as condicoes (pequena escala, processo manual, venda
+   direta ao consumidor) continuam atendidas. A fiscalizacao sanitaria e as
+   regras de rotulagem CONTINUAM valendo — a dispensa e so do registro previo.
 
 ## Deploy automatico (push na main)
 

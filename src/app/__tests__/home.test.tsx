@@ -55,6 +55,7 @@ const KIT: Kit = {
   unidades: 1,
   sku: 'MG-KIT-001',
   anvisaRegistro: null,
+  anvisaDispensado: false,
   ativo: true,
   ordem: 1,
   pesoGramas: 760,
@@ -300,11 +301,34 @@ describe('Home da loja de lancamento', () => {
     })
   })
 
-  describe('registro ANVISA (divida deliberada)', () => {
-    it('diz "em breve" enquanto o registro nao existe', async () => {
+  /**
+   * Deixou de ser "divida deliberada" em 18/08/2026: o cliente declarou o
+   * enquadramento na Lei 15.154/2025 e o kit do lancamento passou a carregar
+   * a dispensa gravada por migration. Os tres estados agora convivem — "em
+   * breve" segue sendo o default honesto de um kit futuro sem declaracao.
+   * A copy vem de src/lib/anvisa.ts, a MESMA fonte da vitrine.
+   */
+  describe('situacao ANVISA', () => {
+    it('diz "em breve" enquanto nao ha registro nem dispensa', async () => {
       await renderizarHome()
 
-      expect(screen.getByTestId('anvisa')).toHaveTextContent(/em breve/i)
+      const anvisa = screen.getByTestId('anvisa')
+      expect(anvisa).toHaveTextContent(/em breve/i)
+      // Pendencia de verdade merece moldura de atencao.
+      expect(anvisa.className).toContain('aviso--atencao')
+    })
+
+    it('kit dispensado mostra a Lei 15.154/2025, sem moldura de alerta', async () => {
+      vi.mocked(listarKitsAtivos)
+        .mockResolvedValue([{ ...KIT, anvisaDispensado: true }])
+      await renderizarHome()
+
+      const anvisa = screen.getByTestId('anvisa')
+      expect(anvisa).toHaveTextContent('Lei nº 15.154/2025')
+      expect(anvisa).not.toHaveTextContent(/em breve/i)
+      // Situacao RESOLVIDA nao se veste de alerta: o comprador leria
+      // problema onde nao ha.
+      expect(anvisa.className).not.toContain('aviso--atencao')
     })
 
     it('mostra o numero assim que ele existir', async () => {

@@ -124,6 +124,7 @@ export interface Estoques {
 
 export interface Kits {
   altura_cm: Generated<number>;
+  anvisa_dispensado: Generated<boolean>;
   anvisa_registro: string | null;
   ativo: Generated<boolean>;
   atualizado_em: Generated<Timestamp>;

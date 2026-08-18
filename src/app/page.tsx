@@ -3,6 +3,7 @@ import { ContadorEstoque } from '@/components/contador-estoque'
 import { avisoDeEscassez } from '@/lib/escassez'
 import { formatarBRL } from '@/lib/money'
 import { AVISO_PRE_VENDA, lancamentoJaOcorreu } from '@/lib/tempo'
+import { textoAnvisa, situacaoPendente } from '@/lib/anvisa'
 import { saldoDoEstoque } from '@/repositories/estoque'
 import { listarKitsAtivos } from '@/repositories/produtos'
 import { CheckoutWizard } from '@/components/checkout-wizard'
@@ -223,6 +224,14 @@ export default async function PaginaInicial() {
    */
   const rotuloCta = esgotado ? CTA_SO_ONLINE : CTA_COM_PRESENCIAL
 
+  // Uma vez, aqui, e nao inline em cada uso: a MESMA situacao alimenta o
+  // texto e a decisao de moldura do bloco ANVISA. Dois objetos montados em
+  // linhas diferentes poderiam divergir num refactor sem o compilador acusar.
+  const situacaoAnvisaDoKit = {
+    registro: kit.anvisaRegistro,
+    dispensado: kit.anvisaDispensado,
+  }
+
   return (
     <>
       <Hero lancado={lancado}>
@@ -319,22 +328,31 @@ export default async function PaginaInicial() {
         </div>
 
         {/*
-          DIVIDA DELIBERADA, herdada de src/components/vitrine.tsx e repetida
-          aqui de proposito: um cosmetico nao pode ser vendido no Brasil sem
-          registro na ANVISA. Enquanto `anvisaRegistro` for null, a superficie
-          que vende precisa dizer isso — e desde 16/08/2026 esta pagina tambem
-          vende, entao omitir aqui seria esconder na tela mais visitada
-          exatamente o que a vitrine declara.
+          A frase vem de src/lib/anvisa.ts — FONTE UNICA com a vitrine de
+          /comprar. Ate 18/08/2026 as duas telas escreviam a propria versao a
+          mao, e quando o cliente declarou o enquadramento na Lei 15.154/2025
+          (producao artesanal, dispensada de registro previo) a copy teria que
+          mudar em dois lugares sem nada apontando o segundo. Mesmo remedio do
+          frete (src/components/linha-frete.tsx), mesma licao.
 
-          Bloco `.aviso` (mapeado em globals.css para "qualquer tela") em vez de
-          `.vitrine__anvisa`: aquela classe pertence ao componente da vitrine, e
-          a convencao de blocos deste projeto e o que impede o CSS de virar um
-          emaranhado de excecoes.
+          A moldura de ATENCAO agora e condicional: ela pertence ao estado
+          pendente ("em breve"), que e pendencia de verdade. Dispensa legal e
+          registro emitido sao situacoes RESOLVIDAS — vesti-las de alerta
+          faria o comprador ler problema onde nao ha.
+
+          Bloco `.aviso` (mapeado em globals.css para "qualquer tela") em vez
+          de `.vitrine__anvisa`: aquela classe pertence ao componente da
+          vitrine, e a convencao de blocos deste projeto e o que impede o CSS
+          de virar um emaranhado de excecoes.
         */}
-        <p className="aviso aviso--atencao" data-testid="anvisa">
-          <span className="aviso__titulo">Registro ANVISA</span>
-          {kit.anvisaRegistro
-            ?? 'Em breve. O registro do produto ainda não foi emitido e será publicado aqui assim que sair.'}
+        <p
+          className={situacaoPendente(situacaoAnvisaDoKit)
+            ? 'aviso aviso--atencao'
+            : 'aviso'}
+          data-testid="anvisa"
+        >
+          <span className="aviso__titulo">ANVISA</span>
+          {textoAnvisa(situacaoAnvisaDoKit)}
         </p>
       </section>
 

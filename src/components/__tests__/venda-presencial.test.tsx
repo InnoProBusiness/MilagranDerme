@@ -39,7 +39,7 @@ const KIT: Kit = {
   id: 'k1', slug: 'kit-milagran', nome: 'Kit Milagran',
   descricao: 'Kit de limpeza de pele instantanea.',
   precoCentavos: deInteiro(100000), unidades: 1, sku: 'MG-KIT-001',
-  anvisaRegistro: null, ativo: true, ordem: 1,
+  anvisaRegistro: null, anvisaDispensado: false, ativo: true, ordem: 1,
   // O balcao nao cota frete nenhum (venda presencial nao tem entrega), mas o
   // fixture e tipado como `Kit` de proposito e por isso precisa da forma
   // inteira — inclusive peso e dimensoes, que existem para a cotacao online.

@@ -9,6 +9,7 @@ import { useState } from 'react'
 import type { Kit } from '@/repositories/produtos'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { formatarBRL } from '@/lib/money'
+import { textoAnvisa } from '@/lib/anvisa'
 import type { AvisoEscassez } from '@/lib/escassez'
 import { LinhaFrete } from '@/components/linha-frete'
 
@@ -281,14 +282,21 @@ export function Vitrine({ kits, representante, escassez }: VitrineProps) {
       </div>
 
       {/*
-        DIVIDA DELIBERADA (nao "consertar"): um cosmetico nao pode ser
-        vendido no Brasil sem registro ANVISA. Enquanto anvisaRegistro for
-        null, a tela precisa dizer isso, nunca omitir ou fingir um numero.
+        DIVIDA PAGA EM 18/08/2026 — este era o antigo "DIVIDA DELIBERADA:
+        um cosmetico nao pode ser vendido sem registro ANVISA". A situacao
+        mudou por decisao, nao por esquecimento: o cliente declarou o
+        enquadramento na Lei 15.154/2025 (producao artesanal, dispensada de
+        registro previo), e o "em breve" — que prometia um numero que nunca
+        vira — deixou de ser o estado honesto para ESTE kit.
+
+        A frase vem de src/lib/anvisa.ts, a fonte unica: a home mostra a
+        mesma situacao na secao do kit, e duas copies escritas a mao ja
+        divergiram neste projeto (ver src/components/linha-frete.tsx). O
+        "em breve" continua existindo la como default de kit futuro sem
+        registro e sem declaracao.
       */}
       <p className="vitrine__anvisa" data-testid="anvisa">
-        {kit.anvisaRegistro
-          ? `Registro ANVISA: ${kit.anvisaRegistro}`
-          : 'Registro ANVISA: em breve'}
+        {textoAnvisa({ registro: kit.anvisaRegistro, dispensado: kit.anvisaDispensado })}
       </p>
 
       {/*

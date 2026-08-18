@@ -22,7 +22,7 @@ const KIT: Kit = {
   id: 'k1', slug: 'kit-milagran', nome: 'Kit Milagran',
   descricao: 'Kit de limpeza de pele instantanea.',
   precoCentavos: deInteiro(100000), unidades: 1, sku: 'MG-KIT-001',
-  anvisaRegistro: null, ativo: true, ordem: 1,
+  anvisaRegistro: null, anvisaDispensado: false, ativo: true, ordem: 1,
   // Kit passou a carregar peso e dimensoes (src/repositories/produtos.ts):
   // a cotacao de frete le os quatro do cadastro em vez de inventa-los. O
   // wizard nao os exibe nem os envia no POST — quem cota e o servidor, a

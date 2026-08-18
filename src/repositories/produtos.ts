@@ -12,6 +12,13 @@ export type Kit = {
   unidades: number
   sku: string
   anvisaRegistro: string | null
+  /**
+   * Dispensa de registro por producao artesanal (Lei n. 15.154/2025),
+   * DECLARADA pelo cliente e gravada por migration — nunca inferida. Quem
+   * traduz o par (registro, dispensado) em frase de tela e src/lib/anvisa.ts,
+   * a fonte unica; nenhuma superficie escreve essa copy a mao.
+   */
+  anvisaDispensado: boolean
   ativo: boolean
   ordem: number
   /**
@@ -52,6 +59,7 @@ function paraKit(l: Selectable<Kits>): Kit {
     unidades: l.unidades,
     sku: l.sku,
     anvisaRegistro: l.anvisa_registro,
+    anvisaDispensado: l.anvisa_dispensado,
     ativo: l.ativo,
     ordem: l.ordem,
     // Um a um, sem espalhar o resto da linha: `...l` traria as colunas cruas
