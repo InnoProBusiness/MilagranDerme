@@ -99,6 +99,23 @@ TAG_ANTERIOR=$(docker service inspect milagran_app \
   | cut -d@ -f1 | cut -d: -f2 || true)
 log "versao no ar antes desta: ${TAG_ANTERIOR:-nenhuma}"
 
+# O GERADOR VEM DO REPOSITORIO A CADA DEPLOY, e isso conserta uma falha real
+# observada em 17/08/2026.
+#
+# O `rsync` acima sincroniza /opt/milagran/, mas nunca /root/ — e a copia de
+# /root/make-milagran-stack.sh era de 11/08, anterior aos Planos 3 e 4. Ela nao
+# conhecia MERCADOPAGO_*, CLUBE_ENVIOS_* nem CEP_ORIGEM_EXPEDICAO, entao
+# gerava a stack deixando essas variaveis VAZIAS — mesmo com os segredos
+# gravados corretamente em /root/.milagran-*.
+#
+# O sintoma era cruel: pagamento e frete morriam no ar, o deploy passava verde,
+# e um `docker service update --env-add` feito a mao "resolvia" ate o proximo
+# deploy silenciosamente apagar tudo de novo, porque `stack deploy` substitui a
+# spec inteira do servico.
+#
+# Copiar aqui elimina a classe do problema: a versao no repositorio e a que
+# roda, sempre. As duas linhas ficam ANTES da chamada de proposito.
+install -m 700 /opt/milagran/deploy/make-milagran-stack.sh /root/make-milagran-stack.sh
 /root/make-milagran-stack.sh "${SHA}"
 
 # --resolve-image never: a imagem so existe no daemon local, nao ha registry.

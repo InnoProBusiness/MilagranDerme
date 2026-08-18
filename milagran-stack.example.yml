@@ -42,7 +42,9 @@ services:
       - RESEND_API_KEY=
       - EMAIL_FROM=
       - EMAIL_TO=
-      - ENVIAR_CONFIRMACAO=false
+      # Vazio = desligado. O gerador injeta "true" quando
+      # /root/.milagran-enviar-confirmacao contiver essa palavra.
+      - ENVIAR_CONFIRMACAO=
       # Mercado Pago. ATE 16/08/2026 ESTAS QUATRO NAO EXISTIAM AQUI, e o
       # efeito era silencioso e total: o container subia, a loja aparecia, o
       # comprador chegava ate /pedido/<token> e a tela dizia "o pagamento

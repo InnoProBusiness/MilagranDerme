@@ -30,6 +30,11 @@ ler_opcional() { [ -s "$1" ] && cat "$1" || echo ""; }
 RESEND_KEY=$(ler_opcional /root/.milagran-resend-key)
 EMAIL_FROM=$(ler_opcional /root/.milagran-email-from)
 EMAIL_TO=$(ler_opcional /root/.milagran-email-to)
+# Confirmacao ao proprio candidato/comprador. Estava FIXO em "false" dentro do
+# modelo, o que fazia todo deploy desligar um envio que alguem tinha ligado a
+# mao com `docker service update` — sem aviso e sem rastro. Agora e arquivo,
+# como todo o resto, e sobrevive ao deploy.
+ENVIAR_CONF=$(ler_opcional /root/.milagran-enviar-confirmacao)
 
 # Mercado Pago e Clube Envios. Tambem "opcionais" no sentido tecnico (a stack
 # sobe sem eles), mas a consequencia e MUITO diferente da do Resend: sem estes
@@ -57,6 +62,7 @@ sed \
   -e "s|^\( *- RESEND_API_KEY=\)$|\1$(escapar "$RESEND_KEY")|" \
   -e "s|^\( *- EMAIL_FROM=\)$|\1$(escapar "$EMAIL_FROM")|" \
   -e "s|^\( *- EMAIL_TO=\)$|\1$(escapar "$EMAIL_TO")|" \
+  -e "s|^\( *- ENVIAR_CONFIRMACAO=\)$|\1$(escapar "$ENVIAR_CONF")|" \
   -e "s|^\( *- MERCADOPAGO_ACCESS_TOKEN=\)$|\1$(escapar "$MP_ACCESS")|" \
   -e "s|^\( *- MERCADOPAGO_PUBLIC_KEY=\)$|\1$(escapar "$MP_PUBLIC")|" \
   -e "s|^\( *- MERCADOPAGO_WEBHOOK_SECRET=\)$|\1$(escapar "$MP_WEBHOOK")|" \
