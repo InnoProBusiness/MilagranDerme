@@ -41,6 +41,8 @@ export type PapelUsuario = "admin" | "vendedor";
 
 export type PedidoStatus = "aguardando_pagamento" | "cancelado" | "em_preparacao" | "em_transito" | "entregue" | "enviado" | "pago" | "pendente" | "reembolsado";
 
+export type PedidoTipoEntrega = "envio" | "retirada";
+
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type TipoDesconto = "fixo" | "percentual";
@@ -202,6 +204,7 @@ export interface Pedidos {
   representante_id: string | null;
   status: Generated<PedidoStatus>;
   subtotal_centavos: number;
+  tipo_entrega: Generated<PedidoTipoEntrega>;
   token: Generated<string>;
   total_centavos: number;
   utm_campaign: string | null;

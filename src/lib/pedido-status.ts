@@ -1,4 +1,4 @@
-import type { PedidoStatus, PagamentoStatus } from '@/lib/db-types'
+import type { PedidoStatus, PagamentoStatus, PedidoTipoEntrega as TipoEntrega } from '@/lib/db-types'
 
 /**
  * Traduz payment.status do Mercado Pago para o ENUM pagamento_status
@@ -240,4 +240,64 @@ export const ROTULOS_STATUS: Record<PedidoStatus, { titulo: string; descricao: s
     titulo: 'Reembolsado',
     descricao: 'Este pedido foi reembolsado. O valor volta para a mesma forma de pagamento usada na compra, no prazo do seu banco.',
   },
+}
+
+/**
+ * COMO O KIT CHEGA A QUEM COMPROU — o terceiro eixo do pedido, ao lado de
+ * `origem` (atribuicao de comissao) e `canal` (onde a venda aconteceu).
+ *
+ * 'envio'    = sai daqui por transportadora, para um endereco.
+ * 'retirada' = e entregue em maos, sem transportadora e sem frete.
+ *
+ * O tipo vem do banco (migrations/1755600000000_pedido_tipo_entrega.sql) e e
+ * reexportado daqui porque este modulo e quem decide o que cada tipo pode
+ * fazer. Ver EXIGE_POSTAGEM logo abaixo.
+ */
+export type { PedidoTipoEntrega as TipoEntrega } from '@/lib/db-types'
+
+/**
+ * Os status que so existem porque houve POSTAGEM.
+ *
+ * Um pedido de retirada nunca passa por nenhum deles: nao ha separacao para
+ * despacho, nao ha objeto postado e nao ha nada em transito — o kit fica na
+ * prateleira ate a compradora aparecer. O caminho dela e
+ * pago -> entregue, exatamente o mesmo da venda de balcao, que ja e permitido
+ * em TRANSICOES desde 16/08/2026.
+ *
+ * NAO HOUVE STATUS NOVO, e a decisao foi consciente. Um 'aguardando_retirada'
+ * no ENUM exigiria ALTER TYPE ADD VALUE — que no Postgres nao pode ser usado na
+ * mesma migration que o cria, forcando dois deploys encadeados — e quebraria a
+ * compilacao de ROTULOS_STATUS, TRANSICOES e de cada `switch` exaustivo sobre
+ * PedidoStatus, tudo isso a seis dias do lancamento. O que a operacao precisa
+ * enxergar ("quem vem buscar, e ate quando") nao e um estado do pedido: e um
+ * RECORTE de `pago` por tipo de entrega, e a tela de logistica faz esse recorte
+ * sem que o ENUM precise saber da existencia da retirada.
+ *
+ * 'em_preparacao' esta na lista por um motivo ADICIONAL ao de nao haver
+ * postagem: ele e BECO SEM SAIDA para a retirada. TRANSICOES.em_preparacao e
+ * ['enviado', 'reembolsado'] — de la so se sai postando. Um pedido de retirada
+ * que entrasse nesse status ficaria impossivel de concluir sem mentir.
+ */
+export const EXIGE_POSTAGEM: readonly PedidoStatus[] = [
+  'em_preparacao', 'enviado', 'em_transito',
+]
+
+/**
+ * A transicao e permitida PARA ESTE TIPO DE ENTREGA?
+ *
+ * Envolve transicaoPermitida em vez de substitui-la: a maquina de estados
+ * continua sendo uma so, e este eixo apenas SUBTRAI arestas. Nenhuma transicao
+ * passa a ser possivel por causa da retirada — o que seria a forma de um bug
+ * aqui virar dinheiro perdido.
+ *
+ * O DEFAULT 'envio' e deliberado e faz todo chamador antigo continuar exato:
+ * antes desta funcao existir, todo pedido era de envio.
+ */
+export function transicaoPermitidaNaEntrega(
+  de: PedidoStatus,
+  para: PedidoStatus,
+  tipoEntrega: TipoEntrega = 'envio',
+): boolean {
+  if (!transicaoPermitida(de, para)) return false
+  return tipoEntrega === 'envio' || !EXIGE_POSTAGEM.includes(para)
 }

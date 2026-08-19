@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CheckoutWizard } from '@/components/checkout-wizard'
 import { TEXTO_FRETE_A_COTAR } from '@/components/linha-frete'
+import { ROTULO_RETIRADA } from '@/lib/retirada'
 import type { Kit } from '@/repositories/produtos'
 import { deInteiro } from '@/lib/money'
 
@@ -187,11 +188,18 @@ async function percorrerAteRevisao() {
   await userEvent.type(screen.getByLabelText(/whatsapp/i), '11988887777')
   await userEvent.click(botaoContinuar())
 
-  // Passo 3: endereco + frete.
+  // Passo 3: MODALIDADE, depois endereco, depois transportadora.
+  //
+  // A escolha da modalidade vem primeiro desde 19/08/2026, e nao e detalhe de
+  // teste: o campo de CEP so existe dentro do ramo de envio. Era essa ordem que
+  // faltava na primeira versao da tela, em que a retirada aparecia sozinha e
+  // quem clicasse nela ficava sem caminho de volta.
+  await escolherEnvio()
+
   // /numero/i sozinho e ambiguo: o label do CEP e "CEP (somente numeros)" e
   // tambem contem a substring "numero" — so o anchor exato distingue o
   // campo de numero do endereco do label do CEP.
-  await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+  await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
   // Espera as DUAS chamadas disparadas pelo oitavo digito: o radio so existe
   // depois da cotacao, e o endereco so esta preenchido depois do autofill.
   const pac = await screen.findByRole('radio', { name: /PAC/ })
@@ -207,8 +215,24 @@ async function percorrerAteRevisao() {
   expect(await screen.findByRole('button', { name: /ir para o pagamento/i })).toBeInTheDocument()
 }
 
+/**
+ * Marca "Receber em casa" no primeiro radiogroup do passo 3.
+ *
+ * Funcao propria, e nao uma linha solta, porque TODO caminho de envio passa por
+ * ela: se um refactor mudar o rotulo da modalidade, quebra aqui uma vez em vez
+ * de em dez testes.
+ */
+async function escolherEnvio() {
+  await userEvent.click(screen.getByRole('radio', { name: /receber em casa/i }))
+}
+
+/** A outra modalidade. */
+async function escolherRetirada() {
+  await userEvent.click(screen.getByRole('radio', { name: new RegExp(ROTULO_RETIRADA, 'i') }))
+}
+
 async function preencherAteRevisao() {
-  render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+  render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
   await percorrerAteRevisao()
 }
 
@@ -230,7 +254,7 @@ describe('CheckoutWizard', () => {
   // ninguem fez; qualquer outro numero ali seria um frete inventado.
   it('DINHEIRO: no passo 1 o frete e "a cotar", sem nenhum valor em reais', () => {
     vi.stubGlobal('fetch', criarFetchFalso())
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
 
     const frete = screen.getByTestId('frete')
     expect(frete).toHaveTextContent(TEXTO_FRETE_A_COTAR)
@@ -242,7 +266,7 @@ describe('CheckoutWizard', () => {
   // e a unica forma de o comprador conferir a conta de 2, 3 ou 10 kits.
   it('mostra "Valor unitário" no passo 1, mesmo com quantidade 1', async () => {
     vi.stubGlobal('fetch', criarFetchFalso())
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
 
     expect(screen.getByTestId('valor-unitario')).toHaveTextContent('Valor unitário: R$ 1.000,00')
     expect(screen.getByTestId('subtotal')).toHaveTextContent('R$ 1.000,00')
@@ -285,6 +309,12 @@ describe('CheckoutWizard', () => {
     expect(corpo).toEqual({
       kitSlug: 'kit-milagran',
       quantidade: 1,
+      // A MODALIDADE, e nao o preco dela. `tipoEntrega` e o discriminante da
+      // uniao de POST /api/pedidos: ele diz QUAL contrato este corpo cumpre, e
+      // e por ele que o servidor sabe que aqui ainda tem que haver `idServico`
+      // e endereco. Nao passa pelo PADRAO_DE_DINHEIRO acima porque nao e
+      // dinheiro — e o nome de um caminho.
+      tipoEntrega: 'envio',
       idServico: 4553,
       nome: 'Ana Souza',
       email: 'ana.wizard@exemplo.com',
@@ -325,14 +355,15 @@ describe('CheckoutWizard', () => {
     const fetchMock = criarFetchFalso()
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
+    await escolherEnvio()
 
     // Sete digitos ainda nao consultam nada: antes do oitavo nao ha CEP.
-    await userEvent.type(screen.getByLabelText(/cep/i), '0131010')
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '0131010')
     expect(chamadasDe(fetchMock, '/api/cep/01310100')).toHaveLength(0)
 
-    await userEvent.type(screen.getByLabelText(/cep/i), '0')
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '0')
     await waitFor(() => expect(screen.getByLabelText(/^rua$/i)).toHaveValue('Avenida Paulista'))
 
     expect(chamadasDe(fetchMock, '/api/cep/01310100')).toHaveLength(1)
@@ -344,9 +375,10 @@ describe('CheckoutWizard', () => {
   it('mantem os campos editaveis depois do autofill', async () => {
     vi.stubGlobal('fetch', criarFetchFalso())
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
     await waitFor(() => expect(screen.getByLabelText(/^rua$/i)).toHaveValue('Avenida Paulista'))
 
     // Endereco de entrega nem sempre e o do logradouro principal do CEP, e
@@ -368,9 +400,10 @@ describe('CheckoutWizard', () => {
   it('CEP nao encontrado nao mostra erro e deixa digitar o endereco a mao', async () => {
     vi.stubGlobal('fetch', criarFetchFalso({ cep: CEP_NAO_ENCONTRADO }))
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
 
     // A cotacao de frete acontece do mesmo jeito: ela depende do CEP, nao do
     // autofill.
@@ -393,9 +426,10 @@ describe('CheckoutWizard', () => {
   it('sem opcao de frete escolhida, o "Continuar" do passo 3 fica desabilitado', async () => {
     vi.stubGlobal('fetch', criarFetchFalso())
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
     const sedex = await screen.findByRole('radio', { name: /SEDEX/ })
     await userEvent.type(screen.getByLabelText(/^numero$/i), '1000')
 
@@ -411,9 +445,10 @@ describe('CheckoutWizard', () => {
   it('mostra transportadora, valor e prazo de cada opcao cotada', async () => {
     vi.stubGlobal('fetch', criarFetchFalso())
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
 
     const pac = await screen.findByRole('radio', { name: /PAC/ })
     expect(pac).toHaveAccessibleName(/R\$ 23,50/)
@@ -441,9 +476,10 @@ describe('CheckoutWizard', () => {
       }),
     }))
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
     // O autofill do CEP traz rua, bairro, cidade e UF; o numero da casa e o
     // unico campo que ele nao tem como saber, e sem ele o passo 3 nao libera.
     await userEvent.type(screen.getByLabelText(/^numero$/i), '1000')
@@ -470,7 +506,7 @@ describe('CheckoutWizard', () => {
     const fetchMock = criarFetchFalso()
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} cupomInicial="PRE800" />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} cupomInicial="PRE800" lancado={false} />)
     await percorrerAteRevisao()
 
     expect(screen.getByLabelText(/cupom/i)).toHaveValue('PRE800')
@@ -490,7 +526,7 @@ describe('CheckoutWizard', () => {
     const fetchMock = criarFetchFalso()
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} cupomInicial="PRE800" />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} cupomInicial="PRE800" lancado={false} />)
     await percorrerAteRevisao()
 
     const campo = screen.getByLabelText(/cupom/i)
@@ -502,7 +538,7 @@ describe('CheckoutWizard', () => {
   it('sem cupom no link, o campo nasce vazio', async () => {
     vi.stubGlobal('fetch', criarFetchFalso())
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await percorrerAteRevisao()
 
     expect(screen.getByLabelText(/cupom/i)).toHaveValue('')
@@ -511,26 +547,60 @@ describe('CheckoutWizard', () => {
   // O caso que o cabecalho de src/components/linha-frete.tsx e o de
   // src/lib/frete.ts existem para impedir: cotacao indisponivel NAO pode virar
   // frete zero e NAO pode deixar o pedido seguir.
-  it('DINHEIRO: 503 frete_indisponivel trava o avanco e nunca mostra R$ 0,00', async () => {
+  /**
+   * O QUE ESTE TESTE PASSOU A AFIRMAR EM 19/08/2026, e por que a mudanca e uma
+   * melhora e nao um afrouxamento.
+   *
+   * Ele se chamava "503 frete_indisponivel TRAVA O AVANCO" e exigia zero radios
+   * na tela. Isso era exato enquanto a unica forma de receber o kit dependia do
+   * Clube Envios: sem cotacao nao havia compra possivel, e deixar o comprador
+   * seguir teria produzido um pedido com frete desconhecido.
+   *
+   * Com a retirada no local existe uma forma de entrega que NAO DEPENDE DE
+   * PROVEDOR NENHUM. Continuar bloqueando a tela inteira numa queda do Clube
+   * Envios seria recusar a venda de quem ia buscar o kit a pe — por causa de um
+   * servico que aquela compra nunca usaria.
+   *
+   * O que continua trancado, e e o que sempre importou: nenhuma opcao de ENVIO
+   * aparece sem cotacao, e a linha de frete do resumo nunca imprime R$ 0,00 por
+   * causa de uma cotacao que falhou.
+   */
+  it('DINHEIRO: 503 frete_indisponivel nao oferece envio nenhum, e nunca cota R$ 0,00', async () => {
     vi.stubGlobal('fetch', criarFetchFalso({ frete: FRETE_INDISPONIVEL }))
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
     await userEvent.type(screen.getByLabelText(/^numero$/i), '1000')
 
     const aviso = await screen.findByRole('alert')
-    // A mensagem curada pela rota, mais a consequencia — que a rota nao tem
-    // como saber e a tela tem: o pedido nao segue agora.
     expect(aviso).toHaveTextContent(/não foi possível calcular o frete agora/i)
-    expect(aviso).toHaveTextContent(/não é possível concluir o pedido/i)
 
-    expect(screen.queryAllByRole('radio')).toHaveLength(0)
+    // NENHUMA opcao de transportadora — nao houve cotacao. As duas
+    // modalidades continuam na tela, que e o que da caminho de volta.
+    expect(screen.queryByRole('radio', { name: /PAC|SEDEX/ })).toBeNull()
     expect(botaoContinuar()).toBeDisabled()
 
-    // Nenhum "R$ 0,00" em lugar nenhum da tela — nem na linha de frete, nem
-    // num total montado como se o frete fosse gratis.
-    expect(document.body.textContent ?? '').not.toContain('R$ 0,00')
+    // O alerta fala do ENVIO, e nao do pedido: com a retirada disponivel, uma
+    // queda do provedor deixou de fechar a loja, e dizer que o pedido parou
+    // mandaria embora quem ia buscar o kit a pe.
+    expect(aviso).not.toHaveTextContent(/concluir o pedido/i)
+  })
+
+  /**
+   * A CONSEQUENCIA DE PRODUTO: uma queda do Clube Envios na semana do
+   * lancamento deixou de ser uma loja fechada.
+   */
+  it('provedor fora do ar nao impede quem vai retirar de comprar', async () => {
+    vi.stubGlobal('fetch', criarFetchFalso({ frete: FRETE_INDISPONIVEL }))
+
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
+    await irAtePasso3()
+    await escolherRetirada()
+
+    // Sem CEP, sem cotacao, sem endereco — e mesmo assim o pedido anda.
+    expect(botaoContinuar()).toBeEnabled()
   })
 
   it('permite tentar a cotacao de novo sem reescrever o CEP', async () => {
@@ -543,9 +613,10 @@ describe('CheckoutWizard', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
     await irAtePasso3()
-    await userEvent.type(screen.getByLabelText(/cep/i), '01310100')
+    await escolherEnvio()
+    await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
     await screen.findByRole('alert')
 
     await userEvent.click(screen.getByRole('button', { name: /tentar calcular de novo/i }))
@@ -631,6 +702,207 @@ describe('CheckoutWizard', () => {
 
     expect(await screen.findByText('Cupom nao encontrado. Confira o codigo.')).toBeInTheDocument()
     expect(push).not.toHaveBeenCalled()
+  })
+
+  /**
+   * RETIRADA NO LOCAL na tela (19/08/2026). O que estes casos protegem e a
+   * ORDEM: a escolha de entrega passou a vir ANTES do endereco justamente para
+   * que quem vai buscar o kit nao preencha seis campos a toa. Um refactor que
+   * devolvesse os campos para cima quebraria aqui.
+   */
+  describe('retirada no local', () => {
+    async function irAteEntrega(lancado = false) {
+      render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={lancado} />)
+      await irAtePasso3()
+    }
+
+    it('as DUAS modalidades aparecem antes de qualquer CEP', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+
+      expect(screen.getByRole('radio', { name: new RegExp(ROTULO_RETIRADA, 'i') })).toBeInTheDocument()
+      expect(screen.getByRole('radio', { name: /receber em casa/i })).toBeInTheDocument()
+      // Nenhuma vem marcada: a retirada, que e a primeira e a mais barata,
+      // viraria a escolha de quem so clicou em Continuar sem ler — e essa
+      // pessoa descobriria que tem de ir a Goiania depois de pagar.
+      expect(screen.getByRole('radio', { name: /receber em casa/i })).not.toBeChecked()
+      expect(botaoContinuar()).toBeDisabled()
+    })
+
+    it('escolher retirada faz o endereco de entrega desaparecer', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+      await escolherEnvio()
+
+      expect(screen.getByLabelText(/^cep \(/i)).toBeInTheDocument()
+      await escolherRetirada()
+
+      // Some, e nao fica cinza: campo desabilitado ainda pergunta algo, e nao
+      // ha nada a perguntar a quem vai buscar o kit na loja.
+      expect(screen.queryByLabelText(/^cep \(/i)).toBeNull()
+      expect(screen.queryByLabelText(/^numero$/i)).toBeNull()
+    })
+
+    /**
+     * O BECO SEM SAIDA QUE ESTE TESTE FECHA (revisao de 19/08/2026).
+     *
+     * Na primeira versao da tela a retirada era a UNICA linha visivel antes de
+     * haver CEP. Quem clicasse nela, lesse o endereco e desistisse ficava
+     * preso: radio nativo nao desmarca com um segundo clique, o campo de CEP
+     * tinha sido desmontado junto com o endereco, e nao havia outra opcao no
+     * grupo para escolher no lugar. A unica saida era recarregar a pagina,
+     * perdendo nome, e-mail, CPF e WhatsApp — nada disso e persistido.
+     */
+    it('clicar em retirada e mudar de ideia devolve o endereco, sem recarregar', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+
+      await escolherRetirada()
+      expect(screen.queryByLabelText(/^cep \(/i)).toBeNull()
+
+      await escolherEnvio()
+      expect(screen.getByLabelText(/^cep \(/i)).toBeInTheDocument()
+
+      // E nada do que ela ja tinha digitado se perdeu — a saida antiga era
+      // recarregar a pagina, que apagava os quatro campos do passo 2.
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      expect(screen.getByLabelText(/nome completo/i)).toHaveValue('Ana Souza')
+      expect(screen.getByLabelText(/cpf/i)).toHaveValue('12345678901')
+    })
+
+    it('o endereco ja digitado volta intacto ao trocar de ideia duas vezes', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+      await escolherEnvio()
+      await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
+      await userEvent.type(screen.getByLabelText(/^numero$/i), '1000')
+
+      await escolherRetirada()
+      await escolherEnvio()
+
+      expect(screen.getByLabelText(/^cep \(/i)).toHaveValue('01310100')
+      expect(screen.getByLabelText(/^numero$/i)).toHaveValue('1000')
+      // E as opcoes ja cotadas continuam la: voltar para o envio e um clique,
+      // nao uma redigitacao de CEP.
+      expect(await screen.findByRole('radio', { name: /PAC/ })).toBeInTheDocument()
+    })
+
+    it('mostra onde retirar, ali mesmo na hora de decidir', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+      await escolherRetirada()
+
+      const caixa = screen.getByTestId('endereco-retirada')
+      expect(caixa).toHaveTextContent(/Goiânia/)
+      expect(caixa).toHaveTextContent(/74693-158/)
+    })
+
+    // O aviso de pre-venda cumpre o contrato escrito na propria constante: some
+    // depois de 25/08. `lancado` vem do servidor justamente para que a virada
+    // nao produza HTML diferente no SSR e na hidratacao.
+    it('o aviso de pre-venda some depois do lancamento', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega(false)
+      await escolherRetirada()
+      expect(screen.getByTestId('endereco-retirada')).toHaveTextContent(/25\/08\/2026/)
+
+      cleanup()
+      await irAteEntrega(true)
+      await escolherRetirada()
+      expect(screen.getByTestId('endereco-retirada')).not.toHaveTextContent(/25\/08\/2026/)
+    })
+
+    /**
+     * O CORPO DA REQUISICAO, e o que NAO esta nele: nem idServico, nem um unico
+     * campo de endereco. Os dois seriam 422 no servidor (CorpoRetirada e
+     * `.strict()`), e mandar `...endereco` "porque nao custa" faria esse 422
+     * acontecer para todo mundo que escolhesse retirada.
+     */
+    it('DINHEIRO: o corpo leva tipoEntrega e nenhum campo de envio', async () => {
+      const fetchMock = criarFetchFalso()
+      vi.stubGlobal('fetch', fetchMock)
+      await irAteEntrega()
+      await escolherRetirada()
+      await userEvent.click(botaoContinuar())
+      await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
+
+      const corpo = corpoEnviadoPara(fetchMock, '/api/pedidos')
+      expect(corpo).toEqual({
+        kitSlug: 'kit-milagran',
+        quantidade: 1,
+        tipoEntrega: 'retirada',
+        nome: 'Ana Souza',
+        email: 'ana.wizard@exemplo.com',
+        cpf: '12345678901',
+        whatsapp: '11988887777',
+      })
+
+      // As tres camadas de sempre continuam valendo sobre este corpo tambem.
+      for (const proibido of CAMPOS_PROIBIDOS) {
+        expect(corpo).not.toHaveProperty(proibido)
+      }
+      for (const chave of Object.keys(corpo)) {
+        expect(chave).not.toMatch(PADRAO_DE_DINHEIRO)
+      }
+      const enviado = JSON.stringify(corpo)
+      for (const valor of VALORES_MONETARIOS) {
+        expect(enviado).not.toContain(String(valor))
+      }
+    })
+
+    // Quem escolhe retirada nao pode ver a tela pedir CEP: nao ha campo nenhum
+    // abaixo daquela frase, e o alerta de frete falaria de um servico que essa
+    // compra nunca vai usar.
+    it('nenhuma copy de frete sobra na tela de quem vai retirar', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso({ frete: FRETE_INDISPONIVEL }))
+      await irAteEntrega()
+      await escolherEnvio()
+      await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
+      await screen.findByRole('alert')
+
+      await escolherRetirada()
+
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(document.body.textContent ?? '').not.toMatch(/informe o cep/i)
+    })
+
+    it('mudar a quantidade nao descarta a retirada ja escolhida', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+      await escolherRetirada()
+      expect(botaoContinuar()).toBeEnabled()
+
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      await userEvent.click(screen.getByRole('button', { name: /aumentar/i }))
+      await userEvent.click(botaoContinuar())
+      await userEvent.click(botaoContinuar())
+
+      expect(screen.getByRole('radio', { name: new RegExp(ROTULO_RETIRADA, 'i') })).toBeChecked()
+    })
+
+    it('o resumo diz retirada em vez de imprimir R$ 0,00 de frete', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+      await escolherRetirada()
+      await userEvent.click(botaoContinuar())
+
+      expect(screen.getByTestId('frete')).toHaveTextContent(/sem frete/i)
+      expect(screen.getByTestId('frete')).not.toHaveTextContent('R$ 0,00')
+    })
+
+    // O passo 1 tambem: quem escolheu retirar e voltou para somar um kit leria
+    // "calculado a partir do seu CEP" sobre uma compra que ja decidiu nao ter
+    // frete nenhum.
+    it('voltar ao passo 1 depois de escolher retirada nao promete frete', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await irAteEntrega()
+      await escolherRetirada()
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+
+      expect(screen.getByTestId('frete')).toHaveTextContent(/sem frete/i)
+    })
   })
 })
 

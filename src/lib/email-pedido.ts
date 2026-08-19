@@ -4,6 +4,8 @@ import {
 } from '@/repositories/pedidos'
 import { formatarBRL } from '@/lib/money'
 import { AVISO_PRE_VENDA } from '@/lib/tempo'
+import { AVISO_RETIRADA_PRE_VENDA, instrucaoDeRetirada } from '@/lib/retirada'
+import type { TipoEntrega } from '@/lib/pedido-status'
 
 function escaparHtml(valor: unknown): string {
   return String(valor)
@@ -25,11 +27,14 @@ function escaparHtml(valor: unknown): string {
  * mandaria gente ligar para a Milagran perguntando por rastreio de um produto
  * que ja esta na casa dela.
  *
- * A ordem do `if` e deliberada: o caso ESTREITO (presencial) e testado e todo
- * o resto cai no texto online, que e o DEFAULT da coluna `canal` no banco
- * (migrations/1755300100000_pedidos_canal_logistica.sql). Um canal novo no
- * ENUM herdaria a copy de envio — a errada para receber e a certa para
- * despachar —, o que e o lado seguro de errar.
+ * TRES CAMINHOS DESDE 19/08/2026, com a retirada no local. A ordem dos `if` e
+ * deliberada e vai do mais ESTREITO ao mais largo: balcao, depois retirada
+ * online, e todo o resto cai no texto de envio — que e o DEFAULT da coluna
+ * `tipo_entrega` no banco. Balcao PRECISA vir primeiro: toda venda de evento
+ * tambem e 'retirada' (CHECK pedido_presencial_e_retirada), e invertendo a
+ * ordem o e-mail mandaria quem ja saiu com a sacola vir buscar em Goiania.
+ * Um valor novo em qualquer um dos dois ENUMs herda a copy de envio — a errada
+ * para receber e a certa para despachar —, que e o lado seguro de errar.
  *
  * A frase de pre-venda e a CONSTANTE de src/lib/tempo.ts, com a data de
  * 25/08/2026 dentro dela, e nao um texto escrito aqui: a mesma promessa
@@ -45,11 +50,19 @@ function escaparHtml(valor: unknown): string {
  *
  * Texto voltado ao comprador: acentuacao completa.
  */
-function proximoPasso(canal: CanalVenda): string {
+function proximoPasso(canal: CanalVenda, tipoEntrega: TipoEntrega): string {
   if (canal === 'presencial') {
     return 'O seu kit foi entregue em mãos, no próprio evento: esta compra não '
       + 'passa pelos Correios e não tem código de rastreio. O link abaixo abre '
       + 'o comprovante do seu pedido:'
+  }
+  if (tipoEntrega === 'retirada') {
+    // A frase de pre-venda AQUI e a da retirada, e nao AVISO_PRE_VENDA: aquela
+    // promete envio, e nao ha envio nenhum. As duas carregam a mesma data de
+    // 25/08/2026 e vem do mesmo tipo de constante, pelo mesmo motivo — uma
+    // promessa por escrito nao pode existir em duas versoes.
+    return `${AVISO_RETIRADA_PRE_VENDA} ${instrucaoDeRetirada()} `
+      + 'O link abaixo abre o seu pedido, com o endereço e o prazo:'
   }
   return `${AVISO_PRE_VENDA} Assim que ele for postado nos Correios, o código `
     + 'de rastreio aparece na página do seu pedido, que você acompanha por '
@@ -87,7 +100,7 @@ export function htmlConfirmacaoDePedido(p: PedidoParaEmail, urlBase: string): st
           </tr>
         </table>
         <p style="color:#f4ecdd;font-size:15px;line-height:1.6;">
-          ${escaparHtml(proximoPasso(p.canal))}
+          ${escaparHtml(proximoPasso(p.canal, p.tipoEntrega))}
         </p>
         <p style="margin:0 0 8px;">
           <a href="${escaparHtml(urlBase)}/pedido/${escaparHtml(p.token)}"

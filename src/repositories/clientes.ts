@@ -58,14 +58,20 @@ export type EntradaEndereco = {
  *
  * A COERENCIA ENTRE CANAL E ENDERECO NAO E DECIDIDA AQUI. Esta funcao aceita
  * `null` de quem pedir; quem recusa a combinacao errada e o banco, pelo CHECK
- * pedido_online_tem_endereco
- * (migrations/1755300100000_pedidos_canal_logistica.sql): pedido com
- * canal = 'online' e endereco_id NULL nao entra. Ou seja, passar `null` num
- * fluxo online nao produz um pedido mudo sem entrega — produz um erro no
- * INSERT de `pedidos`, dentro da mesma transacao, e o rollback leva o cliente
- * junto. Hoje sao dois chamadores: src/app/api/pedidos/route.ts (online,
- * sempre com endereco) e src/app/api/vendas-presenciais/route.ts (balcao,
- * sempre `null`).
+ * pedido_envio_tem_endereco
+ * (migrations/1755600000000_pedido_tipo_entrega.sql): pedido com
+ * tipo_entrega = 'envio' e endereco_id NULL nao entra. Ou seja, passar `null`
+ * num pedido que sera despachado nao produz um pedido mudo sem entrega —
+ * produz um erro no INSERT de `pedidos`, dentro da mesma transacao, e o
+ * rollback leva o cliente junto.
+ *
+ * A REGRA MUDOU DE EIXO EM 19/08/2026, com a retirada no local: ate entao a
+ * constraint era pedido_online_tem_endereco e cobrava destino de todo pedido
+ * ONLINE. Agora cobra de todo pedido de ENVIO, que e o que ela sempre quis
+ * dizer — existe pedido online sem endereco nenhum, e e o de quem vem buscar o
+ * kit em Goiania. Sao tres chamadores: src/app/api/pedidos/route.ts com
+ * endereco (envio) e com `null` (retirada), e
+ * src/app/api/vendas-presenciais/route.ts sempre com `null` (balcao).
  *
  * Se o e-mail ja pertence a um cliente cadastrado e o CPF enviado agora
  * diverge do CPF gravado, a funcao LANCA em vez de sobrescrever. CPF e

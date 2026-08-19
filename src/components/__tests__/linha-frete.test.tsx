@@ -18,14 +18,14 @@ import { deInteiro } from '@/lib/money'
  */
 describe('LinhaFrete', () => {
   it('DINHEIRO: sem valor, diz que sera calculado — nunca R$ 0,00', () => {
-    render(<LinhaFrete valor={null} />)
+    render(<LinhaFrete retirada={false} valor={null} />)
     const frete = screen.getByTestId('frete')
     expect(frete).toHaveTextContent(TEXTO_FRETE_A_COTAR)
     expect(frete).not.toHaveTextContent('R$')
   })
 
   it('DINHEIRO: prazo sozinho nao vira valor — sem cotacao continua "a cotar"', () => {
-    render(<LinhaFrete valor={null} prazoDias={5} />)
+    render(<LinhaFrete retirada={false} valor={null} prazoDias={5} />)
     const frete = screen.getByTestId('frete')
     expect(frete).toHaveTextContent(TEXTO_FRETE_A_COTAR)
     expect(frete).not.toHaveTextContent('R$ 0,00')
@@ -37,23 +37,23 @@ describe('LinhaFrete', () => {
     // mao no evento (§10). Ele so aparece porque alguem PASSOU zero, nunca por
     // omissao — que e a diferenca inteira entre este componente e a flag que
     // ele substituiu.
-    render(<LinhaFrete valor={deInteiro(0)} />)
+    render(<LinhaFrete retirada={false} valor={deInteiro(0)} />)
     expect(screen.getByTestId('frete')).toHaveTextContent('Frete: R$ 0,00')
   })
 
   it('mostra o valor cotado formatado por formatarBRL', () => {
-    render(<LinhaFrete valor={deInteiro(2490)} />)
+    render(<LinhaFrete retirada={false} valor={deInteiro(2490)} />)
     expect(screen.getByTestId('frete')).toHaveTextContent('Frete: R$ 24,90')
   })
 
   it('acrescenta o prazo estimado quando o provedor devolve um', () => {
-    render(<LinhaFrete valor={deInteiro(2490)} prazoDias={5} />)
+    render(<LinhaFrete retirada={false} valor={deInteiro(2490)} prazoDias={5} />)
     expect(screen.getByTestId('frete'))
       .toHaveTextContent('Frete: R$ 24,90 (prazo estimado: 5 dias úteis)')
   })
 
   it('concorda com o singular no prazo de um dia', () => {
-    render(<LinhaFrete valor={deInteiro(2490)} prazoDias={1} />)
+    render(<LinhaFrete retirada={false} valor={deInteiro(2490)} prazoDias={1} />)
     expect(screen.getByTestId('frete')).toHaveTextContent('prazo estimado: 1 dia útil')
   })
 
@@ -65,7 +65,7 @@ describe('LinhaFrete', () => {
    */
   it('omite o prazo quando o numero nao descreve um prazo de verdade', () => {
     for (const prazo of [undefined, null, 0, -2, 0.4]) {
-      const { unmount } = render(<LinhaFrete valor={deInteiro(2490)} prazoDias={prazo} />)
+      const { unmount } = render(<LinhaFrete retirada={false} valor={deInteiro(2490)} prazoDias={prazo} />)
       const frete = screen.getByTestId('frete')
       expect(frete).toHaveTextContent('Frete: R$ 24,90')
       expect(frete).not.toHaveTextContent(/prazo estimado/)
@@ -74,7 +74,7 @@ describe('LinhaFrete', () => {
   })
 
   it('trunca prazo fracionario em vez de imprimir "3,7 dias"', () => {
-    render(<LinhaFrete valor={deInteiro(2490)} prazoDias={3.7} />)
+    render(<LinhaFrete retirada={false} valor={deInteiro(2490)} prazoDias={3.7} />)
     expect(screen.getByTestId('frete')).toHaveTextContent('prazo estimado: 3 dias úteis')
   })
 })

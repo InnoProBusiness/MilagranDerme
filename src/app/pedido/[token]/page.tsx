@@ -4,8 +4,19 @@ import { formatarBRL } from '@/lib/money'
 import { LinhaFrete } from '@/components/linha-frete'
 import { LinhaDoTempoPedido } from '@/components/linha-do-tempo-pedido'
 import { Pagamento } from '@/components/pagamento'
-import { AVISO_PRE_VENDA, lancamentoJaOcorreu } from '@/lib/tempo'
+import { AVISO_PRE_VENDA, lancamentoJaOcorreu, FUSO_BR } from '@/lib/tempo'
+import {
+  AVISO_RETIRADA_PRE_VENDA, enderecoRetiradaEmLinha, retirarAte,
+} from '@/lib/retirada'
 import type { PedidoStatus } from '@/lib/db-types'
+
+// Data civil brasileira, sem hora — o mesmo formatador e o mesmo motivo de
+// src/components/linha-do-tempo-pedido.tsx: o container de producao roda em
+// UTC, e sem timeZone um prazo que vence as 21h de Sao Paulo apareceria com a
+// data do dia seguinte.
+const dataBR = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: FUSO_BR, day: '2-digit', month: '2-digit', year: 'numeric',
+})
 
 // O pedido e mutavel (o webhook do gateway move o status), entao esta pagina
 // nao pode ser um snapshot congelado no build.
@@ -78,6 +89,25 @@ export default async function PaginaPedido({ params }: Props) {
   // (§2), a outra comeca a esperar os Correios (§13).
   const presencial = pedido.canal === 'presencial'
 
+  /**
+   * NAO HA POSTAGEM NESTE PEDIDO — o eixo que decide a copy de entrega desta
+   * tela desde 19/08/2026.
+   *
+   * Ate a retirada existir, `presencial` respondia esta pergunta por
+   * coincidencia: so a venda de balcao dispensava os Correios. Agora existe
+   * pedido ONLINE sem envio nenhum, e cada bloco abaixo precisa dizer a qual
+   * das duas perguntas responde — "foi vendido no evento?" (presencial) ou
+   * "alguem vai postar isto?" (retirada).
+   */
+  const retirada = pedido.tipoEntrega === 'retirada'
+
+  // Online + retirada: quem comprou pela loja e vem buscar. Presencial fica de
+  // fora porque essa pessoa ja saiu com o kit — o CHECK
+  // pedido_presencial_e_retirada faz toda venda de balcao ser 'retirada'
+  // tambem, entao sem este recorte a tela mandaria quem ja tem o kit vir
+  // busca-lo.
+  const vaiBuscar = retirada && !presencial
+
   // Sem <main> proprio: o landmark de conteudo principal e o do layout raiz
   // (src/app/layout.tsx). Um <main> aqui ficaria aninhado dentro dele.
   return (
@@ -87,6 +117,7 @@ export default async function PaginaPedido({ params }: Props) {
 
       <LinhaDoTempoPedido
         canal={pedido.canal}
+        tipoEntrega={pedido.tipoEntrega}
         status={pedido.status}
         criadoEm={pedido.criadoEm}
         enviadoEm={pedido.enviadoEm}
@@ -114,9 +145,46 @@ export default async function PaginaPedido({ params }: Props) {
         Some depois da postagem e depois do lancamento: nos dois casos a
         frase deixou de descrever a realidade do pedido que esta na tela.
       */}
+      {/*
+        A MESMA PROMESSA, NO VERBO DE CADA UM. Quem recebe le "serão enviados
+        após o lançamento"; quem busca le "ficam disponíveis para retirada a
+        partir do lançamento". Dizer "enviado" para quem vai buscar seria a
+        divergencia de sempre — duas telas descrevendo a mesma compra com
+        palavras que nao batem —, e dizer so uma das duas deixaria metade dos
+        compradores sem saber por que o kit ainda nao esta pronto.
+      */}
       {!presencial && !jaSaiuDaExpedicao(pedido.status) && !encerrado(pedido.status)
         && !lancamentoJaOcorreu() && (
-        <p className="aviso-prevenda">{AVISO_PRE_VENDA}</p>
+        <p className="aviso-prevenda">{retirada ? AVISO_RETIRADA_PRE_VENDA : AVISO_PRE_VENDA}</p>
+      )}
+
+      {/*
+        ONDE E ATE QUANDO BUSCAR. Aparece so depois do pagamento confirmado:
+        antes disso nao ha kit reservado e mandar alguem a Goiania com um Pix em
+        aberto e o pior desfecho possivel desta tela.
+      */}
+      {/*
+        `status === 'pago'` e nao `!encerrado(...)`: 'entregue' NAO e um estado
+        encerrado (encerrado cobre so cancelado e reembolsado), e sem esta
+        precisao a instrucao "Retire até 01/09" continuaria na tela de quem ja
+        passou aqui e levou o kit. 'pago' e o unico estado em que a frase e
+        verdadeira — os outros alcancaveis por uma retirada sao pendente e
+        aguardando_pagamento, onde pagoEm ainda e null.
+      */}
+      {vaiBuscar && pedido.status === 'pago' && pedido.pagoEm !== null && (
+        <div className="vitrine__resumo" data-testid="retirada">
+          <p className="vitrine__linha"><strong>Retirada no local</strong></p>
+          <p className="vitrine__linha">{enderecoRetiradaEmLinha()}</p>
+          {/*
+            A DATA SAI DE retirarAte(), que conta a partir do LANCAMENTO quando o
+            pagamento veio antes dele (src/lib/retirada.ts). Somar 7 dias ao
+            pagamento aqui mandaria quem comprou em 19/08 buscar ate 26/08 —
+            janela que comeca antes de existir kit na prateleira.
+          */}
+          <p className="vitrine__linha">
+            Retire até <strong>{dataBR.format(retirarAte(pedido.pagoEm))}</strong>.
+          </p>
+        </div>
       )}
 
       {/*
@@ -125,7 +193,7 @@ export default async function PaginaPedido({ params }: Props) {
         estimado" para quem ja esta com o kit na sacola seria inventar uma
         espera.
       */}
-      {!presencial && !encerrado(pedido.status) && (
+      {!retirada && !encerrado(pedido.status) && (
         <div className="vitrine__resumo" data-testid="entrega">
           {pedido.rastreioCodigo ? (
             <>
@@ -210,7 +278,7 @@ export default async function PaginaPedido({ params }: Props) {
           sao as mesmas do componente ("dias uteis") para que as duas telas
           nao descrevam a mesma cotacao com unidades diferentes.
         */}
-        <LinhaFrete valor={pedido.freteCentavos} />
+        <LinhaFrete valor={pedido.freteCentavos} retirada={retirada} />
         <p className="vitrine__linha vitrine__linha--total">
           Total: {formatarBRL(pedido.totalCentavos)}
         </p>

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ExpedicaoPedido, statusOferecidos } from '@/components/expedicao-pedido'
+import type { TipoEntrega } from '@/lib/pedido-status'
 import { ROTULOS_STATUS } from '@/lib/pedido-status'
 import type { PedidoStatus } from '@/repositories/pedidos'
 
@@ -44,12 +45,17 @@ function corpoEnviado(fetchMock: FetchFalso): Record<string, unknown> {
   return JSON.parse(String(ultima[1]?.body)) as Record<string, unknown>
 }
 
-function renderizar(status: PedidoStatus, rastreio: { codigo: string | null; transportadora: string | null } = { codigo: null, transportadora: null }) {
+function renderizar(
+  status: PedidoStatus,
+  rastreio: { codigo: string | null; transportadora: string | null } = { codigo: null, transportadora: null },
+  tipoEntrega: TipoEntrega = 'envio',
+) {
   render(
     <ExpedicaoPedido
       pedidoId={PEDIDO_ID}
       numero={1042}
       status={status}
+      tipoEntrega={tipoEntrega}
       rastreioCodigo={rastreio.codigo}
       rastreioTransportadora={rastreio.transportadora}
     />,
@@ -250,5 +256,52 @@ describe('ExpedicaoPedido', () => {
       )
     })
     expect(refresh).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * A LINHA DE RETIRADA NA FILA DO PAINEL (19/08/2026). Sem estes casos, a tela
+ * nunca era renderizada como retirada em teste nenhum — e as duas coisas que a
+ * distinguem sao justamente ausencias, o tipo de defeito que passa despercebido.
+ */
+describe('ExpedicaoPedido: retirada no local', () => {
+  it('nao oferece nenhum status de postagem', () => {
+    renderizar('pago', { codigo: null, transportadora: null }, 'retirada')
+
+    const alvos = statusOferecidos('pago', 'retirada')
+    expect(alvos).not.toContain('em_preparacao')
+    expect(alvos).not.toContain('enviado')
+    expect(alvos).not.toContain('em_transito')
+
+    // E a tela concorda com a funcao: nenhuma <option> de postagem no <select>.
+    for (const proibido of [/em prepara/i, /^enviado$/i, /em tr[aâ]nsito/i]) {
+      expect(screen.queryByRole('option', { name: proibido })).toBeNull()
+    }
+  })
+
+  /**
+   * O DESFECHO TEM QUE EXISTIR. Um filtro bem-intencionado demais que tirasse
+   * 'entregue' junto deixaria todo pedido de retirada preso em 'pago', sem
+   * nenhum botao capaz de conclui-lo — e o teste acima, sozinho, continuaria
+   * verde.
+   */
+  it('oferece "Entregue", que e como a retirada termina', () => {
+    renderizar('pago', { codigo: null, transportadora: null }, 'retirada')
+    expect(screen.getByRole('option', { name: /entregue/i })).toBeInTheDocument()
+  })
+
+  // Somem, e nao ficam cinzas: campo desabilitado ainda pergunta algo, e nao ha
+  // nada a perguntar sobre a postagem de um kit que ninguem vai postar.
+  it('nao pede codigo de rastreio nem transportadora', () => {
+    renderizar('pago', { codigo: null, transportadora: null }, 'retirada')
+
+    expect(screen.queryByLabelText(/c[oó]digo de rastreio/i)).toBeNull()
+    expect(screen.queryByLabelText(/transportadora/i)).toBeNull()
+  })
+
+  it('a fila de envio continua pedindo os dois', () => {
+    renderizar('pago')
+    expect(screen.getByLabelText(/c[oó]digo de rastreio/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/transportadora/i)).toBeInTheDocument()
   })
 })

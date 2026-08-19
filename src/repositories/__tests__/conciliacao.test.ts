@@ -118,6 +118,10 @@ async function novoPedido(comRepresentante: boolean, canal: CanalVenda = 'online
   return criarPedido({
     origem: comRepresentante ? 'link' : 'casa',
     canal,
+    // Balcao e sempre entrega em maos (CHECK pedido_presencial_e_retirada);
+    // online neste helper e sempre envio, que e o que os testes de conciliacao
+    // sempre exercitaram.
+    tipoEntrega: canal === 'presencial' ? 'retirada' : 'envio',
     representanteId: comRepresentante ? idRep : null,
     percentualComissao: comRepresentante ? PERCENTUAL : null,
     utmSource: null, utmMedium: null, utmCampaign: null,
@@ -139,6 +143,7 @@ async function novoPedidoComDescontoTotal(frete: number) {
   return criarPedido({
     origem: 'link',
     canal: 'online',
+    tipoEntrega: 'envio',
     representanteId: idRep,
     percentualComissao: PERCENTUAL,
     utmSource: null, utmMedium: null, utmCampaign: null,
@@ -740,7 +745,7 @@ describe('cupom que zera o subtotal', () => {
   // condicao por algo mais frouxo passaria despercebido.
   it('um centavo restante ainda credita comissao', async () => {
     const pedido = await criarPedido({
-      origem: 'link', canal: 'online',
+      origem: 'link', canal: 'online', tipoEntrega: 'envio',
       representanteId: idRep, percentualComissao: PERCENTUAL,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(PRECO_KIT - 100),

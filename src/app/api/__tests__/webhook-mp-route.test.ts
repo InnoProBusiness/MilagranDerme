@@ -124,6 +124,7 @@ async function novoPedido() {
     // ver o comentario de pedido_origem_coerente em
     // migrations/1754900300000_pedidos.sql.
     canal: 'online',
+    tipoEntrega: 'envio',
     origem: 'link', representanteId: idRep, percentualComissao: PERCENTUAL,
     utmSource: null, utmMedium: null, utmCampaign: null,
     desconto: deInteiro(0), frete: deInteiro(0),

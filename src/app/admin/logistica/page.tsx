@@ -1,6 +1,16 @@
 import type { Metadata } from 'next'
 import { ExpedicaoPedido } from '@/components/expedicao-pedido'
-import { listarLogisticaAdmin, type LogisticaAdmin } from '@/repositories/pedidos'
+import {
+  listarLogisticaAdmin, listarRetiradasAdmin, type LogisticaAdmin,
+} from '@/repositories/pedidos'
+import { FUSO_BR } from '@/lib/tempo'
+
+// Data civil brasileira, mesmo formatador e mesmo motivo das outras telas: o
+// container roda em UTC e um prazo que vence as 21h de Sao Paulo apareceria com
+// a data do dia seguinte.
+const dataBR = new Intl.DateTimeFormat('pt-BR', {
+  timeZone: FUSO_BR, day: '2-digit', month: '2-digit', year: 'numeric',
+})
 import { AUSENTE, dataHoraBR, EtiquetaStatus, ouAusente } from '../formato'
 import { exigirSessaoDeAdmin } from '../sessao-admin'
 
@@ -48,7 +58,10 @@ export default async function PaginaLogisticaAdmin() {
   // ../sessao-admin.ts.
   await exigirSessaoDeAdmin()
 
-  const pedidos = await listarLogisticaAdmin()
+  const [pedidos, retiradas] = await Promise.all([
+    listarLogisticaAdmin(),
+    listarRetiradasAdmin(),
+  ])
 
   return (
     <>
@@ -57,7 +70,9 @@ export default async function PaginaLogisticaAdmin() {
           <h1 className="admin__titulo">Logística</h1>
           <p className="admin__lede">
             Pedidos pagos que têm endereço de entrega, do mais antigo para o
-            mais recente. Vendas de balcão não aparecem aqui: o kit sai em mãos.
+            mais recente. Vendas de balcão e retiradas no local não entram nesta
+            fila — nelas o kit sai em mãos, e quem vem buscar aparece na tabela
+            abaixo.
           </p>
         </div>
       </div>
@@ -76,6 +91,79 @@ export default async function PaginaLogisticaAdmin() {
         representante. Para devolver um valor, faça o estorno no Mercado Pago: o
         pedido muda sozinho quando a notificação chegar.
       </p>
+
+      {/*
+        QUEM VEM BUSCAR — a outra metade da operacao desde 19/08/2026.
+        A fila de cima recorta por ENDERECO (innerJoin em `enderecos`), entao um
+        pedido de retirada nunca cai la: ele nasce sem destino. Esta tabela
+        existe para que isso nao signifique "invisivel" — sem ela, a equipe
+        descobriria que alguem tem kit reservado quando a pessoa batesse na
+        porta.
+
+        FICA EM CIMA da fila dos Correios de proposito: retirada tem PRAZO
+        correndo contra ela (7 dias), e postagem nao. O que vence primeiro
+        aparece primeiro.
+      */}
+      <section className="section--panel">
+        <h2 className="admin__titulo">Retiradas no local</h2>
+        <p className="admin__lede">
+          Pedidos pagos de quem vai buscar o kit. Some da lista quando você
+          marca como entregue.
+        </p>
+
+        {retiradas.length === 0 ? (
+          <p className="tabela__vazio">Ninguém aguardando retirada.</p>
+        ) : (
+          <div className="tabela-rolagem">
+            <table className="tabela">
+              <caption className="oculto-visual">
+                Pedidos aguardando retirada no local
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Pedido</th>
+                  <th scope="col">Quem vem buscar</th>
+                  <th scope="col">Retirar até</th>
+                  <th scope="col">Entrega</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retiradas.map((r) => (
+                  <tr key={r.id}>
+                    <td className="tabela__num">{r.numero}</td>
+                    <td>
+                      {r.clienteNome ?? '—'}
+                      {r.clienteWhatsapp && (
+                        <span className="tabela__secundario">{r.clienteWhatsapp}</span>
+                      )}
+                    </td>
+                    {/*
+                      VENCIDA NAO SOME DA LISTA, fica marcada. O prazo de 7 dias
+                      e uma combinacao com a compradora, nao um gatilho
+                      automatico: quem decide o que fazer com um kit nao buscado
+                      e a operacao, e ela so decide o que consegue ver.
+                    */}
+                    <td>
+                      {r.retirarAte === null ? '—' : dataBR.format(r.retirarAte)}
+                      {r.vencida && <span className="tabela__secundario">prazo vencido</span>}
+                    </td>
+                    <td>
+                      <ExpedicaoPedido
+                        pedidoId={r.id}
+                        numero={r.numero}
+                        status="pago"
+                        tipoEntrega="retirada"
+                        rastreioCodigo={null}
+                        rastreioTransportadora={null}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <div className="tabela-rolagem">
         <table className="tabela tabela--larga">
@@ -166,6 +254,12 @@ export default async function PaginaLogisticaAdmin() {
 
                   <td>
                     <ExpedicaoPedido
+                      // 'envio' por CONSTRUCAO, e nao por suposicao:
+                      // listarLogisticaAdmin faz innerJoin em `enderecos`, e so
+                      // pedido de envio tem endereco (CHECK
+                      // pedido_envio_tem_endereco). Um pedido de retirada nunca
+                      // chega a esta tabela.
+                      tipoEntrega="envio"
                       pedidoId={pedido.id}
                       numero={pedido.numero}
                       status={pedido.status}

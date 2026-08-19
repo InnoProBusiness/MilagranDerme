@@ -182,8 +182,21 @@ describe('do painel ao checkout', () => {
     }).returning('id').executeTakeFirstOrThrow()
 
     try {
+      // `agora` VEM DO BANCO, e nao de `new Date()`. O cupom acabou de nascer
+      // com o DEFAULT `now()` da coluna, que e o relogio do POSTGRES; o
+      // relogio do NODE pode estar atras dele (896 ms de diferenca medidos no
+      // container em 19/08/2026), e nessa janela `resgatarCupom` recusaria com
+      // 'nao_iniciado' um cupom perfeitamente valido. Ler o instante do mesmo
+      // relogio que gravou a linha tira a deriva da equacao — sem afrouxar
+      // nada, porque a comparacao continua sendo a de producao.
+      const { agora } = await getDb()
+        .selectFrom('cupons')
+        .select(({ eb }) => eb.fn<Date>('now').as('agora'))
+        .where('codigo', '=', `${PREFIXO}E2E`)
+        .executeTakeFirstOrThrow()
+
       const resultado = await getDb().transaction().execute((trx) =>
-        resgatarCupom(`${PREFIXO}E2E`, centavos(1000), cliente.id, trx))
+        resgatarCupom(`${PREFIXO}E2E`, centavos(1000), cliente.id, trx, agora))
 
       expect(resultado.ok).toBe(true)
       if (resultado.ok) {

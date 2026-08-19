@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { getDb } from '@/lib/db'
 import { exigirPapel } from '@/lib/guarda'
 import {
-  avancarStatusDoPedido, registrarRastreio,
+  avancarStatusDoPedido, registrarRastreio, RastreioNaoAplicavelError,
   TransicaoFinanceiraError, TransicaoInvalidaError,
   type PedidoStatus,
 } from '@/repositories/pedidos'
@@ -228,6 +228,19 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         error: 'transicao_invalida',
         mensagem: 'O pedido não está mais no estado que a tela mostrava. Atualize a página e refaça a mudança a partir do status atual.',
       }, { status: 409, headers: SEM_CACHE })
+    }
+
+    // 422 com mensagem propria: o pedido existe, mas nao ha rastreio a gravar
+    // nele porque ninguem vai posta-lo. Sem este ramo a violacao de
+    // pedido_retirada_sem_postagem cairia no 500 generico la embaixo, e quem
+    // opera a expedicao veria "erro ao atualizar" sem saber que colou o codigo
+    // na linha errada.
+    if (e instanceof RastreioNaoAplicavelError) {
+      console.error('[admin/pedidos] rastreio recusado:', mensagem)
+      return Response.json({
+        error: 'rastreio_nao_aplicavel',
+        mensagem: 'Este pedido é retirada no local: não há postagem nem código de rastreio. Confira se o código não era de outro pedido.',
+      }, { status: 422, headers: SEM_CACHE })
     }
 
     // 422, e nao 409: repetir NAO adianta, em nenhum estado. Nao e conflito com

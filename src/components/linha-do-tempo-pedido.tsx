@@ -1,5 +1,6 @@
 import type { CanalVenda, PedidoStatus } from '@/lib/db-types'
-import { ROTULOS_STATUS } from '@/lib/pedido-status'
+import { ROTULOS_STATUS, type TipoEntrega } from '@/lib/pedido-status'
+import { instrucaoDeRetirada } from '@/lib/retirada'
 import { FUSO_BR } from '@/lib/tempo'
 
 /**
@@ -44,7 +45,7 @@ const SEQUENCIA_ONLINE: readonly PedidoStatus[] = [
  * deliberadamente em TRANSICOES (src/lib/pedido-status.ts) — as duas mudam
  * juntas ou a tela passa a prometer um passo que o banco recusa.
  */
-const SEQUENCIA_PRESENCIAL: readonly PedidoStatus[] = [
+const SEQUENCIA_ENTREGA_EM_MAOS: readonly PedidoStatus[] = [
   'pendente', 'aguardando_pagamento', 'pago', 'entregue',
 ]
 
@@ -84,18 +85,31 @@ function ehInterrupcao(status: PedidoStatus): status is 'cancelado' | 'reembolsa
 /**
  * Qual caminho desenhar.
  *
- * O CANAL PROPOE, O FATO DISPOE: um pedido presencial que a operacao mova
- * para 'enviado' pelo painel (§17) e um caso raro mas possivel — TRANSICOES
- * permite, porque nem todo kit do evento sai na mao (alguem pode pedir para
- * receber em casa). Se o status atual nao existe no caminho curto, a tela cai
- * no caminho completo em vez de renderizar uma linha do tempo sem o estado em
- * que o pedido esta. Preferir o fato ao rotulo e a mesma escolha que
- * listarLogisticaAdmin faz ao recortar por endereco em vez de por canal.
+ * O EIXO E O TIPO DE ENTREGA, E NAO MAIS O CANAL (19/08/2026). Ate a retirada
+ * no local existir, "nao ha postagem" e "foi vendido no balcao" eram a mesma
+ * coisa, e recortar por `canal` acertava por coincidencia. Agora existe pedido
+ * ONLINE sem postagem nenhuma — o de quem vem buscar o kit em Goiania — e
+ * desenhar "Em preparação / Enviado / Em trânsito" apagados para essa pessoa
+ * descreveria uma espera pelos Correios que nunca vai acontecer.
+ *
+ * Presencial continua caindo no caminho curto sem que nada aqui precise
+ * mencionar canal: a constraint pedido_presencial_e_retirada
+ * (migrations/1755600000000_pedido_tipo_entrega.sql) garante que toda venda de
+ * balcao e 'retirada'.
+ *
+ * O TIPO PROPOE, O FATO DISPOE: se a operacao mover um pedido de retirada para
+ * 'enviado' — hoje impossivel pela guarda de avancarStatusDoPedido e pela CHECK
+ * pedido_retirada_sem_postagem, mas o principio vale para o dia em que alguem
+ * as afrouxar —, a tela cai no caminho completo em vez de renderizar uma linha
+ * do tempo sem o estado em que o pedido esta. Preferir o fato ao rotulo e a
+ * mesma escolha que listarLogisticaAdmin faz ao recortar por endereco.
  */
-function sequenciaDoPedido(canal: CanalVenda, status: PedidoStatus): readonly PedidoStatus[] {
-  if (canal !== 'presencial') return SEQUENCIA_ONLINE
-  if (ehInterrupcao(status)) return SEQUENCIA_PRESENCIAL
-  return SEQUENCIA_PRESENCIAL.includes(status) ? SEQUENCIA_PRESENCIAL : SEQUENCIA_ONLINE
+function sequenciaDoPedido(
+  tipoEntrega: TipoEntrega, status: PedidoStatus,
+): readonly PedidoStatus[] {
+  if (tipoEntrega !== 'retirada') return SEQUENCIA_ONLINE
+  if (ehInterrupcao(status)) return SEQUENCIA_ENTREGA_EM_MAOS
+  return SEQUENCIA_ENTREGA_EM_MAOS.includes(status) ? SEQUENCIA_ENTREGA_EM_MAOS : SEQUENCIA_ONLINE
 }
 
 /**
@@ -104,8 +118,10 @@ function sequenciaDoPedido(canal: CanalVenda, status: PedidoStatus): readonly Pe
  * Pura de proposito (ver o cabecalho do arquivo): esta e a regra que decide o
  * que o comprador ve como "ja passou" e como "ainda vem".
  */
-export function etapasDoPedido(canal: CanalVenda, status: PedidoStatus): EtapaDoPedido[] {
-  const sequencia = sequenciaDoPedido(canal, status)
+export function etapasDoPedido(
+  canal: CanalVenda, tipoEntrega: TipoEntrega, status: PedidoStatus,
+): EtapaDoPedido[] {
+  const sequencia = sequenciaDoPedido(tipoEntrega, status)
 
   if (ehInterrupcao(status)) {
     const corte = sequencia.indexOf(ULTIMA_ETAPA_CONFIRMADA[status])
@@ -145,9 +161,34 @@ const DESCRICAO_PRESENCIAL: Partial<Record<PedidoStatus, string>> = {
   pago: 'Pagamento confirmado no balcão do evento. O kit é entregue na hora, em mãos — esta compra não passa pelos Correios.',
 }
 
-function descricaoDaEtapa(canal: CanalVenda, status: PedidoStatus): string {
+/**
+ * A segunda sobrescrita, pelo mesmo motivo estreito da primeira: a descricao
+ * de 'pago' em ROTULOS_STATUS promete "avisaremos assim que o pedido for
+ * enviado", e nao ha envio nenhum a avisar para quem vai buscar o kit.
+ *
+ * SO 'pago', e a lista curta e deliberada. Os unicos estados que um pedido de
+ * retirada alcanca sao pendente, aguardando_pagamento, pago, entregue,
+ * cancelado e reembolsado (EXIGE_POSTAGEM, src/lib/pedido-status.ts, barra o
+ * resto), e desses so o texto de 'pago' mentia. Escrever aqui uma frase para
+ * 'em_preparacao' seria copy sem dono — texto que nenhum caminho renderiza,
+ * esperando alguem acreditar que aquele estado existe.
+ */
+const DESCRICAO_RETIRADA: Partial<Record<PedidoStatus, string>> = {
+  pago: `Pagamento confirmado. ${instrucaoDeRetirada()}`,
+}
+
+function descricaoDaEtapa(
+  canal: CanalVenda, tipoEntrega: TipoEntrega, status: PedidoStatus,
+): string {
+  // PRESENCIAL PRIMEIRO, e a ordem importa: toda venda de balcao tambem e
+  // 'retirada' (CHECK pedido_presencial_e_retirada), entao sem esta precedencia
+  // quem comprou no evento — e ja saiu com o kit — leria um endereco e um prazo
+  // de 7 dias para buscar o que ja esta na sacola dele.
   if (canal === 'presencial') {
     const propria = DESCRICAO_PRESENCIAL[status]
+    if (propria) return propria
+  } else if (tipoEntrega === 'retirada') {
+    const propria = DESCRICAO_RETIRADA[status]
     if (propria) return propria
   }
   return ROTULOS_STATUS[status].descricao
@@ -182,15 +223,16 @@ function carimboDaEtapa(
 
 type LinhaDoTempoProps = {
   canal: CanalVenda
+  tipoEntrega: TipoEntrega
   status: PedidoStatus
   criadoEm?: Date | null
   enviadoEm?: Date | null
 }
 
 export function LinhaDoTempoPedido({
-  canal, status, criadoEm = null, enviadoEm = null,
+  canal, tipoEntrega, status, criadoEm = null, enviadoEm = null,
 }: LinhaDoTempoProps) {
-  const etapas = etapasDoPedido(canal, status)
+  const etapas = etapasDoPedido(canal, tipoEntrega, status)
 
   return (
     // <ol> e nao <div>: e uma sequencia ordenada de verdade, e o leitor de
@@ -219,7 +261,7 @@ export function LinhaDoTempoPedido({
                 ROTULOS_STATUS de uma vez viram uma parede de texto em que a
                 unica que importa — a de agora — deixa de saltar aos olhos. */}
             {aqui && (
-              <p className="linha-tempo__descricao">{descricaoDaEtapa(canal, etapa.status)}</p>
+              <p className="linha-tempo__descricao">{descricaoDaEtapa(canal, tipoEntrega, etapa.status)}</p>
             )}
             {quando && <span className="linha-tempo__quando">{quando}</span>}
           </li>

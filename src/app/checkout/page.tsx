@@ -2,6 +2,7 @@ import { buscarKitAtivoPorSlug, listarKitsAtivos } from '@/repositories/produtos
 import { QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { CheckoutWizard } from '@/components/checkout-wizard'
 import { cupomDaUrl } from '@/lib/cupom-da-url'
+import { lancamentoJaOcorreu } from '@/lib/tempo'
 
 // Preco e disponibilidade vem do banco a cada acesso — mesmo raciocinio de
 // src/app/comprar/page.tsx e src/app/r/[slug]/page.tsx: um snapshot
@@ -46,6 +47,10 @@ export default async function PaginaCheckout({ searchParams }: Props) {
       kit={kit}
       quantidadeInicial={quantidadeInicial}
       cupomInicial={cupomDaUrl(sp.cupom)}
+      // Decidido no SERVIDOR e passado pronto: ver o doc da prop em
+      // src/components/checkout-wizard.tsx — chamar lancamentoJaOcorreu()
+      // dentro de um Client Component quebra a hidratacao na virada do dia.
+      lancado={lancamentoJaOcorreu()}
     />
   )
 }

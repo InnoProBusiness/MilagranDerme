@@ -27,7 +27,8 @@ import {
   geraCreditoDeComissao,
   geraEstornoDeComissao,
   ROTULOS_STATUS,
-  transicaoPermitida,
+  transicaoPermitidaNaEntrega,
+  type TipoEntrega,
 } from '@/lib/pedido-status'
 import type { PedidoStatus } from '@/repositories/pedidos'
 
@@ -67,9 +68,19 @@ const TODOS_OS_STATUS = Object.keys(ROTULOS_STATUS) as PedidoStatus[]
  * Exportada para ter teste proprio: e a regra que impede o painel de mexer em
  * dinheiro, e ela precisa de um teste que nao dependa de renderizar a tabela.
  */
-export function statusOferecidos(atual: PedidoStatus): PedidoStatus[] {
+export function statusOferecidos(
+  atual: PedidoStatus,
+  tipoEntrega: TipoEntrega = 'envio',
+): PedidoStatus[] {
+  // O DEFAULT 'envio' mantem exato todo chamador anterior a retirada existir:
+  // ate 19/08/2026 todo pedido era despachado.
+  //
+  // `transicaoPermitidaNaEntrega` e a MESMA funcao que avancarStatusDoPedido
+  // chama antes de lancar TransicaoInvalidaError — a tela pergunta ao servidor
+  // o que o servidor vai aceitar, em vez de manter uma segunda copia da regra
+  // que diverge no primeiro dia em que alguem mexer so num lado.
   return TODOS_OS_STATUS.filter((alvo) => (
-    transicaoPermitida(atual, alvo)
+    transicaoPermitidaNaEntrega(atual, alvo, tipoEntrega)
     && !geraCreditoDeComissao(atual, alvo)
     && !geraEstornoDeComissao(atual, alvo)
   ))
@@ -80,6 +91,13 @@ type Props = {
   /** Numero do PEDIDO, so para os rotulos acessiveis nao ficarem iguais entre linhas. */
   numero: number
   status: PedidoStatus
+  /**
+   * OBRIGATORIA, e nao opcional com default 'envio'. Este componente decide
+   * quais botoes o operador ve; uma tela nova que esquecesse a prop ofereceria
+   * "Enviado" para quem vem buscar o kit, e o servidor recusaria com 409 na
+   * frente de uma pessoa esperando no balcao. O compilador aponta cada tela.
+   */
+  tipoEntrega: TipoEntrega
   rastreioCodigo: string | null
   rastreioTransportadora: string | null
 }
@@ -108,7 +126,7 @@ function mensagemDaResposta(corpo: unknown): string | null {
 }
 
 export function ExpedicaoPedido({
-  pedidoId, numero, status, rastreioCodigo, rastreioTransportadora,
+  pedidoId, numero, status, tipoEntrega, rastreioCodigo, rastreioTransportadora,
 }: Props) {
   const router = useRouter()
 
@@ -120,7 +138,9 @@ export function ExpedicaoPedido({
   const [transportadora, setTransportadora] = useState(rastreioTransportadora ?? '')
   const [desfecho, setDesfecho] = useState<Desfecho>({ tipo: 'parado' })
 
-  const alvos = statusOferecidos(status)
+  const alvos = statusOferecidos(status, tipoEntrega)
+  // Retirada nao tem o que rastrear: os campos somem em vez de ficarem cinzas.
+  const temPostagem = tipoEntrega === 'envio'
   const salvando = desfecho.tipo === 'salvando'
 
   async function salvar() {
@@ -239,35 +259,47 @@ export function ExpedicaoPedido({
         </div>
       )}
 
-      <div className="form__field">
-        <label htmlFor={`rastreio-${pedidoId}`}>
-          Código de rastreio do pedido nº {numero}
-        </label>
-        <input
-          id={`rastreio-${pedidoId}`}
-          name="rastreioCodigo"
-          type="text"
-          value={codigo}
-          maxLength={64}
-          onChange={(evento) => setCodigo(evento.target.value)}
-          disabled={salvando}
-        />
-      </div>
+      {/*
+        OS CAMPOS DE RASTREIO SOMEM NA RETIRADA, em vez de ficarem desabilitados.
+        Campo cinza ainda pergunta alguma coisa, e a resposta certa aqui e "essa
+        pergunta nao existe": ninguem vai postar este kit. A rota tambem recusa
+        (422 rastreio_nao_aplicavel) e o banco tambem
+        (pedido_retirada_sem_postagem) — as tres camadas dizem o mesmo, e esta e
+        a unica que evita o clique.
+      */}
+      {temPostagem && (
+        <>
+          <div className="form__field">
+            <label htmlFor={`rastreio-${pedidoId}`}>
+              Código de rastreio do pedido nº {numero}
+            </label>
+            <input
+              id={`rastreio-${pedidoId}`}
+              name="rastreioCodigo"
+              type="text"
+              value={codigo}
+              maxLength={64}
+              onChange={(evento) => setCodigo(evento.target.value)}
+              disabled={salvando}
+            />
+          </div>
 
-      <div className="form__field">
-        <label htmlFor={`transportadora-${pedidoId}`}>
-          Transportadora do pedido nº {numero}
-        </label>
-        <input
-          id={`transportadora-${pedidoId}`}
-          name="rastreioTransportadora"
-          type="text"
-          value={transportadora}
-          maxLength={60}
-          onChange={(evento) => setTransportadora(evento.target.value)}
-          disabled={salvando}
-        />
-      </div>
+          <div className="form__field">
+            <label htmlFor={`transportadora-${pedidoId}`}>
+              Transportadora do pedido nº {numero}
+            </label>
+            <input
+              id={`transportadora-${pedidoId}`}
+              name="rastreioTransportadora"
+              type="text"
+              value={transportadora}
+              maxLength={60}
+              onChange={(evento) => setTransportadora(evento.target.value)}
+              disabled={salvando}
+            />
+          </div>
+        </>
+      )}
 
       <button type="submit" className="btn btn--ghost" disabled={salvando}>
         {salvando ? 'Salvando…' : 'Salvar'}

@@ -275,7 +275,7 @@ export function Vitrine({ kits, representante, escassez, cupom }: VitrineProps) 
           seu CEP" — nunca em "R$ 0,00", que prometeria frete gratis que
           ninguem decidiu.
         */}
-        <LinhaFrete valor={null} />
+        <LinhaFrete valor={null} retirada={false} />
         {/*
           "+ frete" NAO E ENFEITE: e o que impede esta linha de mentir.
           O numero e subtotal - desconto + frete com frete = 0 (default de

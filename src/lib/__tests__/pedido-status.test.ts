@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   mapearStatusMP, transicaoPermitida, pedidoAposPagamento,
   geraCreditoDeComissao, geraEstornoDeComissao, ROTULOS_STATUS,
+  transicaoPermitidaNaEntrega, EXIGE_POSTAGEM,
 } from '@/lib/pedido-status'
 import type { PedidoStatus } from '@/lib/db-types'
 
@@ -239,5 +240,69 @@ describe('rotulos de status mostrados ao comprador', () => {
   it('a descricao de cancelado so e verdadeira enquanto pago nao cancelar', () => {
     expect(ROTULOS_STATUS.cancelado.descricao).toMatch(/nenhum valor foi cobrado/)
     expect(transicaoPermitida('pago', 'cancelado')).toBe(false)
+  })
+})
+
+/**
+ * O EIXO DE ENTREGA sobre a maquina de estados (19/08/2026).
+ *
+ * A regra e SUBTRATIVA de proposito: retirada tira arestas, nunca acrescenta.
+ * Um defeito aqui que ACRESCENTASSE uma transicao viraria pedido movido para um
+ * estado que a maquina nao admite — por isso o primeiro teste e o que prova que
+ * a funcao nunca e mais permissiva que transicaoPermitida.
+ */
+describe('transicaoPermitidaNaEntrega', () => {
+  const TODOS = Object.keys(ROTULOS_STATUS) as PedidoStatus[]
+
+  it('nunca permite mais que a maquina de estados', () => {
+    for (const de of TODOS) {
+      for (const para of TODOS) {
+        for (const tipo of ['envio', 'retirada'] as const) {
+          if (transicaoPermitidaNaEntrega(de, para, tipo)) {
+            expect(transicaoPermitida(de, para)).toBe(true)
+          }
+        }
+      }
+    }
+  })
+
+  it('envio se comporta exatamente como antes', () => {
+    for (const de of TODOS) {
+      for (const para of TODOS) {
+        expect(transicaoPermitidaNaEntrega(de, para, 'envio'))
+          .toBe(transicaoPermitida(de, para))
+      }
+    }
+  })
+
+  // O DEFAULT importa: todo chamador anterior a esta funcao existir tratava de
+  // pedidos de envio, e nenhum deles pode mudar de comportamento.
+  it('sem tipo declarado, vale envio', () => {
+    expect(transicaoPermitidaNaEntrega('pago', 'enviado')).toBe(true)
+  })
+
+  it('retirada nao passa por nenhum estado de postagem', () => {
+    for (const postagem of EXIGE_POSTAGEM) {
+      for (const de of TODOS) {
+        expect(transicaoPermitidaNaEntrega(de, postagem, 'retirada')).toBe(false)
+      }
+    }
+  })
+
+  /**
+   * O CAMINHO DA RETIRADA TEM QUE EXISTIR INTEIRO. Um filtro bem-intencionado
+   * demais que tirasse 'entregue' junto deixaria todo pedido de retirada preso
+   * em 'pago' para sempre, sem nenhum botao capaz de conclui-lo — e o teste
+   * acima, sozinho, continuaria verde.
+   */
+  it('retirada chega a entregue direto de pago, e ainda pode ser reembolsada', () => {
+    expect(transicaoPermitidaNaEntrega('pago', 'entregue', 'retirada')).toBe(true)
+    expect(transicaoPermitidaNaEntrega('pago', 'reembolsado', 'retirada')).toBe(true)
+    expect(transicaoPermitidaNaEntrega('entregue', 'reembolsado', 'retirada')).toBe(true)
+  })
+
+  it('cancelar antes do pagamento continua possivel na retirada', () => {
+    expect(transicaoPermitidaNaEntrega('pendente', 'cancelado', 'retirada')).toBe(true)
+    expect(transicaoPermitidaNaEntrega('aguardando_pagamento', 'cancelado', 'retirada')).toBe(true)
   })
 })

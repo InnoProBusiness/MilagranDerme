@@ -165,9 +165,27 @@ const SLUG_INATIVA = 'checkout-inativa' // desligada — para o caso rep_inativo
 const CODIGO_CUPOM = 'CHECKOUT10' // 10%, de Maria
 const CODIGO_CUPOM_JOANA = 'CHECKOUTJOANA' // 5%, de Joana — override
 const CODIGO_CUPOM_CASA = 'CHECKOUTCASA' // 5%, sem representante — nao pode roubar a venda
+const CODIGO_CUPOM_TOTAL = 'CHECKOUTTUDO' // 100%: zera o pedido quando nao ha frete
+
+/**
+ * DATA FIXA NO PASSADO, e nao o DEFAULT `now()` da coluna.
+ *
+ * `resgatarCupom` compara `agora` — o relogio do NODE — contra `inicia_em`, que
+ * o Postgres preenche com o relogio DELE. Os dois nao sao o mesmo relogio: no
+ * container de desenvolvimento a diferenca medida em 19/08/2026 foi de 896 ms,
+ * e nessa janela um cupom recem-semeado ainda "nao comecou" para a aplicacao.
+ * O checkout responde 422 `cupom_recusado` e o teste falha — de forma
+ * intermitente, conforme a deriva do relogio do container.
+ *
+ * Mesma solucao, e pelo mesmo motivo, de JA_VALENDO em
+ * src/repositories/__tests__/cupons.test.ts. A data fixa tambem diz melhor o
+ * que o fixture quer: "este cupom ja esta valendo", e nao "este cupom comeca
+ * exatamente agora".
+ */
+const JA_VALENDO = new Date('2026-01-01T00:00:00Z')
 
 const SLUGS = [SLUG_MARIA, SLUG_JOANA, SLUG_INATIVA] as const
-const CODIGOS_CUPOM = [CODIGO_CUPOM, CODIGO_CUPOM_JOANA, CODIGO_CUPOM_CASA] as const
+const CODIGOS_CUPOM = [CODIGO_CUPOM, CODIGO_CUPOM_JOANA, CODIGO_CUPOM_CASA, CODIGO_CUPOM_TOTAL] as const
 
 let idMaria: string
 let idJoana: string
@@ -175,7 +193,16 @@ let idJoana: string
 async function semear() {
   const db = getDb()
 
-  for (const email of [COMPRADOR.email, EMAIL_BLOQUEADO]) {
+  // TODO e-mail que algum teste deste arquivo faz nascer entra nesta lista. Um
+  // que fique de fora deixa cliente e pedido para tras, e o pedido segura o
+  // cupom por FK — o `semear()` da rodada seguinte falha ao apagar os cupons,
+  // com um erro de chave estrangeira que nao diz nada sobre a causa real.
+  for (const email of [
+    COMPRADOR.email, EMAIL_BLOQUEADO,
+    'ana.retirada@exemplo.com', 'ana.retirada2@exemplo.com',
+    'ana.contrabando@exemplo.com', 'ana.bundleantigo@exemplo.com',
+    'ana.cupomtotal@exemplo.com', 'ana.cupomtotalenvio@exemplo.com',
+  ]) {
     // pedidos primeiro: cliente_id/endereco_id/cupom_id sao ON DELETE
     // RESTRICT, e apagar o pedido leva pedido_itens e cupom_usos junto (ON
     // DELETE CASCADE) — ver migrations/1755000000000_pedido_itens.sql e
@@ -223,8 +250,13 @@ async function semear() {
 
   // Cupom de 10% pertencente a Maria — usado no teste de desconto simples.
   await db.insertInto('cupons').values({
-    codigo: CODIGO_CUPOM, tipo: 'percentual', valor: 10,
+    codigo: CODIGO_CUPOM, tipo: 'percentual', valor: 10, inicia_em: JA_VALENDO,
     representante_id: idMaria, ativo: true,
+  }).execute()
+
+  await db.insertInto('cupons').values({
+    codigo: CODIGO_CUPOM_TOTAL, tipo: 'percentual', valor: 100, inicia_em: JA_VALENDO,
+    representante_id: null, ativo: true,
   }).execute()
 
   // Cupom de Joana — usado no teste de prioridade do cupom sobre o cookie.
@@ -234,7 +266,7 @@ async function semear() {
   // bateu" — sao duas colunas diferentes, e o bug que este teste previne e
   // exatamente misturar as duas.
   await db.insertInto('cupons').values({
-    codigo: CODIGO_CUPOM_JOANA, tipo: 'percentual', valor: 5,
+    codigo: CODIGO_CUPOM_JOANA, tipo: 'percentual', valor: 5, inicia_em: JA_VALENDO,
     representante_id: idJoana, ativo: true,
   }).execute()
 
@@ -243,7 +275,7 @@ async function semear() {
   // dono; este existe para provar que um cupom promocional da marca nao
   // rouba a venda de quem trouxe o cliente.
   await db.insertInto('cupons').values({
-    codigo: CODIGO_CUPOM_CASA, tipo: 'percentual', valor: 5,
+    codigo: CODIGO_CUPOM_CASA, tipo: 'percentual', valor: 5, inicia_em: JA_VALENDO,
     representante_id: null, ativo: true,
   }).execute()
 }
@@ -820,6 +852,163 @@ describe('POST /api/pedidos', () => {
       expect(enderecos).toHaveLength(0)
 
       expect(await contarPedidos(EMAIL_BLOQUEADO)).toBe(0)
+    })
+  })
+
+  /**
+   * RETIRADA NO LOCAL (19/08/2026). O bloco existe para provar as tres coisas
+   * que separam este caminho do de envio, e que nenhum teste acima alcanca:
+   * ele NAO fala com o Clube Envios, NAO grava endereco e NAO aceita que o
+   * navegador mande campo de envio junto.
+   */
+  describe('retirada no local', () => {
+    // So os dados pessoais. Sem cep, sem rua, sem numero: quem vem buscar nao
+    // informou destino nenhum, e o schema recusa se informar.
+    const QUEM_BUSCA = {
+      nome: 'Ana Souza', email: 'ana.retirada@exemplo.com',
+      cpf: '12345678901', whatsapp: '11988887777',
+    }
+    const RETIRADA = { kitSlug: 'kit-milagran', quantidade: 1, tipoEntrega: 'retirada' as const }
+
+    it('cria o pedido sem frete, sem endereco e sem prazo de transportadora', async () => {
+      const r = await POST(requisicao({ ...RETIRADA, ...QUEM_BUSCA }))
+      expect(r.status).toBe(201)
+
+      const { numero } = await r.json() as { numero: number }
+      const pedido = await pedidoPorNumero(numero)
+
+      expect(pedido.tipo_entrega).toBe('retirada')
+      expect(pedido.frete_centavos).toBe(0)
+      // O total e o subtotal: nao ha transporte a somar.
+      expect(pedido.total_centavos).toBe(pedido.subtotal_centavos - pedido.desconto_centavos)
+      // NULL, e nao um endereco guardado "porque nao custa": nao havera entrega
+      // nesse endereco, e a tela de logistica passaria a exibir um destino para
+      // um pedido que nunca sai daqui.
+      expect(pedido.endereco_id).toBeNull()
+      // NULL, e nao 7. `prazo_dias_estimado` e prazo de TRANSPORTADORA, e a
+      // pagina do pedido o imprime como "dias uteis apos a postagem".
+      expect(pedido.prazo_dias_estimado).toBeNull()
+    })
+
+    /**
+     * NAO GASTA REQUISICAO DO PROVEDOR, e nao depende dele estar de pe. E a
+     * razao de o desvio acontecer ANTES da recotacao, e nao depois: uma compra
+     * sem transporte nao pode morrer porque o Clube Envios caiu.
+     */
+    it('nao chama o Clube Envios nem quando o provedor esta fora do ar', async () => {
+      clube.chamadas.length = 0
+      clube.falha = 'clube_envios'
+
+      const r = await POST(requisicao({
+        ...RETIRADA, ...QUEM_BUSCA, email: 'ana.retirada2@exemplo.com',
+      }))
+
+      expect(r.status).toBe(201)
+      expect(clube.chamadas).toHaveLength(0)
+      clube.falha = null
+    })
+
+    /**
+     * CONTRABANDO RECUSADO. `CorpoRetirada` tambem e `.strict()`: uma retirada
+     * que mandasse `idServico` ou `cep` teria os campos DESCARTADOS em silencio
+     * num schema frouxo — e um cliente adulterado poderia declarar retirada
+     * (frete zero) carregando o resto de um pedido de envio, com a unica
+     * barreira entre isso e um kit postado de graca sendo alguem lembrar de
+     * olhar a coluna certa na tela de logistica.
+     */
+    it('retirada mandando idServico ou endereco e 422', async () => {
+      for (const contrabando of [
+        { idServico: OPCAO_PAC.idServico },
+        { cep: '01310100' },
+        { rua: 'Av Paulista', numero: '1000' },
+      ]) {
+        const r = await POST(requisicao({
+          ...RETIRADA, ...QUEM_BUSCA, email: 'ana.contrabando@exemplo.com', ...contrabando,
+        }))
+        expect(r.status).toBe(422)
+      }
+    })
+
+    /**
+     * PEDIDO DE R$ 0,00 NAO NASCE.
+     *
+     * Cupom de 100% mais retirada (frete zero) fecha o total em zero. Se o
+     * pedido nascesse, nao haveria como cobra-lo — o Mercado Pago recusa uma
+     * cobranca de R$ 0,00 —, ele ficaria preso em 'pendente' para sempre, com o
+     * cupom JA consumido e `total_centavos` congelado pelo trigger de
+     * imutabilidade. Sem UPDATE de correcao possivel.
+     *
+     * Com ENVIO a mesma combinacao continua valida: sobra o frete a pagar.
+     */
+    it('cupom que zera o total e recusado, e o uso do cupom nao fica gravado', async () => {
+      const email = 'ana.cupomtotal@exemplo.com'
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, tipoEntrega: 'retirada',
+        cupom: CODIGO_CUPOM_TOTAL,
+        nome: 'Ana Souza', email, cpf: '12345678901', whatsapp: '11988887777',
+      }))
+
+      expect(r.status).toBe(422)
+      expect(await r.json()).toMatchObject({ error: 'pedido_sem_valor' })
+      expect(await contarPedidos(email)).toBe(0)
+
+      // O ROLLBACK LEVOU O USO DO CUPOM JUNTO. Sem isso, a tentativa recusada
+      // teria comido o limite por cliente e a pessoa nao conseguiria mais usar
+      // o cupom em nenhuma compra.
+      const { total } = await getDb().selectFrom('cupom_usos')
+        .select(sql<number>`count(*)::int`.as('total'))
+        .where('cupom_id', 'in',
+          getDb().selectFrom('cupons').select('id').where('codigo', '=', CODIGO_CUPOM_TOTAL))
+        .executeTakeFirstOrThrow()
+      expect(total).toBe(0)
+    })
+
+    it('o mesmo cupom com ENVIO passa, porque sobra o frete', async () => {
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, tipoEntrega: 'envio',
+        cupom: CODIGO_CUPOM_TOTAL, ...ESCOLHA_DE_FRETE,
+        ...COMPRADOR, email: 'ana.cupomtotalenvio@exemplo.com',
+      }))
+      expect(r.status).toBe(201)
+
+      const { numero } = await r.json() as { numero: number }
+      const pedido = await pedidoPorNumero(numero)
+      expect(pedido.total_centavos).toBe(pedido.frete_centavos)
+      expect(pedido.total_centavos).toBeGreaterThan(0)
+    })
+
+    // O ramo de ENVIO nao afrouxou nada: as duas garantias que existiam antes
+    // da uniao discriminada continuam de pe, agora dentro do ramo certo.
+    it('envio sem idServico e envio sem endereco continuam 422', async () => {
+      const semServico = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, tipoEntrega: 'envio', ...COMPRADOR,
+      }))
+      expect(semServico.status).toBe(422)
+
+      const semEndereco = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, tipoEntrega: 'envio',
+        ...ESCOLHA_DE_FRETE, ...QUEM_BUSCA,
+      }))
+      expect(semEndereco.status).toBe(422)
+    })
+
+    /**
+     * COMPATIBILIDADE COM A ABA ABERTA ANTES DO DEPLOY. Um corpo sem
+     * `tipoEntrega` e um bundle antigo — e ele tem que continuar comprando, ou
+     * o deploy da semana do lancamento derruba a venda de quem estava com o
+     * checkout preenchido na tela.
+     */
+    it('corpo sem tipoEntrega ainda vale, e vale como envio', async () => {
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE,
+        ...COMPRADOR, email: 'ana.bundleantigo@exemplo.com',
+      }))
+      expect(r.status).toBe(201)
+
+      const { numero } = await r.json() as { numero: number }
+      const pedido = await pedidoPorNumero(numero)
+      expect(pedido.tipo_entrega).toBe('envio')
+      expect(pedido.endereco_id).not.toBeNull()
     })
   })
 })

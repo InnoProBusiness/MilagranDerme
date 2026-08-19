@@ -7,8 +7,11 @@ import type {
 import { deInteiro, type Centavos } from '@/lib/money'
 import { estornarEstoque } from '@/repositories/estoque'
 import {
-  transicaoPermitida, geraCreditoDeComissao, geraEstornoDeComissao,
+  transicaoPermitida, transicaoPermitidaNaEntrega, geraCreditoDeComissao, geraEstornoDeComissao,
+  type TipoEntrega,
 } from '@/lib/pedido-status'
+import { retirarAte } from '@/lib/retirada'
+import { fimDoDiaBR } from '@/lib/tempo'
 
 // kysely-codegen ja gera unions literais a partir dos ENUMs do Postgres
 // (ver migrations/1754900300000_pedidos.sql): origem_atribuicao vira
@@ -87,6 +90,26 @@ export type EntradaPedido = {
    * entrar no INSERT.
    */
   canal: CanalVenda
+  /**
+   * COMO o kit chega a quem comprou: despachado por transportadora ('envio')
+   * ou entregue em maos ('retirada'). Terceiro eixo do pedido, ortogonal a
+   * `origem` e a `canal` — a migration
+   * 1755600000000_pedido_tipo_entrega.sql explica por que nao cabia em
+   * nenhum dos dois.
+   *
+   * OBRIGATORIO de proposito, pelo mesmo motivo de `canal` acima e apesar do
+   * DEFAULT 'envio' no banco: e a coluna que decide se este pedido entra na
+   * fila dos Correios ou na lista de quem vem buscar. Quem escreve um caminho
+   * de criacao novo tem que declarar qual dos dois e, e o compilador cobra —
+   * cair em 'envio' por omissao poe um kit que ninguem vai postar na fila de
+   * postagem.
+   *
+   * NAO E CONGELADO pelo trigger de imutabilidade, ao contrario de `canal`.
+   * A migration registra as tres razoes; a que mais importa e a ultima: quem
+   * clicou em retirada por engano e liga pedindo envio tem que poder ser
+   * atendido.
+   */
+  tipoEntrega: TipoEntrega
   representanteId: string | null
   percentualComissao: number | null
   utmSource: string | null
@@ -153,6 +176,8 @@ export type Pedido = {
   status: PedidoStatus
   origem: OrigemAtribuicao
   canal: CanalVenda
+  /** Envio por transportadora ou retirada em maos. Ver EntradaPedido acima. */
+  tipoEntrega: TipoEntrega
   representanteId: string | null
   vendedorId: string | null
   percentualComissaoSnapshot: number | null
@@ -176,6 +201,15 @@ export type Pedido = {
   rastreioCodigo: string | null
   rastreioTransportadora: string | null
   enviadoEm: Date | null
+  /**
+   * Quando o pagamento foi confirmado. Escrito por conciliarPagamento
+   * (src/repositories/conciliacao.ts) e por mais ninguem — continua NULL
+   * enquanto o pedido nao foi pago, e tambem em pedidos antigos anteriores a
+   * essa coluna. Quem depende dele para calcular data (o prazo de retirada, por
+   * exemplo) tem que tratar o null em vez de assumir que "pago" implica
+   * carimbo.
+   */
+  pagoEm: Date | null
   prazoDiasEstimado: number | null
 }
 
@@ -187,6 +221,7 @@ function paraPedido(l: Selectable<Pedidos>): Pedido {
     status: l.status,
     origem: l.origem,
     canal: l.canal,
+    tipoEntrega: l.tipo_entrega,
     representanteId: l.representante_id,
     vendedorId: l.vendedor_id,
     percentualComissaoSnapshot:
@@ -207,6 +242,7 @@ function paraPedido(l: Selectable<Pedidos>): Pedido {
     rastreioCodigo: l.rastreio_codigo,
     rastreioTransportadora: l.rastreio_transportadora,
     enviadoEm: l.enviado_em,
+    pagoEm: l.pago_em,
     prazoDiasEstimado: l.prazo_dias_estimado,
   }
 }
@@ -285,6 +321,7 @@ export async function criarPedido(e: EntradaPedido, trx?: Transaction<DB>): Prom
         total_centavos: total,
         cliente_id: e.clienteId ?? null,
         endereco_id: e.enderecoId ?? null,
+        tipo_entrega: e.tipoEntrega,
         cupom_id: e.cupomId ?? null,
         prazo_dias_estimado: e.prazoDiasEstimado ?? null,
       })
@@ -381,6 +418,14 @@ export type PedidoParaEmail = {
    * carregar o canal so para repassa-lo.
    */
   canal: CanalVenda
+  /**
+   * E COM `canal`, e nao no lugar dele. Desde 19/08/2026 sao TRES copys, nao
+   * duas: balcao (ja levou o kit), retirada online (vem buscar em Goiania) e
+   * envio (espera os Correios). Os dois eixos juntos sao o unico jeito de
+   * distinguir as duas primeiras — toda venda de balcao tambem e 'retirada'
+   * pelo CHECK pedido_presencial_e_retirada.
+   */
+  tipoEntrega: TipoEntrega
   totalCentavos: Centavos
   clienteNome: string
   clienteEmail: string
@@ -400,7 +445,8 @@ export async function buscarPedidoParaEmail(pedidoId: string): Promise<PedidoPar
     .innerJoin('clientes', 'clientes.id', 'pedidos.cliente_id')
     .select([
       'pedidos.numero as numero', 'pedidos.token as token',
-      'pedidos.canal as canal', 'pedidos.total_centavos as total',
+      'pedidos.canal as canal', 'pedidos.tipo_entrega as tipo_entrega',
+      'pedidos.total_centavos as total',
       'clientes.nome as nome', 'clientes.email as email',
     ])
     .where('pedidos.id', '=', pedidoId)
@@ -420,6 +466,7 @@ export async function buscarPedidoParaEmail(pedidoId: string): Promise<PedidoPar
     numero: Number(l.numero),
     token: l.token,
     canal: l.canal,
+    tipoEntrega: l.tipo_entrega,
     totalCentavos: deInteiro(l.total),
     clienteNome: l.nome,
     clienteEmail: l.email,
@@ -607,7 +654,7 @@ export async function avancarStatusDoPedido(
 ): Promise<{ mudou: boolean; de: PedidoStatus; para: PedidoStatus }> {
   const pedido = await trx
     .selectFrom('pedidos')
-    .select(['id', 'status', 'enviado_em', 'entregue_em'])
+    .select(['id', 'status', 'enviado_em', 'entregue_em', 'tipo_entrega'])
     .where('id', '=', pedidoId)
     .forUpdate()
     .executeTakeFirstOrThrow()
@@ -619,7 +666,20 @@ export async function avancarStatusDoPedido(
     return { mudou: false, de, para: de }
   }
 
-  if (!transicaoPermitida(de, novo)) {
+  // OS DOIS EIXOS, e nesta ordem. `transicaoPermitida` responde "a maquina de
+  // estados admite esse pulo?"; `transicaoPermitidaNaEntrega` responde "esse
+  // pulo faz sentido para ESTE pedido?". Um pedido de retirada nao tem
+  // postagem: move-lo para 'enviado' carimbaria enviado_em e faria a linha do
+  // tempo afirmar "postado e ja saiu da nossa expedicao" sobre um kit parado na
+  // prateleira esperando o dono.
+  //
+  // A RECUSA MORA AQUI, e nao so na tela que oferece os botoes
+  // (src/components/expedicao-pedido.tsx). A tela e conveniencia; esta funcao e
+  // o caminho unico por onde TODA mudanca de status passa — inclusive a de uma
+  // aba velha aberta desde antes da retirada existir. Embaixo dela ainda ha a
+  // constraint pedido_retirada_sem_postagem, que segura se algum dia surgir um
+  // caminho que nao passe por aqui.
+  if (!transicaoPermitidaNaEntrega(de, novo, pedido.tipo_entrega)) {
     throw new TransicaoInvalidaError(pedidoId, de, novo)
   }
 
@@ -711,12 +771,56 @@ export async function registrarRastreio(
   pedidoId: string,
   e: { codigo: string; transportadora: string },
 ): Promise<void> {
-  await getDb()
+  // RASTREIO NAO EXISTE EM PEDIDO DE RETIRADA, e a recusa e explicita para que
+  // a tela receba 422 com mensagem em vez do 500 da constraint
+  // pedido_retirada_sem_postagem. O caso nao e teorico: a fila de expedicao e
+  // operada com varias abas abertas, e colar o codigo do pedido de cima na
+  // linha do pedido de baixo e o erro humano tipico dessa tela. Gravado, ele
+  // faria a pagina do comprador anunciar "seu pedido foi postado" a alguem que
+  // esta indo buscar o kit a pe.
+  //
+  // O UPDATE e condicionado no WHERE, e nao so verificado antes: dois cliques
+  // simultaneos nao tem como escapar por uma janela entre um SELECT e o UPDATE.
+  const linha = await getDb()
     .updateTable('pedidos')
     .set({ rastreio_codigo: e.codigo, rastreio_transportadora: e.transportadora })
     .where('id', '=', pedidoId)
+    .where('tipo_entrega', '=', 'envio')
     .returning('id')
-    .executeTakeFirstOrThrow()
+    .executeTakeFirst()
+
+  if (linha) return
+
+  // DUAS CAUSAS, DUAS RESPOSTAS. O UPDATE nao pegou linha por um de dois
+  // motivos, e eles nao sao a mesma coisa para quem esta na tela: "esse pedido
+  // nao existe" (404, id errado na URL) e "esse pedido existe e e retirada"
+  // (422, codigo colado na linha errada da fila). Achatar os dois num 422 faria
+  // o painel afirmar "este pedido é retirada no local" sobre um uuid que nunca
+  // existiu — mandando o operador procurar um pedido de retirada que nao ha.
+  //
+  // O SELECT so acontece no caminho de erro, e por isso nao ha corrida a
+  // proteger: o UPDATE ja falhou, e o que se decide aqui e apenas qual mensagem
+  // mostrar.
+  await getDb()
+    .selectFrom('pedidos')
+    .select('id')
+    .where('id', '=', pedidoId)
+    .executeTakeFirstOrThrow()   // pedido inexistente -> NoResultError -> 404
+
+  throw new RastreioNaoAplicavelError(pedidoId)
+}
+
+/**
+ * Tentativa de gravar rastreio onde ele nao faz sentido: pedido que nao existe
+ * ou pedido de retirada no local. Classe propria para a rota responder 422 com
+ * texto util em vez de deixar vazar a violacao de constraint do Postgres, que
+ * carrega nome de coluna e valor da linha na mensagem.
+ */
+export class RastreioNaoAplicavelError extends Error {
+  constructor(readonly pedidoId: string) {
+    super('Nao ha codigo de rastreio a gravar neste pedido.')
+    this.name = 'RastreioNaoAplicavelError'
+  }
 }
 
 /**
@@ -1197,4 +1301,85 @@ export async function reservadosPorKit(): Promise<ReservaAdmin[]> {
     // string — "2" + "3" viraria "23" na coluna de reservados.
     reservado: Number(l.reservado),
   }))
+}
+
+/**
+ * Uma pessoa que vem buscar o kit, como o balcao precisa ve-la.
+ */
+export type RetiradaAdmin = {
+  id: string
+  numero: number
+  clienteNome: string | null
+  clienteWhatsapp: string | null
+  pagoEm: Date | null
+  /** Ate quando ha prazo. NULL quando pago_em nunca foi carimbado. */
+  retirarAte: Date | null
+  /** Ja passou do prazo? Sempre false quando nao ha data para comparar. */
+  vencida: boolean
+}
+
+/**
+ * QUEM VEM BUSCAR, e ate quando.
+ *
+ * O CONTRAPESO de listarLogisticaAdmin. Aquela funcao recorta por ENDERECO
+ * (innerJoin em `enderecos`), e por isso um pedido de retirada — que nasce com
+ * endereco_id NULL — nunca aparece la. O recorte continua certo: a fila dos
+ * Correios e de quem tem destino. Mas sem esta funcao os pedidos de retirada
+ * ficariam invisiveis ao painel inteiro, e a operacao descobriria que alguem
+ * vem buscar um kit quando a pessoa batesse na porta.
+ *
+ * SO 'pago', e NAO STATUS_PAGOS. Aquela constante inclui 'entregue', e o
+ * desfecho de uma retirada E 'entregue' — no minuto em que a pessoa aparece e
+ * leva o kit. Usar STATUS_PAGOS encheria o topo da tabela com retiradas ja
+ * concluidas, ordenadas pelas mais antigas: a lista de "quem ainda vem buscar"
+ * nasceria entupida de quem ja veio. Uma retirada sai desta fila exatamente
+ * quando deixa de ser pendencia.
+ *
+ * `canal = 'online'` porque toda venda de balcao tambem e 'retirada' pelo CHECK
+ * pedido_presencial_e_retirada, e ninguem precisa esperar por um kit que ja
+ * saiu na mao do comprador dentro do evento.
+ */
+export async function listarRetiradasAdmin(agora: Date = new Date()): Promise<RetiradaAdmin[]> {
+  const linhas = await getDb()
+    .selectFrom('pedidos')
+    .leftJoin('clientes', 'clientes.id', 'pedidos.cliente_id')
+    .select([
+      'pedidos.id as id',
+      'pedidos.numero as numero',
+      'pedidos.pago_em as pago_em',
+      'clientes.nome as cliente_nome',
+      'clientes.whatsapp as cliente_whatsapp',
+    ])
+    .where('pedidos.tipo_entrega', '=', 'retirada')
+    .where('pedidos.canal', '=', 'online')
+    .where('pedidos.status', '=', 'pago')
+    // Pelo pagamento, do mais antigo ao mais novo: e a mesma ordem do prazo,
+    // porque retirarAte() e monotona em pago_em. Ordenar pela data-limite
+    // calculada exigiria repetir a regra do lancamento em SQL — duas copias da
+    // mesma conta, esperando divergir.
+    .orderBy('pedidos.pago_em', 'asc')
+    .orderBy('pedidos.id', 'asc')
+    .execute()
+
+  return linhas.map((l) => {
+    // pago_em tem UM escritor (conciliarPagamento) e pedidos anteriores aquela
+    // coluna existem com NULL. Sem data nao ha prazo a calcular, e a tela
+    // escreve "—" em vez de inventar uma data a partir de `agora`, que mudaria
+    // a cada recarregamento da pagina.
+    const limite = l.pago_em === null ? null : retirarAte(l.pago_em)
+    return {
+      id: l.id,
+      numero: Number(l.numero),
+      clienteNome: l.cliente_nome,
+      clienteWhatsapp: l.cliente_whatsapp,
+      pagoEm: l.pago_em,
+      retirarAte: limite,
+      // VENCE NO FIM DO DIA, e nao no instante. As duas telas imprimem so a
+      // DATA civil ("Retire até 01/09/2026"), entao comparar instante contra
+      // instante acenderia "prazo vencido" no painel as 00:01 de 01/09 — o dia
+      // inteiro em que a pagina da compradora ainda promete que da tempo. O
+      // painel diria uma coisa e a tela dela outra, sobre o mesmo pedido.
+      vencida: limite !== null && agora.getTime() >= fimDoDiaBR(limite).getTime(),
+    }
+  })
 }

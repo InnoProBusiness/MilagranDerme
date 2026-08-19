@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { getDb, closeDb } from '@/lib/db'
 import {
   criarPedido, avancarStatusDoPedido, registrarRastreio,
-  listarVendasAdmin, listarLogisticaAdmin, listarCompradores, resumoDeVendas,
+  listarVendasAdmin, listarLogisticaAdmin, listarRetiradasAdmin,
+  listarCompradores, resumoDeVendas,
   PrecoDivergenteError, TransicaoInvalidaError, TransicaoFinanceiraError,
+  RastreioNaoAplicavelError,
   type EntradaPedido, type PedidoStatus,
 } from '@/repositories/pedidos'
 import { centavos, deInteiro } from '@/lib/money'
@@ -226,7 +228,7 @@ async function semear() {
  */
 function vendaOnline(extra: Partial<EntradaPedido> = {}): EntradaPedido {
   return {
-    origem: 'casa', canal: 'online',
+    origem: 'casa', canal: 'online', tipoEntrega: 'envio',
     representanteId: null, percentualComissao: null,
     utmSource: null, utmMedium: null, utmCampaign: null,
     desconto: deInteiro(0), frete: deInteiro(0),
@@ -243,19 +245,20 @@ function vendaOnline(extra: Partial<EntradaPedido> = {}): EntradaPedido {
  */
 function vendaPresencial(extra: Partial<EntradaPedido> = {}): EntradaPedido {
   return vendaOnline({
-    canal: 'presencial', vendedorId: idVendedor, enderecoId: null, ...extra,
+    canal: 'presencial',
+    tipoEntrega: 'retirada', vendedorId: idVendedor, enderecoId: null, ...extra,
   })
 }
 
 /** Marca o pedido como pago sem passar pelo Mercado Pago. */
-async function marcarPago(id: string) {
+async function marcarPago(id: string, pagoEm: Date = new Date()) {
   // UPDATE cru de proposito: conciliarPagamento gravaria uma linha em
   // `comissoes`, que e append-only e referencia o pedido com ON DELETE
   // RESTRICT — o pedido deste arquivo nunca mais poderia ser apagado no
   // semear() da rodada seguinte. Quem testa a conciliacao de verdade e
   // src/repositories/__tests__/conciliacao.test.ts, que por isso mesmo nao
   // apaga nada. Aqui interessa so o status.
-  await getDb().updateTable('pedidos').set({ status: 'pago' }).where('id', '=', id).execute()
+  await getDb().updateTable('pedidos').set({ status: 'pago', pago_em: pagoEm }).where('id', '=', id).execute()
 }
 
 describe('criacao de pedido com atribuicao congelada', () => {
@@ -273,7 +276,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       percentualComissao: 20,
       utmSource: 'instagram', utmMedium: 'bio', utmCampaign: 'lancamento',
       desconto: deInteiro(PRECO_KIT_CENTAVOS - 53973), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.representanteId).toBe(idMaria)
@@ -290,7 +294,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().updateTable('representantes')
@@ -307,7 +312,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.representanteId).toBeNull()
@@ -319,7 +325,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'rep_inativo', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.origem).toBe('rep_inativo')
@@ -330,7 +337,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })).rejects.toThrow(/pedido_origem_coerente/)
   })
@@ -344,7 +352,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 500,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })).rejects.toThrow(/pedido_percentual_snapshot_valido/)
   })
@@ -378,7 +387,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
       origem: 'link', representanteId: idMaria, percentualComissao: 20,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: centavos(0), frete: centavos(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await expect(
@@ -400,7 +410,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+        canal: 'online',
+        tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       const outro = await getDb().insertInto('representantes').values({
@@ -423,7 +434,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+        canal: 'online',
+        tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await expect(
@@ -439,7 +451,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'casa', representanteId: null, percentualComissao: null,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+        canal: 'online',
+        tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await expect(
@@ -455,7 +468,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+        canal: 'online',
+        tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       await getDb().updateTable('pedidos')
@@ -474,7 +488,8 @@ describe('criacao de pedido com atribuicao congelada', () => {
         origem: 'link', representanteId: idMaria, percentualComissao: 20,
         utmSource: null, utmMedium: null, utmCampaign: null,
         desconto: centavos(0), frete: centavos(0),
-        canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+        canal: 'online',
+        tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
         itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
       })
       const outro = await getDb().insertInto('representantes').values({
@@ -512,7 +527,8 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 3, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     expect(p.subtotalCentavos).toBe(PRECO_KIT_CENTAVOS * 3)
@@ -530,7 +546,8 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     const itens = await getDb().selectFrom('pedido_itens')
@@ -553,7 +570,8 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: precoAdulterado }],
       // O contrato e o TIPO do erro, nao o texto: a rota decide o codigo
       // HTTP com `instanceof PrecoDivergenteError`, entao reescrever a frase
@@ -573,7 +591,8 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().updateTable('kits')
@@ -590,7 +609,8 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0), itens: [],
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
     })).rejects.toThrow(/sem itens|pedido_subtotal_positivo/)
   })
 
@@ -638,7 +658,8 @@ describe('pedido com itens', () => {
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
-      canal: 'online', clienteId: idCliente, enderecoId: idEndereco,
+      canal: 'online',
+      tipoEntrega: 'envio', clienteId: idCliente, enderecoId: idEndereco,
       itens: [{ kitId: idKit, quantidade: 1, precoUnitarioCentavos: deInteiro(PRECO_KIT_CENTAVOS) }],
     })
     await getDb().deleteFrom('pedidos').where('id', '=', p.id).execute()
@@ -692,9 +713,47 @@ describe('canal da venda, vendedor de balcao e colunas de logistica', () => {
       .rejects.toThrow(/pedido_presencial_tem_vendedor/)
   })
 
-  it('o banco rejeita venda online sem endereco de entrega', async () => {
+  // A REGRA MUDOU DE EIXO EM 19/08/2026 e ficou mais exata, nao mais frouxa:
+  // era "pedido online precisa de endereco" (pedido_online_tem_endereco) e
+  // passou a ser "pedido de ENVIO precisa de endereco"
+  // (pedido_envio_tem_endereco, migrations/1755600000000). O caso que a regra
+  // antiga cobria continua recusado; o que ela recusava POR ENGANO — a compra
+  // online de quem vem buscar o kit — passou a ser possivel.
+  it('o banco rejeita venda com envio e sem endereco de entrega', async () => {
     await expect(criar(vendaOnline({ enderecoId: null })))
-      .rejects.toThrow(/pedido_online_tem_endereco/)
+      .rejects.toThrow(/pedido_envio_tem_endereco/)
+  })
+
+  it('venda online de RETIRADA nasce sem endereco nenhum', async () => {
+    const pedido = await criar(vendaOnline({
+      enderecoId: null, tipoEntrega: 'retirada', frete: deInteiro(0),
+    }))
+    expect(pedido.tipoEntrega).toBe('retirada')
+  })
+
+  // As tres constraints que impedem uma retirada de carregar fato de transporte.
+  // Sao do BANCO, e nao da rota, porque frete_centavos e congelado pelo trigger
+  // de imutabilidade: valor errado no INSERT nao tem conserto depois.
+  it('o banco rejeita retirada com frete cobrado', async () => {
+    await expect(criar(vendaOnline({
+      enderecoId: null, tipoEntrega: 'retirada', frete: deInteiro(2350),
+    }))).rejects.toThrow(/pedido_retirada_sem_frete/)
+  })
+
+  it('o banco rejeita retirada com prazo de transportadora', async () => {
+    await expect(criar(vendaOnline({
+      enderecoId: null, tipoEntrega: 'retirada', frete: deInteiro(0),
+      prazoDiasEstimado: 7,
+    }))).rejects.toThrow(/pedido_retirada_sem_prazo_de_transporte/)
+  })
+
+  // COM ENDERECO, de proposito: sem ele a linha violaria TAMBEM
+  // pedido_envio_tem_endereco, e um regex com alternancia aceitaria qualquer uma
+  // das duas — o teste passaria sem nunca ter exercitado a constraint que diz
+  // no nome. Com endereco valido sobra uma unica violacao possivel.
+  it('o banco rejeita venda de balcao marcada como envio', async () => {
+    await expect(criar(vendaOnline({ canal: 'presencial', tipoEntrega: 'envio' })))
+      .rejects.toThrow(/pedido_presencial_e_retirada/)
   })
 
   it('o banco rejeita prazo de entrega zero', async () => {
@@ -1098,5 +1157,139 @@ describe('leituras administrativas do painel', () => {
     const pix = r.porMetodo.find((m) => m.metodo === 'pix')
     expect(pix).toBeDefined()
     expect(pix!.pedidos).toBeGreaterThanOrEqual(1)
+  })
+})
+
+/**
+ * A OPERACAO DA RETIRADA (19/08/2026): quem vem buscar, ate quando, e o que o
+ * painel NAO deixa fazer com esse pedido.
+ */
+describe('retirada no local: fila, prazo e guardas', () => {
+  async function pedidoDeRetirada(): Promise<string> {
+    const p = await criar(vendaOnline({
+      enderecoId: null, tipoEntrega: 'retirada', frete: deInteiro(0),
+    }))
+    return p.id
+  }
+
+  /**
+   * A GUARDA DE SERVIDOR, e nao a da tela. A tela de expedicao filtra os botoes
+   * (statusOferecidos), mas quem realmente segura e esta funcao — o caminho
+   * unico por onde TODA mudanca de status passa, inclusive a de uma aba aberta
+   * desde antes de a retirada existir.
+   */
+  it('o servidor recusa mover uma retirada para postagem', async () => {
+    const id = await pedidoDeRetirada()
+    await marcarPago(id)
+
+    for (const postagem of ['em_preparacao', 'enviado'] as const) {
+      await expect(
+        getDb().transaction().execute((trx) => avancarStatusDoPedido(id, postagem, trx)),
+      ).rejects.toThrow(TransicaoInvalidaError)
+    }
+  })
+
+  it('mas deixa concluir a retirada, que e o caminho dela', async () => {
+    const id = await pedidoDeRetirada()
+    await marcarPago(id)
+
+    const r = await getDb().transaction().execute((trx) => avancarStatusDoPedido(id, 'entregue', trx))
+    expect(r).toMatchObject({ mudou: true, de: 'pago', para: 'entregue' })
+  })
+
+  // Sem esta recusa, um codigo colado na linha errada da fila de expedicao faria
+  // a pagina do comprador anunciar "postado" para quem esta indo buscar a pe.
+  it('nao existe codigo de rastreio em pedido de retirada', async () => {
+    const id = await pedidoDeRetirada()
+    await expect(registrarRastreio(id, { codigo: 'AA123', transportadora: 'Correios' }))
+      .rejects.toThrow(RastreioNaoAplicavelError)
+  })
+
+  /**
+   * A CONSTRAINT DE BANCO embaixo da guarda de registrarRastreio. A funcao ja
+   * recusa (RastreioNaoAplicavelError, teste acima); isto prova que a recusa
+   * sobrevive a um caminho que NAO passe por ela — um UPDATE cru de correcao
+   * manual, um script, um repositorio novo.
+   */
+  it('o banco rejeita fato de postagem em pedido de retirada', async () => {
+    const id = await pedidoDeRetirada()
+
+    for (const campo of [
+      { rastreio_codigo: 'AA123456789BR' },
+      { rastreio_transportadora: 'Correios' },
+      { enviado_em: new Date() },
+    ]) {
+      await expect(
+        getDb().updateTable('pedidos').set(campo).where('id', '=', id).execute(),
+      ).rejects.toThrow(/pedido_retirada_sem_postagem/)
+    }
+  })
+
+  /**
+   * O PRAZO NA FILA, e o momento exato em que ele vence.
+   *
+   * `vencida` compara contra o FIM DO DIA da data-limite, e nao contra o
+   * instante: as duas telas imprimem so a data civil ("Retire até 01/09/2026"),
+   * entao acender "prazo vencido" no painel as 00:01 daquele dia faria o painel
+   * e a pagina da compradora discordarem sobre o mesmo pedido, o dia inteiro.
+   */
+  it('o prazo conta do lancamento e so vence no fim do dia', async () => {
+    const id = await pedidoDeRetirada()
+    // Pagamento na pre-venda: a contagem so comeca em 25/08.
+    await marcarPago(id, new Date('2026-08-19T14:00:00Z'))
+
+    const doDia = (agora: string) =>
+      listarRetiradasAdmin(new Date(agora)).then((l) => l.find((r) => r.id === id)!)
+
+    const antes = await doDia('2026-08-26T12:00:00Z')
+    expect(antes.retirarAte?.toISOString()).toBe('2026-09-01T03:00:00.000Z')
+    expect(antes.vencida).toBe(false)
+
+    // Manha do ultimo dia valido em Sao Paulo: ainda da tempo, e a pagina da
+    // compradora ainda diz "Retire até 01/09".
+    expect((await doDia('2026-09-01T12:00:00Z')).vencida).toBe(false)
+
+    // Passada a virada para 02/09 em Sao Paulo (03:00Z), venceu.
+    expect((await doDia('2026-09-02T03:00:00Z')).vencida).toBe(true)
+  })
+
+  // pago_em tem UM escritor (conciliarPagamento) e pedidos antigos existem com
+  // NULL. Sem data nao ha prazo a calcular, e a fila devolve null em vez de
+  // inventar uma data a partir do relogio — que mudaria a cada recarregamento.
+  it('sem carimbo de pagamento nao ha prazo inventado', async () => {
+    const id = await pedidoDeRetirada()
+    await getDb().updateTable('pedidos')
+      .set({ status: 'pago', pago_em: null }).where('id', '=', id).execute()
+
+    const linha = (await listarRetiradasAdmin()).find((r) => r.id === id)!
+    expect(linha.retirarAte).toBeNull()
+    expect(linha.vencida).toBe(false)
+  })
+
+  it('a fila de retiradas traz quem pagou e some quando o kit sai', async () => {
+    const id = await pedidoDeRetirada()
+
+    // Antes de pagar nao ha reserva nenhuma: ninguem deve ir a Goiania com um
+    // Pix em aberto.
+    expect((await listarRetiradasAdmin()).map((r) => r.id)).not.toContain(id)
+
+    await marcarPago(id)
+    expect((await listarRetiradasAdmin()).map((r) => r.id)).toContain(id)
+
+    await getDb().transaction().execute((trx) => avancarStatusDoPedido(id, 'entregue', trx))
+    // 'entregue' e o DESFECHO da retirada. Se a fila usasse STATUS_PAGOS — que
+    // inclui 'entregue' —, a lista de "quem ainda vem buscar" nasceria entupida
+    // de quem ja veio, com os mais antigos no topo.
+    expect((await listarRetiradasAdmin()).map((r) => r.id)).not.toContain(id)
+  })
+
+  // A fila dos Correios recorta por endereco (innerJoin em `enderecos`), entao
+  // um pedido sem destino nunca cai la. As duas listas sao complementares e
+  // nenhum pedido pode aparecer nas duas.
+  it('retirada nao entra na fila de postagem', async () => {
+    const id = await pedidoDeRetirada()
+    await marcarPago(id)
+
+    expect((await listarLogisticaAdmin()).map((p) => p.id)).not.toContain(id)
   })
 })

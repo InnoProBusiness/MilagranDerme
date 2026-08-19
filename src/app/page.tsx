@@ -8,6 +8,7 @@ import { saldoDoEstoque } from '@/repositories/estoque'
 import { listarKitsAtivos } from '@/repositories/produtos'
 import { CheckoutWizard } from '@/components/checkout-wizard'
 import { cupomDaUrl } from '@/lib/cupom-da-url'
+import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
 
 /**
  * A LOJA DE LANCAMENTO — "/" (§6, §7, §8 e §18 do documento do cliente de
@@ -262,7 +263,8 @@ export default async function PaginaInicial({ searchParams }: Props) {
             Valor unitário do kit completo
           </span>
           <p className="preco-lancamento__nota">
-            Sem frete na compra presencial. Na compra online, o frete é calculado
+            Sem frete na compra presencial nem na retirada no local. Na compra
+            online com envio, o frete é calculado
             no checkout a partir do seu CEP.
           </p>
         </div>
@@ -396,7 +398,10 @@ export default async function PaginaInicial({ searchParams }: Props) {
             frete gratis que src/components/linha-frete.tsx existe para impedir.
             Quem mostra valor de frete e o checkout, depois da cotacao (§13).
           */}
-          <li>Na compra online, o frete é calculado no checkout a partir do seu CEP.</li>
+          <li>
+            Na compra online, o frete é calculado no checkout a partir do seu
+            CEP — ou zero, escolhendo retirada no local.
+          </li>
         </ul>
       </section>
 
@@ -488,16 +493,36 @@ export default async function PaginaInicial({ searchParams }: Props) {
           </article>
 
           <article className={'entrega-card' + (esgotado ? ' entrega-card--destaque' : '')}>
-            <h3 className="entrega-card__titulo">Online, pelos Correios</h3>
-            <p className="entrega-card__prazo">Comprou → Pagou → Recebe pelos Correios.</p>
+            {/*
+              O TITULO DEIXOU DE DIZER "pelos Correios" EM 19/08/2026. Este
+              cartao ENUMERA as formas de receber o kit, e desde a retirada no
+              local os Correios sao uma delas, nao a unica — um titulo que
+              afirma transportadora manda para o checkout quem mora em Goiania e
+              nao precisa pagar frete nenhum. Mesma disciplina de LinhaFrete: a
+              home nao pode prometer uma coisa e o checkout oferecer outra.
+            */}
+            <h3 className="entrega-card__titulo">Online, pelo site</h3>
+            <p className="entrega-card__prazo">Comprou → Pagou → Recebe em casa ou retira aqui.</p>
             <p>
               Compra pelo site, de qualquer cidade. O frete e o prazo aparecem no
-              checkout, calculados a partir do seu CEP.
+              checkout, calculados a partir do seu CEP — ou zero, se você preferir
+              retirar em {ENDERECO_RETIRADA.cidade}/{ENDERECO_RETIRADA.estado}.
             </p>
             <ul className="entrega-card__lista">
               <li>Sem limite de unidades: a loja online não esgota.</li>
               <li>Pagamento por PIX ou cartão de crédito.</li>
               <li>Código de rastreio assim que o pedido é postado.</li>
+              {/*
+                "PARA BUSCAR", e nao "em até 7 dias" solto. Esta lista e de
+                promessas de RECEBIMENTO — a linha de cima fala de rastreio —, e
+                um prazo sem sujeito no meio dela se le como prazo de entrega. O
+                numero significa o contrario: e quanto tempo a compradora tem
+                para aparecer. Mesmo cuidado de TEXTO_PRAZO_RETIRADA.
+              */}
+              <li>
+                Ou retirada no local em {ENDERECO_RETIRADA.cidade}, sem frete —
+                você tem {PRAZO_RETIRADA_DIAS} dias para buscar.
+              </li>
             </ul>
           </article>
         </div>
@@ -518,7 +543,8 @@ export default async function PaginaInicial({ searchParams }: Props) {
           <p className="aviso-prevenda" data-testid="prazo-online">
             <strong>Pedidos liberados.</strong> O lançamento oficial da Milagran
             aconteceu em 25 de agosto de 2026 e os pedidos online já são enviados
-            pelos Correios, com prazo calculado no checkout a partir do seu CEP.
+            pelos Correios, com prazo calculado no checkout a partir do seu CEP —
+            ou retirados no local, sem frete.
           </p>
         ) : (
           <p className="aviso-prevenda" data-testid="prazo-online">
@@ -561,7 +587,12 @@ export default async function PaginaInicial({ searchParams }: Props) {
           Repetir a checagem seria codigo morto — e, pior, sugeriria um segundo
           estado vazio que nunca renderiza.
         */}
-        <CheckoutWizard kit={kit} quantidadeInicial={1} cupomInicial={cupomInicial} />
+        <CheckoutWizard
+          kit={kit}
+          quantidadeInicial={1}
+          cupomInicial={cupomInicial}
+          lancado={lancado}
+        />
       </section>
     </>
   )

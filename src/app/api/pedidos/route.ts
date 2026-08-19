@@ -10,6 +10,7 @@ import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { segredoDeAtribuicao, NOME_COOKIE_ATRIBUICAO } from '@/lib/atribuicao'
 import { mensagemDeRecusa, type MotivoRecusa } from '@/lib/cupom'
 import { deInteiro, type Centavos } from '@/lib/money'
+import { FRETE_RETIRADA } from '@/lib/retirada'
 import {
   cotarFrete, ClubeEnviosError, CotacaoIlegivelError, FreteNaoConfiguradoError,
   type OpcaoDeFrete,
@@ -50,10 +51,32 @@ const excedeuRateLimit = criarLimitadorPorIp({
   maxPorJanela: MAX_PEDIDOS_POR_JANELA,
 })
 
-const Corpo = z.object({
+/**
+ * O QUE TODO PEDIDO TEM, seja qual for a forma de entrega. Os campos de
+ * ENTREGA nao estao aqui de proposito: eles sao o que muda entre os dois
+ * ramos, e junta-los num objeto so com tudo opcional destruiria as garantias
+ * que hoje sao 422 — envio sem idServico e envio sem endereco passariam a
+ * compilar e a gravar.
+ */
+const CAMPOS_COMUNS = {
   kitSlug: z.string().min(1),
   quantidade: z.number().int().min(1).max(QUANTIDADE_MAXIMA),
   cupom: z.string().trim().min(3).max(24).optional(),
+  nome: z.string().trim().min(3),
+  email: z.string().email(),
+  cpf: z.string().regex(/^\d{11}$/),
+  whatsapp: z.string().regex(/^\d{10,13}$/),
+} as const
+
+/**
+ * ENVIO: a forma que sempre existiu, agora declarada.
+ *
+ * `idServico` e o endereco continuam OBRIGATORIOS aqui, palavra por palavra
+ * como eram antes da retirada existir — este ramo nao afrouxou nada.
+ */
+const CorpoEnvio = z.object({
+  ...CAMPOS_COMUNS,
+  tipoEntrega: z.literal('envio'),
   /**
    * QUAL opcao de frete o comprador escolheu na tela — e SO isso. O id vem de
    * uma cotacao que o proprio servidor fez antes (POST /api/frete, mesma
@@ -72,10 +95,6 @@ const Corpo = z.object({
    * opcao por ele.
    */
   idServico: z.number().int().positive(),
-  nome: z.string().trim().min(3),
-  email: z.string().email(),
-  cpf: z.string().regex(/^\d{11}$/),
-  whatsapp: z.string().regex(/^\d{10,13}$/),
   cep: z.string().regex(/^\d{8}$/),
   rua: z.string().trim().min(1),
   numero: z.string().trim().min(1),
@@ -93,10 +112,77 @@ const Corpo = z.object({
   .strict()
 
 /**
+ * RETIRADA: sem transportadora, sem frete e SEM ENDERECO DE ENTREGA.
+ *
+ * A AUSENCIA DOS CAMPOS E A GARANTIA, e por isso este ramo tambem e `.strict()`:
+ * uma retirada que mandasse `idServico` ou `cep` vira 422 em vez de ter os
+ * campos descartados calados. Se fossem ignorados, um cliente adulterado
+ * poderia declarar retirada (frete zero) e ainda assim carregar o resto de um
+ * pedido de envio, e a unica coisa entre isso e um kit postado de graca seria
+ * alguem lembrar de olhar a coluna certa na tela de logistica.
+ *
+ * Nao ha campo de valor nenhum aqui — nem zero. O frete de uma retirada e
+ * decidido pelo servidor (FRETE_RETIRADA, abaixo) e garantido pelo banco
+ * (CHECK pedido_retirada_sem_frete).
+ */
+const CorpoRetirada = z.object({
+  ...CAMPOS_COMUNS,
+  tipoEntrega: z.literal('retirada'),
+}).strict()
+
+/**
+ * O DISCRIMINANTE E `tipoEntrega`, e nao um id sentinela.
+ *
+ * Um "idServico = 0" ou "-1" para dizer retirada morreria duas vezes — o
+ * proprio schema recusa id nao-positivo, e a recotacao devolveria 422
+ * `opcao_de_frete_invalida` — e, pior, seria magica espalhada por seis
+ * arquivos, esperando o dia em que o Clube Envios emitisse justamente aquele
+ * numero. Um campo que diz o que e nao tem esse problema.
+ *
+ * MESMO NOME EM TODA A PILHA: `tipoEntrega` no corpo, `tipoEntrega` em
+ * EntradaPedido, `tipo_entrega` na coluna. Dois nomes para o mesmo fato e a
+ * divergencia que este projeto persegue em copy, so que em identificadores.
+ */
+const Corpo = z.discriminatedUnion('tipoEntrega', [CorpoEnvio, CorpoRetirada])
+
+/**
+ * Corpo SEM `tipoEntrega` e um cliente ANTERIOR a retirada existir — e ele tem
+ * que continuar comprando.
+ *
+ * O CASO E CONCRETO E ACONTECE NA SEMANA DO LANCAMENTO: alguem abre o checkout,
+ * preenche os campos, o deploy entra no ar nesse meio-tempo e a pessoa clica em
+ * "Finalizar". O bundle que ela carregou nao conhece o campo novo. Sem esta
+ * normalizacao, `discriminatedUnion` recusa o corpo inteiro por falta do
+ * discriminante e a resposta e 422 `dados_invalidos` — uma venda perdida por um
+ * campo que o proprio servidor sabe deduzir.
+ *
+ * 'envio' E A DEDUCAO CERTA, e nao um chute: ate 19/08/2026 TODO pedido desta
+ * rota era despachado. O corpo antigo, interpretado como envio, e exatamente o
+ * que ele sempre significou — inclusive o `idServico` e o endereco que ele
+ * carrega, que o ramo de envio continua exigindo.
+ *
+ * SO PREENCHE A AUSENCIA. Um corpo que declara `tipoEntrega` passa intacto,
+ * incluindo um valor invalido — que continua sendo 422, como deve ser. E o
+ * `.strict()` de cada ramo segue valendo: isto acrescenta um campo do contrato,
+ * nunca perdoa um campo fora dele.
+ */
+function comEntregaPadrao(corpo: unknown): unknown {
+  if (corpo === null || typeof corpo !== 'object' || Array.isArray(corpo)) return corpo
+  return 'tipoEntrega' in corpo ? corpo : { ...corpo, tipoEntrega: 'envio' }
+}
+
+/**
  * Sinaliza um cupom recusado (ResultadoCupom.ok === false) sem confundir
  * esse caminho de negocio esperado com um erro de infraestrutura — o catch
  * da rota distingue os dois so verificando `instanceof`.
  */
+class PedidoSemValorError extends Error {
+  constructor() {
+    super('pedido_sem_valor')
+    this.name = 'PedidoSemValorError'
+  }
+}
+
 class RecusaDeCupom extends Error {
   constructor(public readonly motivo: MotivoRecusa) {
     super(`cupom_recusado: ${motivo}`)
@@ -234,7 +320,7 @@ export async function POST(req: Request) {
     return Response.json({ error: 'rate_limited' }, { status: 429 })
   }
 
-  const parsed = Corpo.safeParse(await req.json().catch(() => null))
+  const parsed = Corpo.safeParse(comEntregaPadrao(await req.json().catch(() => null)))
   if (!parsed.success) {
     return Response.json({ error: 'dados_invalidos' }, { status: 422 })
   }
@@ -271,14 +357,30 @@ export async function POST(req: Request) {
   // Consequencia aceita: cotar custa uma requisicao ao provedor mesmo para um
   // pedido que sera recusado logo adiante (cupom invalido, CPF divergente). O
   // preco disso e uma chamada HTTP; o preco do contrario e o checkout parado.
-  const opcao = await opcaoDeFreteEscolhida({
-    kit,
-    quantidade: d.quantidade,
-    cepDestino: d.cep,
-    subtotal: carrinho.subtotal,
-    idServico: d.idServico,
-  })
-  if (opcao instanceof Response) return opcao
+  //
+  // RETIRADA NAO COTA NADA, e o desvio esta ANTES da chamada de rede por tres
+  // razoes que valem juntas: nao gasta requisicao paga ao Clube Envios, nao faz
+  // uma compra sem transporte depender do provedor estar de pe, e nao teria
+  // como cotar — nao ha CEP de destino num pedido que ninguem vai enviar.
+  //
+  // O frete e decidido AQUI, no servidor, exatamente como o de envio: o corpo
+  // da requisicao nunca carrega dinheiro (ver CorpoRetirada). Embaixo disto o
+  // banco ainda tem a CHECK pedido_retirada_sem_frete.
+  const entrega = d.tipoEntrega === 'retirada'
+    ? { frete: FRETE_RETIRADA, prazoDiasEstimado: null }
+    : await (async () => {
+      const opcao = await opcaoDeFreteEscolhida({
+        kit,
+        quantidade: d.quantidade,
+        cepDestino: d.cep,
+        subtotal: carrinho.subtotal,
+        idServico: d.idServico,
+      })
+      return opcao instanceof Response
+        ? opcao
+        : { frete: opcao.valor, prazoDiasEstimado: opcao.prazoDias }
+    })()
+  if (entrega instanceof Response) return entrega
 
   const segredo = segredoDeAtribuicao()
   // O header Cookie separa pares por "; " (ponto-e-virgula + um espaco) na
@@ -306,9 +408,16 @@ export async function POST(req: Request) {
       // coluna "kitSlug", que nao existe na tabela. Objetos explicitos, so com
       // os campos de cada tipo, sao o que garante que so o que pertence a cada
       // tabela chega nela.
+      //
+      // SEM ENDERECO NA RETIRADA, e o `null` e o dado honesto. Quem vem buscar
+      // o kit nao informou destino nenhum — guardar um endereco ali seria
+      // inventar uma entrega que nao vai existir, e a tela de logistica
+      // passaria a exibir um destino para um pedido que nunca sai daqui.
+      // A constraint pedido_envio_tem_endereco continua exigindo destino de
+      // todo pedido de ENVIO; e so a retirada que fica de fora.
       const { clienteId, enderecoId } = await salvarClienteComEndereco(
         { nome: d.nome, email: d.email, cpf: d.cpf, whatsapp: d.whatsapp },
-        {
+        d.tipoEntrega === 'retirada' ? null : {
           cep: d.cep, rua: d.rua, numero: d.numero, complemento: d.complemento,
           bairro: d.bairro, cidade: d.cidade, estado: d.estado,
         },
@@ -338,6 +447,39 @@ export async function POST(req: Request) {
         })
       }
 
+      /**
+       * PEDIDO DE VALOR ZERO NAO NASCE, e a recusa e explicita.
+       *
+       * A combinacao existe: cupom percentual de 100 e criavel pelo painel
+       * (`valor: z.number().int().min(1).max(100)` em
+       * src/app/api/admin/cupons/route.ts), e um cupom fixo maior que o preco
+       * do kit da no mesmo — calcularDesconto devolve `Math.min(bruto,
+       * subtotal)`. Com ENVIO o total ainda fica positivo porque sobra o frete;
+       * com RETIRADA o frete e zero, e o total fecha em R$ 0,00.
+       *
+       * O ESTRAGO SE O PEDIDO NASCESSE: nao ha como cobrar zero no Mercado Pago
+       * (a preferencia e recusada e o Payment Brick nao tokeniza), entao o
+       * pedido ficaria preso em 'pendente' para sempre — com o cupom JA
+       * CONSUMIDO em `cupom_usos` na mesma transacao, comendo o limite por
+       * cliente, e com `total_centavos` congelado pelo trigger de imutabilidade,
+       * ou seja, sem UPDATE de correcao possivel. A unica saida seria apagar o
+       * pedido no banco.
+       *
+       * DENTRO DA TRANSACAO E DEPOIS DO RESGATE, de proposito: o desconto so e
+       * conhecido depois de `resgatarCupom`, e lancar aqui faz o ROLLBACK levar
+       * junto o uso do cupom que acabou de ser gravado. A pessoa tenta de novo
+       * sem o cupom, ou com outro, e o limite dela continua intacto.
+       *
+       * BRINDE DE VERDADE, se um dia a Milagran quiser dar um, nao passa por
+       * aqui: seria uma venda de balcao registrada pela operacao, ou um caminho
+       * proprio que marque o pedido como quitado sem cobranca — decisao que
+       * mexe no livro-razao de comissao e no estoque, e que ninguem tomou.
+       */
+      const totalDoPedido = carrinho.subtotal - desconto + entrega.frete
+      if (totalDoPedido <= 0) {
+        throw new PedidoSemValorError()
+      }
+
       const pedido = await criarPedido({
         origem: atribuicao.origem,
         // ONDE a venda aconteceu, e nao quem a trouxe (`origem`, logo acima, e
@@ -350,6 +492,11 @@ export async function POST(req: Request) {
         // CONGELADA pelo trigger de imutabilidade e um canal errado no INSERT
         // nao tem conserto.
         canal: 'online',
+        // COMO o kit chega. Vem do corpo — e o unico dos tres eixos que a
+        // compradora escolhe — mas o que o corpo carrega e a MODALIDADE, nunca
+        // o preco dela: `entrega` logo acima e quem traduz a escolha em
+        // dinheiro, no servidor.
+        tipoEntrega: d.tipoEntrega,
         representanteId: atribuicao.representanteId,
         percentualComissao: atribuicao.percentualComissao,
         utmSource: atribuicao.utmSource,
@@ -363,12 +510,24 @@ export async function POST(req: Request) {
         // foi decidida (Clube Envios, §13) e o zero deixou de existir neste
         // caminho: quando nao da para cotar, a rota ja devolveu 503 la em cima
         // e nao chegou ate aqui.
-        frete: opcao.valor,
+        //
+        // O ZERO VOLTOU A EXISTIR EM 19/08/2026, e agora com dono: retirada no
+        // local nao tem transporte a cobrar (FRETE_RETIRADA). A diferenca para
+        // o placeholder antigo e que este zero e uma AFIRMACAO — ha uma coluna
+        // dizendo que a entrega e retirada e uma CHECK no banco garantindo que
+        // as duas coisas andam juntas.
+        frete: entrega.frete,
         // Prazo da MESMA opcao, para a tela de confirmacao e para a fila da
         // expedicao (§17). Diferente de frete e canal, esta coluna nao e
         // congelada — a logistica corrige quando a transportadora muda o prazo.
         // E ESTIMATIVA, nao promessa.
-        prazoDiasEstimado: opcao.prazoDias,
+        //
+        // NULL NA RETIRADA, e nao 7. Esta coluna e prazo de TRANSPORTADORA e a
+        // pagina do pedido a imprime como "dias uteis apos a postagem"; os 7
+        // dias da retirada sao o contrario disso (quanto tempo a compradora tem
+        // para buscar) e vivem em PRAZO_RETIRADA_DIAS, src/lib/retirada.ts. A
+        // CHECK pedido_retirada_sem_prazo_de_transporte recusa a confusao.
+        prazoDiasEstimado: entrega.prazoDiasEstimado,
         itens: carrinho.linhas.map((l) => ({
           kitId: l.kitId,
           quantidade: l.quantidade,
@@ -397,6 +556,16 @@ export async function POST(req: Request) {
   } catch (e) {
     if (e instanceof RecusaDeCupom) {
       return Response.json({ error: 'cupom_recusado', mensagem: mensagemDeRecusa(e.motivo) }, { status: 422 })
+    }
+
+    // 422, e a mensagem diz o que fazer: o desconto zerou o total e nao ha como
+    // cobrar R$ 0,00. Sem esta frase a pessoa tentaria de novo com o mesmo
+    // cupom, achando que foi falha de rede.
+    if (e instanceof PedidoSemValorError) {
+      return Response.json({
+        error: 'pedido_sem_valor',
+        mensagem: 'Com este cupom o total do pedido fica em R$ 0,00 e não há como concluir a compra. Escolha o envio, para que reste o frete, ou fale com a gente pelo WhatsApp.',
+      }, { status: 422 })
     }
 
     const mensagem = mensagemSeguraDoErro(e)

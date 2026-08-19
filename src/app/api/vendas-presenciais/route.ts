@@ -290,6 +290,12 @@ export async function POST(req: Request) {
         utmCampaign: null,
         desconto: deInteiro(0),
         frete: FRETE_PRESENCIAL,
+        // RETIRADA, e nao 'envio'. No balcao o comprador sai com o kit na mao
+        // (§2) — que e a definicao exata de 'retirada' na migration
+        // 1755600000000_pedido_tipo_entrega.sql. Marcar 'envio' aqui poria uma
+        // venda ja concluida na fila de postagem dos Correios, e a constraint
+        // pedido_presencial_e_retirada recusaria a linha de qualquer forma.
+        tipoEntrega: 'retirada',
         // prazoDiasEstimado fica ausente (null): nao ha entrega a estimar, e o
         // CHECK pedido_prazo_valido recusaria um 0 usado como "nao se aplica".
         itens: carrinho.linhas.map((l) => ({

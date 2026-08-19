@@ -141,6 +141,13 @@ async function novoPedido(canal: CanalVenda): Promise<string> {
       // Cada canal tem a sua exigencia, e ela e do BANCO, nao da rota.
       vendedor_id: canal === 'presencial' ? idVendedor : null,
       endereco_id: canal === 'online' ? idEndereco : null,
+      // EXPLICITO, e nao pelo DEFAULT da coluna. `tipo_entrega` nasce 'envio'
+      // (migrations/1755600000000_pedido_tipo_entrega.sql), e 'envio' exige
+      // endereco (pedido_envio_tem_endereco) e e proibido no balcao
+      // (pedido_presencial_e_retirada) — um INSERT cru que omite a coluna e
+      // recusado nos dois canais. Declarar aqui e a mesma disciplina das
+      // linhas acima: este helper satisfaz a mao o que o banco exige.
+      tipo_entrega: canal === 'presencial' ? 'retirada' : 'envio',
       cliente_id: idCliente,
       subtotal_centavos: PRECO_KIT_CENTAVOS,
       desconto_centavos: 0,

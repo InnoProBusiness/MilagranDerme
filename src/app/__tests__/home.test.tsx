@@ -42,6 +42,7 @@ import { listarKitsAtivos, type Kit } from '@/repositories/produtos'
 import { saldoDoEstoque, type SaldoEstoque } from '@/repositories/estoque'
 import { AVISO_PRE_VENDA } from '@/lib/tempo'
 import { deInteiro } from '@/lib/money'
+import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
 
 // deInteiro(), nunca `24900 as never`: o mesmo raciocinio do fixture de
 // vitrine.test.tsx — desligar o construtor de Centavos desligaria a validacao
@@ -158,11 +159,29 @@ describe('Home da loja de lancamento', () => {
     expect(document.body).not.toHaveTextContent('R$ 0,00')
   })
 
+  // A frase do cartao online mudou em 19/08/2026, com a retirada no local:
+  // "Recebe pelos Correios" deixou de descrever a compra online inteira. Este
+  // cartao ENUMERA as formas de receber o kit, e um titulo que promete
+  // transportadora manda para o frete quem mora em Goiania e nao precisa dele.
   it('traz os dois caminhos de §7/§8 com as frases do documento', async () => {
     await renderizarHome()
 
     expect(screen.getByText('Comprou → Pagou → Levou na hora.')).toBeInTheDocument()
-    expect(screen.getByText('Comprou → Pagou → Recebe pelos Correios.')).toBeInTheDocument()
+    expect(screen.getByText('Comprou → Pagou → Recebe em casa ou retira aqui.')).toBeInTheDocument()
+  })
+
+  /**
+   * A HOME NAO PODE ESCONDER A RETIRADA. Ela e a unica superficie que enumera
+   * as formas de entrega antes de a pessoa entrar no checkout: se so falar em
+   * Correios, quem mora em Goiania conclui que vai pagar frete e desiste antes
+   * de chegar na tela onde a alternativa aparece.
+   */
+  it('anuncia a retirada no local, com cidade e prazo', async () => {
+    await renderizarHome()
+
+    const texto = document.body.textContent ?? ''
+    expect(texto).toContain(ENDERECO_RETIRADA.cidade)
+    expect(texto).toMatch(new RegExp(`retirada no local.*${PRAZO_RETIRADA_DIAS} dias`, 'i'))
   })
 
   // Busca DENTRO da secao "Como pagar": PIX e cartao sao citados tambem nos

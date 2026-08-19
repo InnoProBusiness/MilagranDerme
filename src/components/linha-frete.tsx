@@ -40,9 +40,30 @@ import { formatarBRL, type Centavos } from '@/lib/money'
  */
 export const TEXTO_FRETE_A_COTAR = 'Calculado no checkout, a partir do seu CEP'
 
+/**
+ * O que esta linha diz quando nao ha transporte a cobrar porque nao ha
+ * transporte. Nao e "Frete: R$ 0,00" — esse texto, sozinho, e lido como frete
+ * gratis promocional, e frete gratis e uma promessa que a Milagran nao fez.
+ */
+export const TEXTO_RETIRADA_SEM_FRETE = 'Retirada no local — sem frete'
+
 type Props = {
   valor: Centavos | null
   prazoDias?: number | null
+  /**
+   * O pedido e retirada no local?
+   *
+   * OBRIGATORIA, e pelo mesmo motivo escrito acima para `valor`: sem isto, uma
+   * tela esquecida imprimiria "Frete: R$ 0,00" para quem vai buscar o kit —
+   * numero verdadeiro (o frete E zero) e frase enganosa, porque quem le
+   * entende frete gratis num envio. Obrigatoria, o compilador aponta cada
+   * superficie e cada uma declara o que aquele pedido e.
+   *
+   * ELA GANHA DE `valor`. Um pedido de retirada tem valor zero E tipo
+   * retirada; se as duas informacoes disputassem, a tela imprimiria o numero e
+   * perderia o motivo. Por isso a verificacao vem primeiro no corpo.
+   */
+  retirada: boolean
 }
 
 /**
@@ -61,7 +82,18 @@ function textoDePrazo(prazoDias: number | null | undefined): string | null {
   return dias === 1 ? 'prazo estimado: 1 dia útil' : `prazo estimado: ${dias} dias úteis`
 }
 
-export function LinhaFrete({ valor, prazoDias }: Props) {
+export function LinhaFrete({ valor, prazoDias, retirada }: Props) {
+  // PRIMEIRO DE TUDO, antes ate do teste de `valor`: numa retirada nao ha frete
+  // a cotar nem a exibir, entao nem "a cotar" nem "R$ 0,00" descrevem o que
+  // esta acontecendo. Ver TEXTO_RETIRADA_SEM_FRETE.
+  if (retirada) {
+    return (
+      <p className="vitrine__linha" data-testid="frete">
+        {TEXTO_RETIRADA_SEM_FRETE}
+      </p>
+    )
+  }
+
   // `== null` (frouxo) e nao `=== null`: pega tambem o `undefined` de um
   // chamador que ainda nao foi atualizado para passar a prop. O compilador
   // continua cobrando o argumento — a obrigatoriedade da prop e a garantia de

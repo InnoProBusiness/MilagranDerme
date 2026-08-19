@@ -64,6 +64,29 @@ export function inicioDoDiaBR(referencia: Date): Date {
   return instanteDeCivilBR(c.ano, c.mes, c.dia)
 }
 
+/**
+ * A virada do dia civil brasileiro que CONTEM a referencia — ou seja, a
+ * meia-noite do dia SEGUINTE, em Sao Paulo.
+ *
+ * Existe para comparar PRAZOS QUE SAO DIAS, e nao instantes. O caso que a criou
+ * (19/08/2026): o prazo de retirada e impresso como data civil nas duas telas
+ * ("Retire até 01/09/2026"), mas `retirarAte()` devolve um instante. Marcar
+ * "vencido" comparando instante contra instante acendia o alerta do painel as
+ * 00:01 de 01/09 — o dia inteiro em que a pagina da compradora ainda dizia que
+ * dava tempo, com as duas telas discordando sobre o mesmo pedido.
+ *
+ * `dia + 1` passando pelo construtor de Date normaliza virada de mes e de ano
+ * (31 + 1 vira o dia 1 do mes seguinte), e instanteDeCivilBR resolve o offset
+ * realmente observado — nao ha "+24h" escrito em lugar nenhum.
+ */
+export function fimDoDiaBR(referencia: Date): Date {
+  const c = civilBR(referencia)
+  const seguinte = new Date(Date.UTC(c.ano, c.mes - 1, c.dia + 1))
+  return instanteDeCivilBR(
+    seguinte.getUTCFullYear(), seguinte.getUTCMonth() + 1, seguinte.getUTCDate(),
+  )
+}
+
 export function inicioDoMesBR(referencia: Date): Date {
   const c = civilBR(referencia)
   return instanteDeCivilBR(c.ano, c.mes, 1)

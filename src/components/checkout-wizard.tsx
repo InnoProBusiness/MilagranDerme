@@ -12,6 +12,11 @@ import type { Kit } from '@/repositories/produtos'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { deInteiro, formatarBRL, type Centavos } from '@/lib/money'
 import { LinhaFrete } from '@/components/linha-frete'
+import type { TipoEntrega } from '@/lib/pedido-status'
+import {
+  FRETE_RETIRADA, ROTULO_RETIRADA, TEXTO_PRAZO_RETIRADA,
+  AVISO_RETIRADA_PRE_VENDA, enderecoRetiradaEmLinha,
+} from '@/lib/retirada'
 
 type Props = {
   kit: Kit
@@ -22,6 +27,22 @@ type Props = {
    * digitar nada. Opcional: quem chega pela home normal nao passa nada.
    */
   cupomInicial?: string
+  /**
+   * O lancamento de 25/08/2026 ja ocorreu? Decide se o aviso de pre-venda da
+   * retirada aparece.
+   *
+   * VEM DO SERVIDOR, e nao de `lancamentoJaOcorreu()` chamado aqui dentro. Este
+   * e um Client Component: a funcao rodaria uma vez no SSR e outra na
+   * hidratacao, e uma compra feita na virada da meia-noite de 25/08 renderizaria
+   * HTML diferente nos dois lados — o erro de hidratacao classico. A pagina que
+   * monta o wizard ja decide isso uma vez para a tela inteira
+   * (src/app/page.tsx), e passa a resposta pronta.
+   *
+   * OBRIGATORIA, pelo mesmo motivo de `valor` em src/components/linha-frete.tsx:
+   * opcional com default, a pagina esquecida continuaria prometendo pre-venda
+   * meses depois do lancamento, em silencio.
+   */
+  lancado: boolean
 }
 
 type DadosPessoais = { nome: string; email: string; cpf: string; whatsapp: string }
@@ -76,16 +97,24 @@ const CEP_COMPLETO = /^\d{8}$/
 /**
  * Mensagens da tela quando a cotacao nao acontece.
  *
- * `FRETE_BLOQUEIA_O_PEDIDO` e a parte que NAO pode faltar em nenhum caminho de
- * erro: o comprador precisa entender que o pedido nao segue agora, e nao ficar
+ * `FRETE_BLOQUEIA_O_ENVIO` e a parte que NAO pode faltar em nenhum caminho de
+ * erro: o comprador precisa entender que o ENVIO nao segue agora, e nao ficar
  * procurando o botao que sumiu. Este e o mesmo principio do cabecalho de
  * src/components/linha-frete.tsx — quando nao ha valor, a resposta certa e
  * dizer que nao ha valor, jamais seguir com R$ 0,00. Frete zero gravado vira
  * prejuizo por pedido e `pedidos.frete_centavos` e congelada pelo trigger de
  * imutabilidade: nao existe UPDATE de correcao depois.
+ *
+ * "O ENVIO", E NAO "O PEDIDO" (19/08/2026). A frase dizia "não é possível
+ * concluir o pedido agora", exata enquanto toda entrega dependia do Clube
+ * Envios. Com a retirada no local existe uma forma de receber que nao depende
+ * de provedor nenhum: dizer que o PEDIDO parou mandaria embora quem ia buscar o
+ * kit a pe, por causa de um servico que aquela compra nunca usaria. O alerta
+ * tambem so e renderizado dentro do ramo de envio, entao quem escolheu retirada
+ * nunca o le.
  */
-const FRETE_BLOQUEIA_O_PEDIDO =
-  'Sem o valor do frete não é possível concluir o pedido agora. Tente novamente em instantes ou confira o CEP digitado.'
+const FRETE_BLOQUEIA_O_ENVIO =
+  'Sem o valor do frete não é possível seguir com o envio agora. Tente novamente em instantes, confira o CEP digitado — ou escolha a retirada no local, que não depende do cálculo de frete.'
 const FALHA_GENERICA_DE_FRETE = 'Não foi possível calcular o frete agora.'
 const FALHA_DE_CONEXAO_NO_FRETE = 'Não conseguimos falar com o cálculo de frete. Verifique sua conexão.'
 const COTACAO_SEM_OPCAO_LEGIVEL =
@@ -235,7 +264,27 @@ function textoDePrazo(dias: number): string {
   return dias === 1 ? 'Prazo estimado: 1 dia útil' : `Prazo estimado: ${dias} dias úteis`
 }
 
-export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Props) {
+/**
+ * COMO a compradora quer receber. E o MESMO vocabulario da coluna
+ * `pedidos.tipo_entrega` e do discriminante de POST /api/pedidos, de proposito:
+ * o valor que sai deste radiogroup viaja ate o banco sem tradutor no meio.
+ */
+export type Modalidade = TipoEntrega
+
+/**
+ * As duas linhas fixas do primeiro radiogroup. Uma lista, e nao dois <label>
+ * escritos a mao, para que as duas nasçam com a mesma forma — e para que a
+ * ordem e o texto de cada uma tenham um lugar so.
+ *
+ * RETIRADA PRIMEIRO: e a mais barata e a que a tela quer deixar visivel de
+ * relance para quem e de Goiania.
+ */
+export const MODALIDADES: ReadonlyArray<{ chave: Modalidade; nome: string; apoio: string }> = [
+  { chave: 'retirada', nome: ROTULO_RETIRADA, apoio: TEXTO_PRAZO_RETIRADA },
+  { chave: 'envio', nome: 'Receber em casa', apoio: 'Frete e prazo calculados pelo seu CEP' },
+]
+
+export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lancado }: Props) {
   const router = useRouter()
   const [passo, setPasso] = useState(1)
   const [quantidade, setQuantidade] = useState(quantidadeInicial)
@@ -257,9 +306,19 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
-  // Estado da cotacao de frete (§13). `idServicoEscolhido` guarda so o ID:
-  // a opcao inteira e derivada da lista abaixo, para nao existirem duas
-  // copias do mesmo valor podendo divergir.
+  // DOIS ESTADOS PARA DUAS PERGUNTAS, e nao um so tentando responder as duas.
+  //
+  // `modalidade` e "receber ou buscar"; `idServicoEscolhido` e "por qual
+  // transportadora", que so faz sentido dentro de "receber". A primeira versao
+  // desta tela juntou as duas num `chaveEscolhida: string | null` unico, e foi
+  // exatamente essa juncao que produziu o beco sem saida descrito no comentario
+  // do radiogroup de modalidade la embaixo.
+  //
+  // `modalidade` comeca NULL de proposito: nenhuma das duas vem pre-selecionada.
+  // A retirada, que e a primeira e a mais barata, viraria a escolha de quem so
+  // clicou em Continuar sem ler — e essa pessoa descobriria que tem de ir a
+  // Goiania depois de pagar.
+  const [modalidade, setModalidade] = useState<Modalidade | null>(null)
   const [opcoesFrete, setOpcoesFrete] = useState<OpcaoDeFreteNaTela[]>([])
   const [idServicoEscolhido, setIdServicoEscolhido] = useState<number | null>(null)
   const [cotandoFrete, setCotandoFrete] = useState(false)
@@ -270,7 +329,31 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
   const [tentativaDeFrete, setTentativaDeFrete] = useState(0)
 
   const cepCompleto = CEP_COMPLETO.test(endereco.cep) ? endereco.cep : ''
-  const opcaoEscolhida = opcoesFrete.find((o) => o.idServico === idServicoEscolhido) ?? null
+
+  const vaiRetirar = modalidade === 'retirada'
+  const vaiEnviar = modalidade === 'envio'
+
+  /**
+   * A opcao de frete escolhida, DERIVADA da lista — nunca uma segunda copia do
+   * objeto guardada em estado, que divergiria da lista na primeira recotacao.
+   *
+   * `null` quando a modalidade e retirada: nao ha servico de transportadora
+   * envolvido, e e por isso que quem le esta variavel tem que olhar
+   * `modalidade` antes de concluir qualquer coisa a partir do null.
+   */
+  const opcaoDeFrete = vaiEnviar
+    ? opcoesFrete.find((o) => o.idServico === idServicoEscolhido) ?? null
+    : null
+
+  /**
+   * A ENTREGA ESTA RESOLVIDA? E a unica pergunta que o passo 3 precisa
+   * responder para liberar o Continuar, e ela tem duas respostas certas:
+   * retirada nao pede mais nada, e envio pede endereco completo mais uma opcao
+   * cotada. Escrever as duas condicoes soltas no `disabled` do botao faria a
+   * regra existir em dois lugares — o botao e a guarda do submit.
+   */
+  const entregaResolvida = vaiRetirar
+    || (vaiEnviar && enderecoValido(endereco) && opcaoDeFrete !== null)
 
   /**
    * AUTOFILL DE ENDERECO — CONVENIENCIA, NUNCA BLOQUEIO.
@@ -328,6 +411,11 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
    * comprador decidir (e o `idServico` da decisao dele).
    */
   useEffect(() => {
+    // So a SUB-ESCOLHA e descartada: quando o CEP ou a quantidade mudam, o
+    // volume e o destino mudaram e o preco cotado antes deixou de valer. A
+    // MODALIDADE nao se toca — ela nao depende de cotacao nenhuma, e limpa-la
+    // aqui faria a escolha da compradora sumir sozinha porque ela corrigiu um
+    // digito do CEP.
     setIdServicoEscolhido(null)
     setOpcoesFrete([])
     setErroFrete(null)
@@ -398,15 +486,15 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
   const resumo = montarCarrinho(
     [{ kitId: kit.id, nome: kit.nome, precoUnitario: kit.precoCentavos, quantidade }],
     deInteiro(0),
-    opcaoEscolhida ? opcaoEscolhida.valor : deInteiro(0),
+    opcaoDeFrete ? opcaoDeFrete.valor : deInteiro(0),
   )
 
   async function confirmar() {
-    // Guarda de ultimo metro: sem opcao de frete nao existe pedido a criar. O
-    // botao ja vem desabilitado neste estado — esta linha existe para que
-    // NENHUM caminho futuro (um atalho de teclado, um passo novo, um estado
-    // restaurado) consiga postar um pedido sem frete escolhido.
-    if (!opcaoEscolhida) return
+    // Guarda de ultimo metro: sem forma de entrega escolhida nao existe pedido
+    // a criar. O botao ja vem desabilitado neste estado — esta linha existe
+    // para que NENHUM caminho futuro (um atalho de teclado, um passo novo, um
+    // estado restaurado) consiga postar um pedido sem entrega definida.
+    if (!entregaResolvida) return
 
     setEnviando(true)
     setErro(null)
@@ -417,18 +505,28 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
         body: JSON.stringify({
           kitSlug: kit.slug,
           quantidade,
-          // SO O ID DA OPCAO, jamais o valor dela. A rota recota o frete no
-          // servidor a partir do CEP submetido e usa o valor que o provedor
-          // devolver naquele instante — se a tabela da transportadora mudou
-          // entre a tela e este clique, quem manda e a cotacao nova. Mandar
-          // `valorCentavos` junto seria oferecer ao navegador a chance de
-          // escolher quanto custa o frete; o `.strict()` de
+          // A MODALIDADE, e o que ela exige — nada alem disso.
+          //
+          // SO O ID DA OPCAO no envio, jamais o valor dela. A rota recota o
+          // frete no servidor a partir do CEP submetido e usa o valor que o
+          // provedor devolver naquele instante — se a tabela da transportadora
+          // mudou entre a tela e este clique, quem manda e a cotacao nova.
+          // Mandar `valorCentavos` junto seria oferecer ao navegador a chance
+          // de escolher quanto custa o frete; o `.strict()` de
           // src/app/api/pedidos/route.ts responderia 422, mas a garantia de
           // verdade e esta linha nao existir.
-          idServico: opcaoEscolhida.idServico,
+          //
+          // NA RETIRADA NAO VAI ID NEM ENDERECO, e a ausencia e deliberada:
+          // CorpoRetirada tambem e `.strict()`, entao mandar `idServico` ou
+          // `cep` numa retirada e 422. Espalhar `...endereco` aqui "porque nao
+          // custa" faria justamente esse 422 acontecer para todo mundo — e, se
+          // um dia o schema afrouxasse, gravaria um endereco de entrega num
+          // pedido que ninguem vai entregar.
+          ...(vaiRetirar || !opcaoDeFrete
+            ? { tipoEntrega: 'retirada' as const }
+            : { tipoEntrega: 'envio' as const, idServico: opcaoDeFrete.idServico, ...endereco }),
           ...(cupom.trim() ? { cupom: cupom.trim() } : {}),
           ...dados,
-          ...endereco,
         }),
       })
       const corpo: unknown = await resposta.json().catch(() => null)
@@ -512,8 +610,12 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
               `valor={null}` = AINDA NAO COTADO, que e um estado diferente de
               zero: neste passo o CEP nem foi pedido. LinhaFrete imprime o texto
               de "a cotar" e nunca R$ 0,00 — ver o cabecalho do componente.
+
+              `retirada` NAO e fixo em false: quem escolheu retirar e voltou ao
+              passo 1 para somar um kit leria aqui "calculado a partir do seu
+              CEP" sobre uma compra que ja decidiu nao ter frete nenhum.
             */}
-            <LinhaFrete valor={null} />
+            <LinhaFrete valor={null} retirada={vaiRetirar} />
           </div>
 
           <div className="checkout__nav">
@@ -572,156 +674,234 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
 
       {passo === 3 && (
         <div className="checkout__passo form">
-          <h2>Endereço de entrega</h2>
-          <div className="form__grid">
-            <div className="form__field">
-              <label htmlFor="cep">CEP (somente numeros)</label>
-              <input
-                id="cep" inputMode="numeric" maxLength={8} value={endereco.cep}
-                onChange={(e) => setEndereco({ ...endereco, cep: somenteDigitos(e.target.value) })}
-              />
-              {/*
-                Texto fixo, sempre visivel, e nao um aviso que aparece quando o
-                autofill falha: a promessa e modesta ("quando encontramos") e ja
-                diz que dava para corrigir tudo. Assim o caminho de falha do
-                autofill nao precisa de mensagem nenhuma — ver o efeito.
-              */}
-              <p className="form__status">
-                Preenchemos rua, bairro, cidade e UF quando encontramos o CEP. Você pode corrigir qualquer campo.
-              </p>
-            </div>
-            <div className="form__field">
-              <label htmlFor="estado">Estado (UF)</label>
-              <input
-                id="estado" maxLength={2} value={endereco.estado}
-                onChange={(e) => setEndereco({
-                  ...endereco, estado: e.target.value.toUpperCase().replace(/[^A-Z]/g, ''),
-                })}
-              />
-            </div>
-            <div className="form__field form__field--wide">
-              <label htmlFor="rua">Rua</label>
-              <input
-                id="rua" value={endereco.rua}
-                onChange={(e) => setEndereco({ ...endereco, rua: e.target.value })}
-              />
-            </div>
-            <div className="form__field">
-              <label htmlFor="numero">Numero</label>
-              <input
-                id="numero" value={endereco.numero}
-                onChange={(e) => setEndereco({ ...endereco, numero: e.target.value })}
-              />
-            </div>
-            <div className="form__field">
-              <label htmlFor="complemento">Complemento</label>
-              <input
-                id="complemento" value={endereco.complemento}
-                onChange={(e) => setEndereco({ ...endereco, complemento: e.target.value })}
-              />
-            </div>
-            <div className="form__field">
-              <label htmlFor="bairro">Bairro</label>
-              <input
-                id="bairro" value={endereco.bairro}
-                onChange={(e) => setEndereco({ ...endereco, bairro: e.target.value })}
-              />
-            </div>
-            <div className="form__field">
-              <label htmlFor="cidade">Cidade</label>
-              <input
-                id="cidade" value={endereco.cidade}
-                onChange={(e) => setEndereco({ ...endereco, cidade: e.target.value })}
-              />
-            </div>
+          <h2>Entrega</h2>
+
+          {/*
+            DUAS MODALIDADES, SEMPRE AS DUAS NA TELA — e este radiogroup nao
+            depende de cotacao nenhuma.
+
+            A primeira versao desta tela (19/08/2026) listava a retirada junto
+            com as opcoes de transportadora, num radiogroup so. Sem CEP nao ha
+            cotacao, entao a retirada aparecia SOZINHA: quem clicasse nela — a
+            unica linha da lista, exatamente o que a tela convidava a fazer — e
+            depois lesse o endereco e desistisse ficava PRESO. Radio nativo nao
+            desmarca com um segundo clique, o campo de CEP tinha sido desmontado
+            junto com o resto do endereco, e nao havia outra opcao no grupo para
+            escolher no lugar. A unica saida era recarregar a pagina e perder
+            nome, e-mail, CPF e WhatsApp.
+
+            A MODALIDADE E A SUB-ESCOLHA SAO PERGUNTAS DIFERENTES, e agora sao
+            dois grupos diferentes: aqui se decide "receber ou buscar", e so
+            dentro de "receber" e que se escolhe transportadora. Trocar de ideia
+            e sempre um clique, em qualquer ordem, com ou sem CEP digitado.
+          */}
+          <div className="frete-opcoes" role="radiogroup" aria-label="Como você quer receber">
+            {MODALIDADES.map((m) => (
+              <label
+                key={m.chave}
+                htmlFor={`modalidade-${m.chave}`}
+                className={`frete-opcao${modalidade === m.chave ? ' frete-opcao--escolhida' : ''}`}
+              >
+                <input
+                  id={`modalidade-${m.chave}`}
+                  type="radio"
+                  name="modalidade-de-entrega"
+                  value={m.chave}
+                  checked={modalidade === m.chave}
+                  onChange={() => setModalidade(m.chave)}
+                />
+                <span className="frete-opcao__nome">
+                  {m.nome}
+                  <span className="frete-opcao__prazo">{m.apoio}</span>
+                </span>
+                {/*
+                  So a retirada anuncia preco AQUI: o dela e conhecido e e zero.
+                  O do envio depende do CEP e da transportadora, e escrever
+                  qualquer coisa nesta coluna antes de cotar seria a promessa que
+                  src/components/linha-frete.tsx existe para impedir.
+                */}
+                {m.chave === 'retirada' && (
+                  <span className="frete-opcao__valor">{formatarBRL(FRETE_RETIRADA)}</span>
+                )}
+              </label>
+            ))}
           </div>
 
-          {/* `.eyebrow` (globals.css) e nao um estilo novo: e o rotulo de secao
-              que ja existe no design system, e h1..h4 tem `margin:0` no reset —
-              um <h3> cru ficaria colado no campo de cima. */}
-          <h3 className="eyebrow">Entrega</h3>
-
-          {/* role="status": chegou sozinho, sem clique, e nao e urgente. */}
-          {cotandoFrete && (
-            <p className="form__status" role="status">Calculando o frete para o seu CEP…</p>
-          )}
-
           {/*
-            ESTADO VAZIO HONESTO: enquanto nao ha CEP nao ha o que cotar, e a
-            tela diz isso em vez de mostrar uma lista vazia ou — pior — uma
-            opcao "Padrão" com valor inventado.
+            ONDE RETIRAR, ali mesmo na hora de decidir — e nao so na confirmacao.
+            Descobrir depois de comprar que o ponto fica do outro lado da cidade
+            e o arrependimento que vira pedido de reembolso.
           */}
-          {!cotandoFrete && !cepCompleto && !erroFrete && (
-            <p className="form__status">
-              Informe o CEP acima para calcular o frete e o prazo de entrega.
-            </p>
-          )}
-
-          {/*
-            role="alert" e nao role="status" porque este erro BLOQUEIA a compra:
-            sem cotacao o "Continuar" fica desabilitado e o comprador precisa
-            saber disso agora, nao quando terminar de ler a tela. A distincao
-            esta documentada no bloco .aviso de src/app/globals.css.
-          */}
-          {erroFrete && (
-            <div className="aviso aviso--erro" role="alert">
-              <strong className="aviso__titulo">Frete não calculado</strong>
-              <p>{erroFrete}</p>
-              <p>{FRETE_BLOQUEIA_O_PEDIDO}</p>
-              <button
-                type="button"
-                className="btn btn--ghost"
-                onClick={() => setTentativaDeFrete((t) => t + 1)}
-              >
-                Tentar calcular de novo
-              </button>
+          {vaiRetirar && (
+            <div className="aviso" data-testid="endereco-retirada">
+              <strong className="aviso__titulo">Onde retirar</strong>
+              <p>{enderecoRetiradaEmLinha()}</p>
+              {/*
+                O aviso de pre-venda SOME depois de 25/08, cumprindo o contrato
+                escrito na propria constante (src/lib/retirada.ts). `lancado` vem
+                do servidor por prop: decidir a data aqui dentro faria o HTML do
+                SSR e o da hidratacao discordarem na virada do dia.
+              */}
+              {!lancado && <p>{AVISO_RETIRADA_PRE_VENDA}</p>}
             </div>
           )}
 
-          {opcoesFrete.length > 0 && (
-            <div className="frete-opcoes" role="radiogroup" aria-label="Opções de frete">
-              {opcoesFrete.map((o) => {
-                const idInput = `frete-${o.idServico}`
-                const escolhida = o.idServico === idServicoEscolhido
-                return (
-                  <label
-                    key={o.idServico}
-                    htmlFor={idInput}
-                    className={`frete-opcao${escolhida ? ' frete-opcao--escolhida' : ''}`}
-                  >
-                    <input
-                      id={idInput}
-                      type="radio"
-                      name="opcao-de-frete"
-                      value={String(o.idServico)}
-                      checked={escolhida}
-                      onChange={() => setIdServicoEscolhido(o.idServico)}
-                    />
-                    <span className="frete-opcao__nome">
+          {/*
+            TUDO O QUE SO EXISTE NO ENVIO mora dentro deste ramo: o endereco, a
+            cotacao, o estado vazio e o alerta de falha. Fora dele, cada um
+            desses blocos ja apareceu na tela de quem escolheu retirada dizendo
+            coisa falsa — "informe o CEP abaixo" sem nenhum campo abaixo, e "nao
+            e possivel concluir o pedido agora" ao lado de um Continuar
+            habilitado.
+          */}
+          {vaiEnviar && (
+            <>
+              <h3 className="eyebrow">Endereço de entrega</h3>
+
+                  <div className="form__grid">
+                    <div className="form__field">
+                      <label htmlFor="cep">CEP (somente numeros)</label>
+                      <input
+                        id="cep" inputMode="numeric" maxLength={8} value={endereco.cep}
+                        onChange={(e) => setEndereco({ ...endereco, cep: somenteDigitos(e.target.value) })}
+                      />
                       {/*
-                        TRANSPORTADORA E SERVICO JUNTOS, porque nenhum dos dois
-                        identifica a opcao sozinho. A cotacao real traz
-                        "CLUBE ENVIOS - Correios" para PAC e para SEDEX, e
-                        "CLUBE ENVIOS - Azul" para ECOMM CORP e EXPRESSO — com
-                        so o primeiro campo, o comprador ve duas linhas de nome
-                        identico e tem que deduzir a diferenca pelo preco.
-
-                        Rotulo neutro quando os dois vem vazios: um radio sem
-                        nome fica clicavel mas ilegivel. "Envio" nao inventa
-                        transportadora nenhuma (dizer "Correios" seria chutar
-                        quem despacha) e mantem a opcao pagavel — src/lib/frete.ts
-                        trata os dois campos como cosmeticos justamente para que
-                        a falta de um nome nunca derrube uma cotacao valida.
+                        Texto fixo, sempre visivel, e nao um aviso que aparece quando o
+                        autofill falha: a promessa e modesta ("quando encontramos") e ja
+                        diz que dava para corrigir tudo. Assim o caminho de falha do
+                        autofill nao precisa de mensagem nenhuma — ver o efeito.
                       */}
-                      {rotuloDaOpcao(o)}
-                      <span className="frete-opcao__prazo">{textoDePrazo(o.prazoDias)}</span>
-                    </span>
-                    <span className="frete-opcao__valor">{formatarBRL(o.valor)}</span>
-                  </label>
-                )
-              })}
-            </div>
+                      <p className="form__status">
+                        Preenchemos rua, bairro, cidade e UF quando encontramos o CEP. Você pode corrigir qualquer campo.
+                      </p>
+                    </div>
+                    <div className="form__field">
+                      <label htmlFor="estado">Estado (UF)</label>
+                      <input
+                        id="estado" maxLength={2} value={endereco.estado}
+                        onChange={(e) => setEndereco({
+                          ...endereco, estado: e.target.value.toUpperCase().replace(/[^A-Z]/g, ''),
+                        })}
+                      />
+                    </div>
+                    <div className="form__field form__field--wide">
+                      <label htmlFor="rua">Rua</label>
+                      <input
+                        id="rua" value={endereco.rua}
+                        onChange={(e) => setEndereco({ ...endereco, rua: e.target.value })}
+                      />
+                    </div>
+                    <div className="form__field">
+                      <label htmlFor="numero">Numero</label>
+                      <input
+                        id="numero" value={endereco.numero}
+                        onChange={(e) => setEndereco({ ...endereco, numero: e.target.value })}
+                      />
+                    </div>
+                    <div className="form__field">
+                      <label htmlFor="complemento">Complemento</label>
+                      <input
+                        id="complemento" value={endereco.complemento}
+                        onChange={(e) => setEndereco({ ...endereco, complemento: e.target.value })}
+                      />
+                    </div>
+                    <div className="form__field">
+                      <label htmlFor="bairro">Bairro</label>
+                      <input
+                        id="bairro" value={endereco.bairro}
+                        onChange={(e) => setEndereco({ ...endereco, bairro: e.target.value })}
+                      />
+                    </div>
+                    <div className="form__field">
+                      <label htmlFor="cidade">Cidade</label>
+                      <input
+                        id="cidade" value={endereco.cidade}
+                        onChange={(e) => setEndereco({ ...endereco, cidade: e.target.value })}
+                      />
+                    </div>
+                  </div>
+
+              {/* role="status": chegou sozinho, sem clique, e nao e urgente. */}
+              {cotandoFrete && (
+                <p className="form__status" role="status">Calculando o frete para o seu CEP…</p>
+              )}
+
+              {/*
+                ESTADO VAZIO HONESTO: enquanto nao ha CEP nao ha o que cotar, e a
+                tela diz isso em vez de mostrar lista vazia ou — pior — uma opcao
+                "Padrão" com valor inventado.
+              */}
+              {!cotandoFrete && !cepCompleto && !erroFrete && (
+                <p className="form__status">
+                  Informe o CEP acima para calcular o frete e o prazo de entrega.
+                </p>
+              )}
+
+              {/*
+                role="alert" e nao role="status" porque este erro BLOQUEIA o
+                envio: sem cotacao o "Continuar" fica desabilitado e o comprador
+                precisa saber disso agora, nao quando terminar de ler a tela.
+
+                A FRASE FALA DO ENVIO, E NAO DO PEDIDO INTEIRO. Ate 19/08/2026
+                dizia "nao e possivel concluir o pedido agora", o que era exato
+                quando a unica forma de receber dependia do Clube Envios. Com a
+                retirada, uma queda do provedor deixou de fechar a loja — e
+                manter a frase antiga mandaria embora quem ia buscar o kit a pe.
+              */}
+              {erroFrete && (
+                <div className="aviso aviso--erro" role="alert">
+                  <strong className="aviso__titulo">Frete não calculado</strong>
+                  <p>{erroFrete}</p>
+                  <p>{FRETE_BLOQUEIA_O_ENVIO}</p>
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => setTentativaDeFrete((t) => t + 1)}
+                  >
+                    Tentar calcular de novo
+                  </button>
+                </div>
+              )}
+
+              {opcoesFrete.length > 0 && (
+                <div className="frete-opcoes" role="radiogroup" aria-label="Opções de frete">
+                  {opcoesFrete.map((o) => {
+                    const idInput = `frete-${o.idServico}`
+                    const escolhida = o.idServico === idServicoEscolhido
+                    return (
+                      <label
+                        key={o.idServico}
+                        htmlFor={idInput}
+                        className={`frete-opcao${escolhida ? ' frete-opcao--escolhida' : ''}`}
+                      >
+                        <input
+                          id={idInput}
+                          type="radio"
+                          name="opcao-de-frete"
+                          value={String(o.idServico)}
+                          checked={escolhida}
+                          onChange={() => setIdServicoEscolhido(o.idServico)}
+                        />
+                        <span className="frete-opcao__nome">
+                          {/*
+                            TRANSPORTADORA E SERVICO JUNTOS, porque nenhum dos
+                            dois identifica a opcao sozinho: a cotacao real traz
+                            "CLUBE ENVIOS - Correios" para PAC e para SEDEX.
+                            Rotulo neutro quando os dois vem vazios — um radio
+                            sem nome fica clicavel mas ilegivel.
+                          */}
+                          {rotuloDaOpcao(o)}
+                          <span className="frete-opcao__prazo">{textoDePrazo(o.prazoDias)}</span>
+                        </span>
+                        <span className="frete-opcao__valor">{formatarBRL(o.valor)}</span>
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
+            </>
           )}
+
 
           <div className="checkout__nav">
             <button type="button" className="btn btn--ghost" onClick={() => setPasso(2)}>Voltar</button>
@@ -733,7 +913,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
             */}
             <button
               type="button" className="btn btn--solid"
-              disabled={!enderecoValido(endereco) || opcaoEscolhida === null}
+              disabled={!entregaResolvida}
               onClick={() => setPasso(4)}
             >
               Continuar
@@ -770,8 +950,9 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
               imprimir R$ 0,00, e o botao de pagamento abaixo fica desabilitado.
             */}
             <LinhaFrete
-              valor={opcaoEscolhida?.valor ?? null}
-              prazoDias={opcaoEscolhida?.prazoDias ?? null}
+              retirada={vaiRetirar}
+              valor={opcaoDeFrete?.valor ?? null}
+              prazoDias={opcaoDeFrete?.prazoDias ?? null}
             />
             <p className="vitrine__linha vitrine__linha--total" data-testid="total">
               Total: {formatarBRL(resumo.total)}
@@ -824,7 +1005,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Pr
             */}
             <button
               type="button" className="btn btn--solid" onClick={confirmar}
-              disabled={enviando || opcaoEscolhida === null}
+              disabled={enviando || !entregaResolvida}
             >
               {enviando ? 'Enviando...' : 'Ir para o pagamento'}
             </button>

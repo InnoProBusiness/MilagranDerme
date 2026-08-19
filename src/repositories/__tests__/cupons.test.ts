@@ -259,6 +259,7 @@ describe('resgate de cupom', () => {
       // a presenca ou ausencia de representante_id — e por isso que
       // 'presencial' nunca podia entrar naquele ENUM.
       canal: 'online',
+      tipoEntrega: 'envio',
       origem: 'casa', representanteId: null, percentualComissao: null,
       utmSource: null, utmMedium: null, utmCampaign: null,
       desconto: deInteiro(0), frete: deInteiro(0),
