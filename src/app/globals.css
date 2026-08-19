@@ -1773,3 +1773,31 @@ main{position:relative;z-index:1;}
   color:var(--ink-muted);
   font-size:13px;
 }
+
+/*
+  O campo de cupom com o botao de validar ao lado (passo 4 do checkout).
+
+  `flex-wrap` e o que importa aqui: em tela estreita o botao desce para baixo do
+  input inteiro em vez de espremer os dois. Um "Validar cupom" de 90px ao lado
+  de um campo de 100px e a forma de ninguem conseguir ler o codigo que digitou.
+*/
+.cupom-campo{
+  display:flex;
+  align-items:stretch;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.cupom-campo input{
+  /* Cresce, mas nunca abaixo de 180px — largura de um codigo de 24 caracteres
+     em fonte de formulario, que e o maximo que o banco aceita. */
+  flex:1 1 180px;
+  min-width:0;
+}
+
+.cupom-campo .btn{
+  flex:0 0 auto;
+  padding:0 18px;
+  font-size:13px;
+  white-space:nowrap;
+}

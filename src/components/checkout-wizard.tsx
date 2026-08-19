@@ -13,6 +13,7 @@ import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { deInteiro, formatarBRL, type Centavos } from '@/lib/money'
 import { LinhaFrete } from '@/components/linha-frete'
 import type { TipoEntrega } from '@/lib/pedido-status'
+import { TAMANHO_MAXIMO_CUPOM } from '@/lib/cupom-da-url'
 import {
   FRETE_RETIRADA, ROTULO_RETIRADA, TEXTO_PRAZO_RETIRADA,
   AVISO_RETIRADA_PRE_VENDA, enderecoRetiradaEmLinha,
@@ -44,6 +45,24 @@ type Props = {
    */
   lancado: boolean
 }
+
+/**
+ * O que o botao "Validar cupom" trouxe de volta, amarrado a PERGUNTA INTEIRA que
+ * o produziu — e nao so ao codigo.
+ *
+ * A pergunta e "quanto este cupom tira DESTE carrinho", e o carrinho e
+ * (kit, quantidade). Guardar so o codigo foi o defeito da primeira versao: um
+ * cupom percentual validado com 3 kits continuava mostrando o desconto dos 3
+ * depois de a pessoa voltar ao passo 1 e baixar para 1 — a tela anunciava um
+ * total que a confirmacao nao ia cobrar, e `total_centavos` e congelado no
+ * INSERT, entao nao havia conserto depois.
+ */
+type PerguntaDoCupom = { codigo: string; kitSlug: string; quantidade: number }
+
+type PreviaDeCupom = PerguntaDoCupom & (
+  | { valido: true; descontoCentavos: Centavos }
+  | { valido: false; mensagem: string }
+)
 
 type DadosPessoais = { nome: string; email: string; cpf: string; whatsapp: string }
 type Endereco = {
@@ -303,6 +322,19 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
    * o limite — cai no mesmo 422 de quem digitou errado.
    */
   const [cupom, setCupom] = useState(cupomInicial)
+
+  /**
+   * O RESULTADO DA PREVIA, e o CODIGO EXATO que o produziu.
+   *
+   * Guardar o codigo junto nao e redundancia — e o que impede o pior defeito
+   * possivel desta tela: validar PRE200, ver "-R$ 200,00", editar o campo para
+   * PRE300 e o desconto continuar na tela, agora descrevendo um cupom que
+   * ninguem verificou. Com o codigo dentro do proprio estado, a previa so vale
+   * enquanto o campo bater com ele; qualquer letra digitada a invalida sozinha,
+   * sem depender de alguem lembrar de chamar um `limpar()`.
+   */
+  const [previaCupom, setPreviaCupom] = useState<PreviaDeCupom | null>(null)
+  const [validandoCupom, setValidandoCupom] = useState(false)
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
@@ -354,6 +386,31 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
    */
   const entregaResolvida = vaiRetirar
     || (vaiEnviar && enderecoValido(endereco) && opcaoDeFrete !== null)
+
+  const cupomLimpo = cupom.trim()
+
+  /**
+   * A previa so conta se ela for sobre a PERGUNTA que esta na tela agora — o
+   * mesmo codigo, o mesmo kit e a mesma quantidade.
+   *
+   * COMPARAR AQUI, e nao limpar o estado em cada `onChange`, e deliberado: sao
+   * duas formas de acertar o mesmo caso, e esta nao tem como ser esquecida. O
+   * `onChange` do campo cobriria a digitacao, mas nao o botao de quantidade do
+   * passo 1, nem um `?cupom=` novo, nem colar, nem o autofill do navegador —
+   * cada um desses precisaria lembrar de chamar um `limpar()`. A comparacao
+   * vale para todos de graca, inclusive para os que ainda nao existem.
+   *
+   * A quantidade importa porque o desconto DEPENDE dela: um cupom percentual
+   * validado sobre tres kits nao descreve mais nada depois que a pessoa volta e
+   * compra um. O kit tambem entra, para o dia em que a loja tiver mais de um.
+   */
+  const previa = previaCupom
+    && previaCupom.codigo === cupomLimpo
+    && previaCupom.kitSlug === kit.slug
+    && previaCupom.quantidade === quantidade
+    ? previaCupom
+    : null
+  const descontoPrevisto = previa?.valido ? previa.descontoCentavos : deInteiro(0)
 
   /**
    * AUTOFILL DE ENDERECO — CONVENIENCIA, NUNCA BLOQUEIO.
@@ -485,9 +542,85 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
   // definitivo, porque o passo 4 so e alcancavel com uma opcao escolhida.
   const resumo = montarCarrinho(
     [{ kitId: kit.id, nome: kit.nome, precoUnitario: kit.precoCentavos, quantidade }],
-    deInteiro(0),
+    // O DESCONTO DA PREVIA entra no resumo, e so ele: um cupom digitado e nao
+    // validado continua valendo zero aqui. O numero que a tela mostra e sempre
+    // um que o servidor confirmou — nunca um que o navegador calculou a partir
+    // de um codigo que ninguem conferiu.
+    descontoPrevisto,
     opcaoDeFrete ? opcaoDeFrete.valor : deInteiro(0),
   )
+
+  /**
+   * POR QUE A TELA NAO DEIXA CONFIRMAR, quando nao deixa.
+   *
+   * Sao dois casos, e nos dois a tela JA SABE que POST /api/pedidos vai
+   * recusar. Deixar o botao ativo mandaria a pessoa esperar a viagem de rede
+   * para receber um 422 que podia ter sido dito na hora — e, no primeiro caso,
+   * com o agravante de o erro aparecer longe do campo que o causou.
+   *
+   *   1. O SERVIDOR JA RECUSOU ESTE CUPOM. Mandar mesmo assim derruba o pedido
+   *      INTEIRO (`cupom_recusado`, src/app/api/pedidos/route.ts), e nao apenas
+   *      o desconto: quem so queria comprar sem desconto perderia o clique.
+   *      A saida esta escrita ao lado do campo — apagar o codigo.
+   *   2. O TOTAL FICOU ZERO. Cupom que cobre o subtotal inteiro mais retirada
+   *      (frete zero) fecha em R$ 0,00, e nao ha como cobrar isso: a rota
+   *      recusa com `pedido_sem_valor`. A tela diz o que fazer em vez de deixar
+   *      a pessoa descobrir depois.
+   *
+   * `motivoParaNaoConfirmar` devolve a FRASE, e nao um booleano, porque o botao
+   * e a explicacao tem que sair do mesmo lugar: um `disabled` sem texto ao lado
+   * e a forma mais rapida de alguem achar que a loja quebrou.
+   */
+  const motivoParaNaoConfirmar = (() => {
+    if (previa && !previa.valido) {
+      return 'Este cupom não foi aceito. Apague o código para seguir sem o desconto.'
+    }
+    if (resumo.total <= 0) {
+      return 'Com este cupom o total fica em R$ 0,00 e não há como concluir a compra. '
+        + 'Escolha o envio, para que reste o frete, ou fale com a gente.'
+    }
+    return null
+  })()
+
+  async function validarCupom() {
+    const pergunta: PerguntaDoCupom = {
+      codigo: cupomLimpo, kitSlug: kit.slug, quantidade,
+    }
+    setValidandoCupom(true)
+    try {
+      const resposta = await fetch('/api/cupons/validar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pergunta),
+      })
+
+      const corpo = await resposta.json().catch(() => null) as
+        { valido?: boolean; descontoCentavos?: number; mensagem?: string } | null
+
+      if (!resposta.ok || typeof corpo?.valido !== 'boolean') {
+        setPreviaCupom({
+          ...pergunta, valido: false,
+          mensagem: corpo?.mensagem
+            ?? 'Não foi possível validar o cupom agora. Tente de novo em instantes.',
+        })
+        return
+      }
+
+      setPreviaCupom(corpo.valido && typeof corpo.descontoCentavos === 'number'
+        // deInteiro() e nao um cast: e o construtor de Centavos que recusa
+        // fracionario. Um desconto quebrado vindo de uma resposta corrompida
+        // estoura aqui, e nao la na frente formatando R$ NaN no total.
+        ? { ...pergunta, valido: true, descontoCentavos: deInteiro(corpo.descontoCentavos) }
+        : { ...pergunta, valido: false, mensagem: corpo.mensagem ?? 'Cupom não aplicado.' })
+    } catch {
+      setPreviaCupom({
+        ...pergunta, valido: false,
+        mensagem: 'Não conseguimos validar o cupom. Verifique sua conexão e tente de novo.',
+      })
+    } finally {
+      setValidandoCupom(false)
+    }
+  }
 
   async function confirmar() {
     // Guarda de ultimo metro: sem forma de entrega escolhida nao existe pedido
@@ -937,12 +1070,30 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
               Subtotal: {formatarBRL(resumo.subtotal)}
             </p>
             {/*
-              Nenhum desconto e mostrado aqui: o cupom so e validado no
-              servidor, sob trava de linha, no momento da confirmacao (ver
-              src/repositories/cupons.ts). Mostrar um valor calculado no
-              cliente para um cupom ainda nao verificado seria inventar um
-              desconto que pode nao existir.
+              O DESCONTO SO APARECE DEPOIS DE O SERVIDOR CONFIRMAR — e quem
+              confirma e POST /api/cupons/validar, que roda exatamente as mesmas
+              regras do resgate (`validarCupom`, src/repositories/cupons.ts).
+              Um valor calculado no navegador a partir de um codigo digitado
+              seria um desconto inventado; este veio de quem manda.
+
+              A linha some junto com a previa: editar o campo do cupom invalida
+              a resposta anterior (ver `previa`, la em cima), e o total volta ao
+              valor cheio no mesmo instante.
             */}
+            {previa?.valido && (
+              <p className="vitrine__linha" data-testid="desconto">
+                {/*
+                  `resumo.desconto`, e nao `previa.descontoCentavos`: e o valor
+                  EFETIVAMENTE aplicado no total logo abaixo. Os dois so diferem
+                  num caso, e e justamente o que faria as duas linhas do mesmo
+                  bloco discordarem — um cupom fixo maior que o subtotal, que
+                  montarCarrinho limita ao subtotal (src/lib/carrinho.ts). Ali o
+                  valor bruto imprimiria "−R$ 1.500,00" acima de um total que so
+                  abateu R$ 1.000,00.
+                */}
+                Cupom {previa.codigo}: −{formatarBRL(resumo.desconto)}
+              </p>
+            )}
             {/*
               Agora com VALOR REAL e PRAZO — a opcao que o comprador escolheu no
               passo 3. `?? null` nao e formalidade: se por qualquer caminho a
@@ -954,18 +1105,90 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
               valor={opcaoDeFrete?.valor ?? null}
               prazoDias={opcaoDeFrete?.prazoDias ?? null}
             />
+            {/*
+              A RESSALVA MUDOU DE SIGNIFICADO, e por isso mudou de texto.
+
+              Antes ela dizia "(antes do cupom, verificado na confirmação)" —
+              exata enquanto o total ignorava o cupom digitado. Agora ha tres
+              estados diferentes e cada um merece a sua frase:
+
+                - cupom digitado e NAO validado: o total ainda nao considera
+                  nada, e a tela diz para apertar o botao;
+                - cupom validado: o desconto ja esta no numero, e a ressalva
+                  restante e outra — a previa nao reserva nada, e o cupom pode
+                  esgotar entre este segundo e a confirmacao;
+                - sem cupom: nenhuma ressalva, porque nao ha nada pendente.
+
+              Manter a frase antiga no segundo caso seria pior que antes: diria
+              "antes do cupom" embaixo de um total que ja o inclui.
+            */}
             <p className="vitrine__linha vitrine__linha--total" data-testid="total">
               Total: {formatarBRL(resumo.total)}
-              {cupom.trim() && ' (antes do cupom, verificado na confirmação)'}
+              {cupomLimpo !== '' && !previa && ' (sem o cupom — valide para ver o desconto)'}
+              {previa?.valido && ' (confirmado no pagamento)'}
             </p>
           </div>
 
           <div className="form__field">
             <label htmlFor="cupom">Cupom de desconto (opcional)</label>
-            <input
-              id="cupom" value={cupom}
-              onChange={(e) => setCupom(e.target.value.toUpperCase())}
-            />
+            <div className="cupom-campo">
+              <input
+                id="cupom" value={cupom}
+                maxLength={TAMANHO_MAXIMO_CUPOM}
+                autoCapitalize="characters"
+                onChange={(e) => setCupom(e.target.value.toUpperCase())}
+                /*
+                  Enter no campo VALIDA, e nao envia o pedido. Sem isto, quem
+                  digita o codigo e aperta Enter — o reflexo de qualquer
+                  formulario — dispararia a criacao do pedido com um cupom que
+                  nunca foi conferido, que e o oposto do que este campo agora
+                  oferece.
+                */
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    if (cupomLimpo.length >= 3 && !validandoCupom) void validarCupom()
+                  }
+                }}
+              />
+              {/*
+                Desabilitado abaixo de 3 caracteres porque e o minimo que o
+                banco aceita (CHECK cupom_codigo_formato): pedir ao servidor uma
+                resposta que ele ja sabe ser "não existe" so gasta a cota de
+                validacoes de quem esta digitando.
+              */}
+              <button
+                type="button"
+                className="btn btn--ghost"
+                onClick={() => void validarCupom()}
+                disabled={cupomLimpo.length < 3 || validandoCupom}
+              >
+                {validandoCupom ? 'Validando…' : 'Validar cupom'}
+              </button>
+            </div>
+
+            {/*
+              role="status" e nao "alert": a resposta aparece logo abaixo do
+              botao que a pessoa acabou de apertar, e ela ja esta olhando para
+              ca. O leitor de tela anuncia sem interromper ninguem no meio de
+              uma leitura.
+
+              A MENSAGEM DE RECUSA E A MESMA que o checkout mostraria na
+              confirmacao (mensagemDeRecusa, src/lib/cupom.ts): duas frases
+              diferentes para a mesma recusa fariam o comprador achar que sao
+              dois problemas.
+            */}
+            {previa && (
+              <p
+                className={`form__status${previa.valido ? '' : ' form__status--error'}`}
+                role="status"
+                data-testid="resposta-cupom"
+              >
+                {previa.valido
+                  ? `Cupom aplicado: −${formatarBRL(previa.descontoCentavos)}.`
+                  : previa.mensagem}
+              </p>
+            )}
           </div>
 
           {/*
@@ -981,6 +1204,17 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
           <p className="vitrine__linha">
             A cobrança acontece na próxima tela, depois que o pedido for criado.
           </p>
+
+          {/*
+            O impedimento aparece ACIMA do botao que ele desabilita, e nao
+            embaixo: quem chega aqui esta descendo a tela em direcao ao botao, e
+            um aviso depois dele so e lido por quem ja tentou clicar.
+          */}
+          {motivoParaNaoConfirmar && (
+            <p className="form__status form__status--error" role="status" data-testid="impedimento">
+              {motivoParaNaoConfirmar}
+            </p>
+          )}
 
           {erro && <p className="form__status form__status--error" role="status">{erro}</p>}
 
@@ -1005,7 +1239,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
             */}
             <button
               type="button" className="btn btn--solid" onClick={confirmar}
-              disabled={enviando || !entregaResolvida}
+              disabled={enviando || !entregaResolvida || motivoParaNaoConfirmar !== null}
             >
               {enviando ? 'Enviando...' : 'Ir para o pagamento'}
             </button>

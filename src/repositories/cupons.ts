@@ -1,33 +1,50 @@
-import { sql, type Transaction } from 'kysely'
+import { sql, type Transaction, type Kysely } from 'kysely'
 import { getDb } from '@/lib/db'
 import type { DB } from '@/lib/db-types'
 import { calcularDesconto, type ResultadoCupom, type TipoDesconto } from '@/lib/cupom'
 import type { Centavos } from '@/lib/money'
 
 /**
- * Resgata um cupom DENTRO da transacao que cria o pedido.
+ * AS REGRAS DE VALIDADE DE UM CUPOM, num lugar so.
  *
- * A linha do cupom e travada com SELECT ... FOR UPDATE antes de contar os
- * usos. Sem isso, dois checkouts simultaneos leem a mesma contagem, os dois
- * passam, e o limite estoura — o modo de falha classico de cupom, e o unico
- * caminho pelo qual um desconto e concedido alem do autorizado.
+ * Existem DOIS chamadores e eles precisam concordar palavra por palavra: o
+ * resgate (`resgatarCupom`, que concede o desconto de verdade) e a previa
+ * (`avaliarCupom`, que so responde a pergunta "esse codigo vale?" para a tela).
+ * Se cada um tivesse a sua copia das verificacoes, a primeira regra alterada em
+ * um dos dois faria o botao "Validar cupom" dizer VALIDO e a confirmacao
+ * recusar — ou, pior, o contrario. E a mesma disciplina de copy unica que
+ * src/components/linha-frete.tsx e src/lib/anvisa.ts aplicam a texto, aqui
+ * aplicada a regra de negocio.
  *
- * Recebe a transacao em vez de abrir a propria: o resgate e a criacao do
- * pedido tem que ser atomicos. Cupom debitado sem pedido, ou pedido com
- * desconto sem uso registrado, sao os dois corrupcao de dados.
+ * `travar` e a UNICA diferenca entre os dois caminhos, e ela nao e cosmetica:
+ *
+ *   - RESGATE trava a linha do cupom (`FOR UPDATE`) antes de contar os usos.
+ *     Sem isso, dois checkouts simultaneos leem a mesma contagem, os dois
+ *     passam, e o limite estoura — o modo de falha classico de cupom, e o unico
+ *     caminho pelo qual um desconto e concedido alem do autorizado.
+ *   - PREVIA NAO TRAVA, de proposito. Ela roda num endpoint publico, fora de
+ *     qualquer transacao de pedido: segurar um lock de linha ali deixaria
+ *     qualquer visitante bloquear o cupom do lancamento inteiro so apertando um
+ *     botao. A previa nao concede nada, entao nao tem o que proteger — ela pode
+ *     estar desatualizada no instante seguinte, e a tela diz isso.
+ *
+ * `clienteId` NULO significa "ainda nao existe cliente com este e-mail", que e
+ * o caso normal de quem esta comprando pela primeira vez: sem cliente nao ha
+ * uso anterior, entao o limite por cliente nao pode ter sido atingido.
  */
-export async function resgatarCupom(
+async function validarCupom(
   codigo: string,
   subtotal: Centavos,
-  clienteId: string,
-  trx: Transaction<DB>,
-  agora: Date = new Date(),
+  clienteId: string | null,
+  db: Transaction<DB> | Kysely<DB>,
+  agora: Date,
+  travar: boolean,
 ): Promise<ResultadoCupom> {
-  const cupom = await trx.selectFrom('cupons')
+  const consulta = db.selectFrom('cupons')
     .selectAll()
     .where('codigo', '=', codigo.trim().toUpperCase())
-    .forUpdate()
-    .executeTakeFirst()
+
+  const cupom = await (travar ? consulta.forUpdate() : consulta).executeTakeFirst()
 
   if (!cupom) return { ok: false, motivo: 'inexistente' }
   if (!cupom.ativo) return { ok: false, motivo: 'inativo' }
@@ -35,7 +52,7 @@ export async function resgatarCupom(
   if (cupom.expira_em && agora >= cupom.expira_em) return { ok: false, motivo: 'expirado' }
 
   if (cupom.representante_id) {
-    const rep = await trx.selectFrom('representantes')
+    const rep = await db.selectFrom('representantes')
       .select('id')
       .where('id', '=', cupom.representante_id)
       .where('ativo', '=', true)
@@ -44,20 +61,24 @@ export async function resgatarCupom(
   }
 
   if (cupom.limite_total !== null) {
-    const { total } = await trx.selectFrom('cupom_usos')
+    const { total } = await db.selectFrom('cupom_usos')
       .select(sql<number>`count(*)::int`.as('total'))
       .where('cupom_id', '=', cupom.id)
       .executeTakeFirstOrThrow()
     if (total >= cupom.limite_total) return { ok: false, motivo: 'esgotado' }
   }
 
-  const { doCliente } = await trx.selectFrom('cupom_usos')
-    .select(sql<number>`count(*)::int`.as('doCliente'))
-    .where('cupom_id', '=', cupom.id)
-    .where('cliente_id', '=', clienteId)
-    .executeTakeFirstOrThrow()
-  if (doCliente >= cupom.limite_por_cliente) {
-    return { ok: false, motivo: 'limite_do_cliente' }
+  // Sem cliente nao ha uso anterior possivel: quem nunca comprou nao gastou
+  // nenhuma das unidades do limite por pessoa.
+  if (clienteId !== null) {
+    const { doCliente } = await db.selectFrom('cupom_usos')
+      .select(sql<number>`count(*)::int`.as('doCliente'))
+      .where('cupom_id', '=', cupom.id)
+      .where('cliente_id', '=', clienteId)
+      .executeTakeFirstOrThrow()
+    if (doCliente >= cupom.limite_por_cliente) {
+      return { ok: false, motivo: 'limite_do_cliente' }
+    }
   }
 
   return {
@@ -69,6 +90,49 @@ export async function resgatarCupom(
       representanteId: cupom.representante_id,
     },
   }
+}
+
+/**
+ * Resgata um cupom DENTRO da transacao que cria o pedido.
+ *
+ * A linha do cupom e travada com SELECT ... FOR UPDATE antes de contar os usos
+ * (ver `validarCupom` acima), e o lock vive ate o COMMIT do chamador — e por
+ * isso que esta funcao RECEBE a transacao em vez de abrir a propria: o resgate
+ * e a criacao do pedido tem que ser atomicos. Cupom debitado sem pedido, ou
+ * pedido com desconto sem uso registrado, sao os dois corrupcao de dados.
+ */
+export async function resgatarCupom(
+  codigo: string,
+  subtotal: Centavos,
+  clienteId: string,
+  trx: Transaction<DB>,
+  agora: Date = new Date(),
+): Promise<ResultadoCupom> {
+  return validarCupom(codigo, subtotal, clienteId, trx, agora, true)
+}
+
+/**
+ * A PREVIA do botao "Validar cupom" — le, nao concede.
+ *
+ * O QUE ELA NAO E: uma reserva. Nada e travado, nada e gravado, e o cupom que
+ * ela aprova pode esgotar, expirar ou ser desativado no segundo seguinte. Quem
+ * decide de verdade continua sendo `resgatarCupom`, sob trava de linha, dentro
+ * da transacao que cria o pedido — e a tela que mostra esta previa tem que
+ * dizer que o valor final e conferido na confirmacao.
+ *
+ * POR QUE ENTAO EXISTE: sem ela o comprador digita o codigo e so descobre se
+ * valeu — e de quanto — depois de mandar criar o pedido. Um codigo com um
+ * digito errado virava 422 na etapa de pagamento, longe do campo onde o erro
+ * esta, e um desconto legitimo nao aparecia em lugar nenhum antes de a compra
+ * fechar. Perguntar antes e barato; descobrir depois nao.
+ */
+export async function avaliarCupom(
+  codigo: string,
+  subtotal: Centavos,
+  clienteId: string | null,
+  agora: Date = new Date(),
+): Promise<ResultadoCupom> {
+  return validarCupom(codigo, subtotal, clienteId, getDb(), agora, false)
 }
 
 /**

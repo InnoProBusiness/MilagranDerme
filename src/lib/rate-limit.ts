@@ -86,6 +86,25 @@ export const MAX_LOGINS_POR_JANELA = 8
  */
 export const MAX_COTACOES_POR_JANELA = 20
 
+/**
+ * Quantas validacoes de cupom um IP pode pedir por janela.
+ *
+ * MAIS BAIXO QUE A COTACAO (20) de proposito, e por um motivo que a cotacao nao
+ * tem: POST /api/cupons/validar responde, para qualquer visitante, SE UM CODIGO
+ * EXISTE. Sem teto ela vira um oraculo de forca bruta sobre um espaco pequeno —
+ * codigos reais sao curtos e memoraveis (PRE200, LANCAMENTO), porque tem que
+ * caber num story de Instagram. Descobrir um cupom ativo assim nao quebra nada
+ * tecnicamente; so da a um estranho o desconto que a Milagran deu a uma
+ * campanha especifica.
+ *
+ * MAIS ALTO QUE O CHECKOUT (10) tambem de proposito: validar e uma acao de
+ * TENTATIVA — a pessoa digita errado, corrige, testa o cupom da amiga — e o teto
+ * precisa caber nisso sem esbarrar em quem so quer conferir um codigo. Doze
+ * cobre um comprador indeciso com folga, e o CGNAT da operadora (sempre UM IP
+ * para muita gente) continua sendo o caso que aperta primeiro.
+ */
+export const MAX_VALIDACOES_DE_CUPOM_POR_JANELA = 12
+
 type Entrada = { inicioJanela: number; total: number }
 
 /**

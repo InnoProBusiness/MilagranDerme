@@ -120,6 +120,17 @@ const FRETE_INDISPONIVEL = resposta(503, {
 const PEDIDO_CRIADO = resposta(201, { numero: 42, token: TOKEN_DO_PEDIDO })
 
 /**
+ * As duas respostas de POST /api/cupons/validar, no formato exato da rota. As
+ * DUAS sao 200: uma recusa e a RESPOSTA da pergunta, nao um erro de requisicao
+ * — copiar isso errado aqui faria o teste provar que a tela lida bem com um
+ * formato que a rota nunca produz.
+ */
+const CUPOM_VALIDO = resposta(200, { valido: true, codigo: 'PRE200', descontoCentavos: 20000 })
+const CUPOM_EXPIRADO = resposta(200, {
+  valido: false, motivo: 'expirado', mensagem: 'Este cupom expirou.',
+})
+
+/**
  * `fetch` unico roteando por URL. O wizard agora fala com TRES rotas — o
  * autofill (GET /api/cep/[cep]), a cotacao (POST /api/frete) e o submit (POST
  * /api/pedidos) —, entao um mock que responde a mesma coisa para todo mundo
@@ -130,7 +141,9 @@ const PEDIDO_CRIADO = resposta(201, { numero: 42, token: TOKEN_DO_PEDIDO })
  * que ninguem previu tem que aparecer como teste vermelho, nao como resposta
  * silenciosa.
  */
-function criarFetchFalso(roteiro: { cep?: Roteiro; frete?: Roteiro; pedidos?: Roteiro } = {}) {
+function criarFetchFalso(
+  roteiro: { cep?: Roteiro; frete?: Roteiro; pedidos?: Roteiro; cupom?: Roteiro } = {},
+) {
   const resolver = (r: Roteiro | undefined, padrao: RespostaFalsa): RespostaFalsa => {
     if (!r) return padrao
     return typeof r === 'function' ? r() : r
@@ -140,6 +153,7 @@ function criarFetchFalso(roteiro: { cep?: Roteiro; frete?: Roteiro; pedidos?: Ro
     if (entrada.startsWith('/api/cep/')) return resolver(roteiro.cep, CEP_ENCONTRADO)
     if (entrada === '/api/frete') return resolver(roteiro.frete, FRETE_COTADO)
     if (entrada === '/api/pedidos') return resolver(roteiro.pedidos, PEDIDO_CRIADO)
+    if (entrada === '/api/cupons/validar') return resolver(roteiro.cupom, CUPOM_VALIDO)
     throw new Error(`URL inesperada no teste: ${entrada}`)
   })
 }
@@ -902,6 +916,288 @@ describe('CheckoutWizard', () => {
       await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
 
       expect(screen.getByTestId('frete')).toHaveTextContent(/sem frete/i)
+    })
+  })
+
+  /**
+   * O BOTAO "VALIDAR CUPOM" (19/08/2026). Antes dele o comprador digitava o
+   * codigo e so descobria o resultado depois de mandar criar o pedido: um
+   * digito errado virava 422 na tela de pagamento, longe do campo onde estava o
+   * erro, e um desconto legitimo nao aparecia em lugar nenhum antes de fechar a
+   * compra.
+   */
+  describe('validacao do cupom', () => {
+    it('aplica o desconto no total depois de o servidor confirmar', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await preencherAteRevisao()
+
+      const totalCheio = screen.getByTestId('total').textContent ?? ''
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+
+      expect(await screen.findByTestId('desconto')).toHaveTextContent('R$ 200,00')
+      expect(screen.getByTestId('total')).not.toHaveTextContent(totalCheio)
+      // O total ja inclui o desconto, entao a ressalva antiga ("antes do
+      // cupom") viraria mentira. A que fica diz a verdade que sobra: a previa
+      // nao reserva nada.
+      expect(screen.getByTestId('total')).toHaveTextContent(/confirmado no pagamento/i)
+    })
+
+    it('mostra o motivo da recusa, com a mesma frase do checkout', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso({ cupom: CUPOM_EXPIRADO }))
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'VELHO')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+
+      expect(await screen.findByTestId('resposta-cupom')).toHaveTextContent(/expirou/i)
+      expect(screen.queryByTestId('desconto')).toBeNull()
+    })
+
+    /**
+     * O DEFEITO MAIS CARO QUE ESTA TELA PODE TER: validar PRE200, ver
+     * "-R$ 200,00", editar o campo para outro codigo e o desconto continuar na
+     * tela — agora descrevendo um cupom que ninguem verificou. A pessoa
+     * fecharia a compra achando que pagaria 800.
+     */
+    it('editar o codigo invalida a previa e devolve o total cheio', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await preencherAteRevisao()
+      const totalCheio = screen.getByTestId('total').textContent ?? ''
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+      expect(await screen.findByTestId('desconto')).toBeInTheDocument()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'X')
+
+      expect(screen.queryByTestId('desconto')).toBeNull()
+      expect(screen.queryByTestId('resposta-cupom')).toBeNull()
+      expect(screen.getByTestId('total')).toHaveTextContent(totalCheio)
+    })
+
+    // Apagar o campo inteiro tambem: sem codigo nao ha nem previa nem ressalva.
+    it('limpar o campo tira a ressalva do total', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      expect(screen.getByTestId('total')).toHaveTextContent(/valide para ver o desconto/i)
+
+      await userEvent.clear(screen.getByLabelText(/cupom/i))
+      expect(screen.getByTestId('total')).not.toHaveTextContent(/valide|confirmado/i)
+    })
+
+    it('nao chama o servidor com codigo curto demais', async () => {
+      const fetchMock = criarFetchFalso()
+      vi.stubGlobal('fetch', fetchMock)
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PR')
+
+      // 3 e o minimo do CHECK cupom_codigo_formato: pedir ao servidor uma
+      // resposta que ele ja sabe ser "nao existe" so gasta a cota de quem esta
+      // digitando.
+      expect(screen.getByRole('button', { name: /validar cupom/i })).toBeDisabled()
+      expect(chamadasDe(fetchMock, '/api/cupons/validar')).toHaveLength(0)
+    })
+
+    /**
+     * ENTER NO CAMPO VALIDA — o reflexo de quem acabou de digitar um codigo.
+     *
+     * A metade "e nao envia o pedido" NAO e afirmada aqui de proposito: hoje o
+     * passo 4 nao tem <form>, entao Enter nao submeteria nada de qualquer jeito,
+     * e um `expect(pedidos).toHaveLength(0)` passaria mesmo com o
+     * `preventDefault` removido — assercao que da a impressao de proteger e nao
+     * protege. O `preventDefault` fica no componente como defesa para o dia em
+     * que alguem envolver o passo num <form>; o que se pode provar hoje e que
+     * Enter DISPARA a validacao, e e so isso que este teste afirma.
+     */
+    it('Enter no campo dispara a validacao', async () => {
+      const fetchMock = criarFetchFalso()
+      vi.stubGlobal('fetch', fetchMock)
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200{Enter}')
+
+      await waitFor(() => expect(chamadasDe(fetchMock, '/api/cupons/validar')).toHaveLength(1))
+      expect(await screen.findByTestId('desconto')).toBeInTheDocument()
+    })
+
+    // O e-mail vai junto para que o servidor consiga conferir o limite POR
+    // PESSOA. Sem ele a previa diria "válido" a quem a confirmacao vai recusar.
+    it('DINHEIRO: manda codigo, kit, quantidade e e-mail — e nada de dinheiro', async () => {
+      const fetchMock = criarFetchFalso()
+      vi.stubGlobal('fetch', fetchMock)
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+
+      const corpo = corpoEnviadoPara(fetchMock, '/api/cupons/validar')
+      // SEM E-MAIL: a rota e publica e nao deve responder sobre compras de
+      // terceiros. A consequencia — a previa nao enxergar `limite_por_cliente` —
+      // esta fixada em src/app/api/__tests__/cupons-validar-route.test.ts.
+      expect(corpo).toEqual({
+        codigo: 'PRE200',
+        kitSlug: 'kit-milagran',
+        quantidade: 1,
+      })
+      for (const chave of Object.keys(corpo)) {
+        expect(chave).not.toMatch(PADRAO_DE_DINHEIRO)
+      }
+    })
+
+    // Falha de rede nao pode virar tela muda nem desconto fantasma: a pessoa
+    // precisa saber que a resposta nao chegou, e o total tem que ficar cheio.
+    it('falha de conexao mostra recado e nao inventa desconto', async () => {
+      // Chega ao passo 4 com a rede FUNCIONANDO — a cotacao de frete acontece
+      // no caminho — e so entao a conexao cai. Derrubar tudo desde o inicio
+      // testaria outra coisa: o passo 3 sem cotacao, que ja tem teste proprio.
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await preencherAteRevisao()
+      const totalCheio = screen.getByTestId('total').textContent ?? ''
+
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+
+      expect(await screen.findByTestId('resposta-cupom')).toHaveTextContent(/conex/i)
+      expect(screen.queryByTestId('desconto')).toBeNull()
+      expect(screen.getByTestId('total')).toHaveTextContent(totalCheio)
+    })
+
+
+    /**
+     * O DEFEITO QUE A REVISAO ACHOU, e o unico da leva que valia R$ 400 na tela.
+     *
+     * A previa era chaveada so pelo CODIGO, mas o desconto e funcao do
+     * SUBTOTAL: um cupom percentual validado com tres kits continuava exibindo o
+     * desconto dos tres depois de a compradora voltar ao passo 1 e baixar para
+     * um. A tela anunciava um total que a confirmacao nao ia cobrar — e
+     * `total_centavos` e congelado no INSERT, entao nao ha conserto depois.
+     */
+    it('mudar a quantidade depois de validar invalida a previa', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+      expect(await screen.findByTestId('desconto')).toBeInTheDocument()
+      const totalComDesconto = screen.getByTestId('total').textContent ?? ''
+
+      // Volta ao passo 1, muda a quantidade e retorna ao passo 4.
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      await userEvent.click(screen.getByRole('button', { name: /voltar/i }))
+      await userEvent.click(screen.getByRole('button', { name: /aumentar/i }))
+      await userEvent.click(botaoContinuar())
+      await userEvent.click(botaoContinuar())
+      await escolherEnvio()
+      await userEvent.click(await screen.findByRole('radio', { name: /PAC/ }))
+      await userEvent.click(botaoContinuar())
+
+      // O codigo continua no campo, mas a previa nao vale mais: ela respondia
+      // sobre um carrinho que nao existe mais.
+      expect(screen.getByLabelText(/cupom/i)).toHaveValue('PRE200')
+      expect(screen.queryByTestId('desconto')).toBeNull()
+      expect(screen.getByTestId('total')).not.toHaveTextContent(totalComDesconto)
+      expect(screen.getByTestId('total')).toHaveTextContent(/valide para ver o desconto/i)
+    })
+
+    /**
+     * CUPOM JA RECUSADO NAO PODE SEGUIR. Mandar mesmo assim derruba o pedido
+     * INTEIRO (`cupom_recusado` em POST /api/pedidos), e nao so o desconto —
+     * quem queria apenas comprar sem desconto perderia o clique e veria um erro
+     * que nao explica o que fazer.
+     */
+    it('cupom recusado trava a confirmacao, e apagar o codigo destrava', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso({ cupom: CUPOM_EXPIRADO }))
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'VELHO')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+      await screen.findByTestId('resposta-cupom')
+
+      const irPagar = screen.getByRole('button', { name: /ir para o pagamento/i })
+      expect(irPagar).toBeDisabled()
+      // O impedimento diz o que fazer, e nao so que nao da.
+      expect(screen.getByTestId('impedimento')).toHaveTextContent(/apague o código/i)
+
+      await userEvent.clear(screen.getByLabelText(/cupom/i))
+      expect(screen.getByRole('button', { name: /ir para o pagamento/i })).toBeEnabled()
+    })
+
+    /**
+     * TOTAL ZERO NAO SEGUE. Cupom que cobre o subtotal inteiro mais retirada
+     * (frete zero) fecha em R$ 0,00, e nao ha como cobrar isso — a rota recusa
+     * com `pedido_sem_valor`. A tela precisa dizer antes, porque depois o cupom
+     * ja foi consumido na tentativa.
+     */
+    it('total zerado pelo cupom trava a confirmacao com explicacao', async () => {
+      const cupomTotal = resposta(200, {
+        valido: true, codigo: 'TUDO', descontoCentavos: 100000,
+      })
+      vi.stubGlobal('fetch', criarFetchFalso({ cupom: cupomTotal }))
+
+      render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
+      await irAtePasso3()
+      await escolherRetirada()
+      await userEvent.click(botaoContinuar())
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'TUDO')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+
+      expect(await screen.findByTestId('impedimento')).toHaveTextContent(/R\$ 0,00/)
+      expect(screen.getByRole('button', { name: /ir para o pagamento/i })).toBeDisabled()
+    })
+
+    /**
+     * AS DUAS LINHAS DO RESUMO TEM QUE CONCORDAR. Um cupom fixo maior que o
+     * subtotal e limitado ao subtotal por montarCarrinho; imprimir o valor bruto
+     * da previa faria a linha do desconto anunciar mais do que o total abateu.
+     */
+    it('desconto maior que o subtotal aparece pelo valor efetivamente aplicado', async () => {
+      const cupomGrande = resposta(200, {
+        valido: true, codigo: 'GRANDE', descontoCentavos: 150000,
+      })
+      vi.stubGlobal('fetch', criarFetchFalso({ cupom: cupomGrande }))
+
+      render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
+      await irAtePasso3()
+      await escolherRetirada()
+      await userEvent.click(botaoContinuar())
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'GRANDE')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+
+      // O kit custa R$ 1.000,00: o abatimento efetivo e ele, e nao os R$ 1.500.
+      expect(await screen.findByTestId('desconto')).toHaveTextContent('R$ 1.000,00')
+      expect(screen.getByTestId('desconto')).not.toHaveTextContent('1.500')
+    })
+
+    /**
+     * O CUPOM CONTINUA INDO NO POST, validado ou nao. A previa nao substitui a
+     * confirmacao: quem concede o desconto e `resgatarCupom`, sob trava de
+     * linha, dentro da transacao do pedido. Se a tela parasse de mandar o codigo
+     * por ja te-lo "validado", o pedido nasceria sem desconto nenhum.
+     */
+    it('o codigo validado continua sendo enviado na criacao do pedido', async () => {
+      const fetchMock = criarFetchFalso()
+      vi.stubGlobal('fetch', fetchMock)
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'PRE200')
+      await userEvent.click(screen.getByRole('button', { name: /validar cupom/i }))
+      await screen.findByTestId('desconto')
+      await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
+
+      const corpo = corpoEnviadoPara(fetchMock, '/api/pedidos')
+      expect(corpo.cupom).toBe('PRE200')
+      // E nenhum valor de desconto viaja junto: quem calcula e o servidor.
+      expect(JSON.stringify(corpo)).not.toContain('20000')
     })
   })
 })

@@ -9,7 +9,8 @@ import { GET as getCep, POST as postCep } from '@/app/api/cep/[cep]/route'
 import { POST as postLeads, GET as getLeads } from '@/app/api/leads/route'
 
 /**
- * AS QUATRO ROTAS PUBLICAS DO LANCAMENTO, num arquivo so: GET /api/estoque,
+ * QUATRO DAS ROTAS PUBLICAS DO LANCAMENTO, num arquivo so (a quinta,
+ * POST /api/cupons/validar, tem arquivo proprio — ./cupons-validar-route.test.ts): GET /api/estoque,
  * POST /api/frete, GET /api/cep/[cep] e POST /api/leads (§5 do plano de
  * 16/08/2026). Elas dividem este arquivo porque dividem a propriedade que mais
  * importa aqui — nenhuma delas exige autenticacao, e cada uma e uma porta aberta
