@@ -1,6 +1,7 @@
 import { buscarKitAtivoPorSlug, listarKitsAtivos } from '@/repositories/produtos'
 import { QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { CheckoutWizard } from '@/components/checkout-wizard'
+import { cupomDaUrl } from '@/lib/cupom-da-url'
 
 // Preco e disponibilidade vem do banco a cada acesso — mesmo raciocinio de
 // src/app/comprar/page.tsx e src/app/r/[slug]/page.tsx: um snapshot
@@ -8,7 +9,7 @@ import { CheckoutWizard } from '@/components/checkout-wizard'
 export const dynamic = 'force-dynamic'
 
 type Props = {
-  searchParams: Promise<{ kit?: string; q?: string }>
+  searchParams: Promise<{ kit?: string; q?: string; cupom?: string | string[] }>
 }
 
 export default async function PaginaCheckout({ searchParams }: Props) {
@@ -37,5 +38,14 @@ export default async function PaginaCheckout({ searchParams }: Props) {
 
   // Sem <main> proprio: o landmark de conteudo principal e o do layout raiz
   // (src/app/layout.tsx). Um <main> aqui ficaria aninhado dentro dele.
-  return <CheckoutWizard kit={kit} quantidadeInicial={quantidadeInicial} />
+  // O parametro `cupom` da query string chega dos links de campanha e apenas
+  // PREENCHE o campo do formulario — o desconto continua sendo decidido no
+  // servidor, sob trava de linha. Ver src/lib/cupom-da-url.ts.
+  return (
+    <CheckoutWizard
+      kit={kit}
+      quantidadeInicial={quantidadeInicial}
+      cupomInicial={cupomDaUrl(sp.cupom)}
+    />
+  )
 }

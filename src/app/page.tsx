@@ -7,6 +7,7 @@ import { textoAnvisa, situacaoPendente } from '@/lib/anvisa'
 import { saldoDoEstoque } from '@/repositories/estoque'
 import { listarKitsAtivos } from '@/repositories/produtos'
 import { CheckoutWizard } from '@/components/checkout-wizard'
+import { cupomDaUrl } from '@/lib/cupom-da-url'
 
 /**
  * A LOJA DE LANCAMENTO — "/" (§6, §7, §8 e §18 do documento do cliente de
@@ -139,7 +140,23 @@ const DIFERENCIAIS = [
   'Concilia com outros procedimentos',
 ]
 
-export default async function PaginaInicial() {
+type Props = {
+  /**
+   * `?cupom=CODIGO` dos links de campanha. A home e o destino natural desses
+   * links — e nela que o checkout esta embutido (secao "06 — A compra"),
+   * entao mandar a pessoa direto para /checkout puxaria o argumento de venda
+   * embaixo dela.
+   *
+   * Ler searchParams NAO muda o custo de renderizacao aqui: esta pagina ja e
+   * `force-dynamic` por causa do estoque ao vivo.
+   */
+  searchParams: Promise<{ cupom?: string | string[] }>
+}
+
+export default async function PaginaInicial({ searchParams }: Props) {
+  const sp = await searchParams
+  const cupomInicial = cupomDaUrl(sp.cupom)
+
   /**
    * UM INSTANTE SO PARA A PAGINA INTEIRA. `lancamentoJaOcorreu()` sem
    * argumento le o relogio a cada chamada, e uma renderizacao que perguntasse
@@ -544,7 +561,7 @@ export default async function PaginaInicial() {
           Repetir a checagem seria codigo morto — e, pior, sugeriria um segundo
           estado vazio que nunca renderiza.
         */}
-        <CheckoutWizard kit={kit} quantidadeInicial={1} />
+        <CheckoutWizard kit={kit} quantidadeInicial={1} cupomInicial={cupomInicial} />
       </section>
     </>
   )

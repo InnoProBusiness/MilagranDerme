@@ -94,8 +94,13 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-async function renderizarHome() {
-  render(await PaginaInicial())
+/**
+ * `searchParams` e Promise porque e assim que o Next 16 entrega — a home o
+ * recebe para ler `?cupom=CODIGO` dos links de campanha. O default vazio
+ * mantem todos os testes anteriores descrevendo a home normal, sem cupom.
+ */
+async function renderizarHome(searchParams: { cupom?: string | string[] } = {}) {
+  render(await PaginaInicial({ searchParams: Promise.resolve(searchParams) }))
 }
 
 describe('Home da loja de lancamento', () => {
@@ -344,7 +349,7 @@ describe('Home da loja de lancamento', () => {
   // Aquele script nao existe no App Router: um `.reveal` aqui deixaria a secao
   // em opacity:0 para sempre, com o HTML impecavel no DevTools.
   it('nao usa a classe .reveal, que depende de um script que esta pagina nao carrega', async () => {
-    const { container } = render(await PaginaInicial())
+    const { container } = render(await PaginaInicial({ searchParams: Promise.resolve({}) }))
 
     expect(container.querySelectorAll('.reveal')).toHaveLength(0)
   })

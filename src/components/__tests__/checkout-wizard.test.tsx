@@ -168,9 +168,15 @@ function botaoContinuar() {
  * e o teste de digitacao manual (autofill que falha) e um caso proprio, mais
  * abaixo, exatamente porque e o caminho excepcional.
  */
-async function preencherAteRevisao() {
-  render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
-
+/**
+ * O caminho do passo 1 ate a revisao, SEM renderizar — para os testes que
+ * precisam montar o wizard com props proprias (o cupom vindo do link, por
+ * exemplo) antes de percorrer o fluxo.
+ *
+ * `preencherAteRevisao` continua existindo e chamando esta funcao: os testes
+ * que nao se importam com as props seguem numa linha so.
+ */
+async function percorrerAteRevisao() {
   // Passo 1: produto e quantidade.
   await userEvent.click(botaoContinuar())
 
@@ -199,6 +205,11 @@ async function preencherAteRevisao() {
   // cria o pedido. A cobranca acontece na proxima tela (/pedido/<token>),
   // porque o total so e definitivo depois de o servidor validar o cupom.
   expect(await screen.findByRole('button', { name: /ir para o pagamento/i })).toBeInTheDocument()
+}
+
+async function preencherAteRevisao() {
+  render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+  await percorrerAteRevisao()
 }
 
 describe('CheckoutWizard', () => {
@@ -444,6 +455,57 @@ describe('CheckoutWizard', () => {
 
     await userEvent.click(opcao)
     expect(botaoContinuar()).not.toBeDisabled()
+  })
+
+  /**
+   * LINK DE CAMPANHA (`/?cupom=CODIGO`): o campo ja nasce preenchido e o
+   * codigo viaja no POST sem a pessoa digitar nada.
+   *
+   * O que este teste NAO prova, de proposito: que houve desconto. O corpo
+   * leva o CODIGO, e nenhum valor monetario — quem resgata o cupom e decide o
+   * preco e o servidor, sob trava de linha. A varredura de CAMPOS_PROIBIDOS
+   * deste arquivo continua valendo para o corpo montado aqui.
+   */
+  it('cupom vindo do link ja vai preenchido e viaja no POST', async () => {
+    const fetchMock = criarFetchFalso()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} cupomInicial="PRE800" />)
+    await percorrerAteRevisao()
+
+    expect(screen.getByLabelText(/cupom/i)).toHaveValue('PRE800')
+    await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
+
+    await waitFor(() => expect(chamadasDe(fetchMock, '/api/pedidos')).toHaveLength(1))
+    const corpo = corpoEnviadoPara(fetchMock, '/api/pedidos')
+    expect(corpo.cupom).toBe('PRE800')
+    // DINHEIRO: o link nao manda valor nenhum — so o codigo.
+    for (const proibido of CAMPOS_PROIBIDOS) {
+      expect(corpo).not.toHaveProperty(proibido)
+    }
+  })
+
+  // O link e conveniencia, nao trava: quem tiver outro codigo digita por cima.
+  it('o comprador pode trocar o cupom que veio do link', async () => {
+    const fetchMock = criarFetchFalso()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} cupomInicial="PRE800" />)
+    await percorrerAteRevisao()
+
+    const campo = screen.getByLabelText(/cupom/i)
+    await userEvent.clear(campo)
+    await userEvent.type(campo, 'outro10')
+    expect(campo).toHaveValue('OUTRO10')
+  })
+
+  it('sem cupom no link, o campo nasce vazio', async () => {
+    vi.stubGlobal('fetch', criarFetchFalso())
+
+    render(<CheckoutWizard kit={KIT} quantidadeInicial={1} />)
+    await percorrerAteRevisao()
+
+    expect(screen.getByLabelText(/cupom/i)).toHaveValue('')
   })
 
   // O caso que o cabecalho de src/components/linha-frete.tsx e o de

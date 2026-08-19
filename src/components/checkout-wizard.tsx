@@ -16,6 +16,12 @@ import { LinhaFrete } from '@/components/linha-frete'
 type Props = {
   kit: Kit
   quantidadeInicial: number
+  /**
+   * Codigo de cupom vindo da URL (`?cupom=CODIGO`), para links de campanha
+   * em que a oferta ja esta combinada e o comprador nao deveria ter que
+   * digitar nada. Opcional: quem chega pela home normal nao passa nada.
+   */
+  cupomInicial?: string
 }
 
 type DadosPessoais = { nome: string; email: string; cpf: string; whatsapp: string }
@@ -229,13 +235,25 @@ function textoDePrazo(dias: number): string {
   return dias === 1 ? 'Prazo estimado: 1 dia útil' : `Prazo estimado: ${dias} dias úteis`
 }
 
-export function CheckoutWizard({ kit, quantidadeInicial }: Props) {
+export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '' }: Props) {
   const router = useRouter()
   const [passo, setPasso] = useState(1)
   const [quantidade, setQuantidade] = useState(quantidadeInicial)
   const [dados, setDados] = useState<DadosPessoais>(DADOS_VAZIOS)
   const [endereco, setEndereco] = useState<Endereco>(ENDERECO_VAZIO)
-  const [cupom, setCupom] = useState('')
+  /**
+   * Comeca preenchido quando a pessoa chegou por um link de campanha
+   * (`?cupom=CODIGO`). O campo continua EDITAVEL: quem trocar de ideia, ou
+   * tiver outro codigo, digita por cima — o link e conveniencia, nao trava.
+   *
+   * VALE REPETIR PORQUE E DINHEIRO: isto preenche um CAMPO DE TEXTO, nao
+   * concede desconto. O valor continua sendo decidido no servidor, que
+   * resgata o cupom sob trava de linha dentro da transacao do pedido
+   * (src/repositories/cupons.ts). Uma URL com `?cupom=QUALQUERCOISA` nao
+   * desconta nada se o codigo nao existir, tiver expirado ou ja ter estourado
+   * o limite — cai no mesmo 422 de quem digitou errado.
+   */
+  const [cupom, setCupom] = useState(cupomInicial)
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
 
