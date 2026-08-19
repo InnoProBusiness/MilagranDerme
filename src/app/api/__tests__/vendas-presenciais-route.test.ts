@@ -49,6 +49,7 @@ const provedor = vi.hoisted(() => ({
   status: 'pending',
   statusDetail: '',
   erro: false,
+  recusa: false,
   chamadas: [] as Array<{ valorCentavos: number; referenciaExterna: string }>,
 }))
 
@@ -61,7 +62,16 @@ vi.mock('@/lib/mercadopago', async (importOriginal) => {
       chaveIdempotencia: string,
     ) => {
       if (provedor.erro) {
+        // Status 0 = NAO HOUVE RESPOSTA (timeout/rede). Insistir faz sentido.
         throw new real.ErroMercadoPago(0, 'sem_resposta', 'timeout na criacao da cobranca')
+      }
+      if (provedor.recusa) {
+        // 403 do PolicyAgent — o que a conta com `address_pending` devolveu em
+        // producao em 19/08/2026, para Pix, boleto E cartao. Insistir nao
+        // resolve: e preciso mexer na conta do Mercado Pago.
+        throw new real.ErroMercadoPago(
+          403, 'PA_UNAUTHORIZED_RESULT_FROM_POLICIES', 'At least one policy returned UNAUTHORIZED.',
+        )
       }
       provedor.chamadas.push({ valorCentavos: e.valor, referenciaExterna: e.referenciaExterna })
       return {
@@ -634,6 +644,33 @@ describe('POST /api/vendas-presenciais', () => {
    * instrucao de nao entregar o kit —, porque o oposto (venda registrada tratada
    * como inexistente e refeita) tira duas unidades por um kit so.
    */
+
+  /**
+   * A RECUSA PERMANENTE, e por que ela precisa de mensagem propria.
+   *
+   * O balcao do evento e operado em pe, com fila na frente. Mandar o vendedor
+   * "tentar cobrar de novo" quando o provedor RECUSOU — e vai recusar todas as
+   * vezes — queima minutos por comprador. Foi exatamente o que aconteceu em
+   * 19/08/2026: a conta ficou com `address_pending` e toda cobranca voltou 403.
+   *
+   * O que NAO muda entre os dois casos, e e o que mais importa nesta tela: o
+   * kit nao sai da mao do vendedor enquanto a cobranca nao existir.
+   */
+  it('provedor que RECUSA manda nao insistir, e ainda assim segurar o kit', async () => {
+    provedor.recusa = true
+
+    const r = await POST(requisicao(corpoDaVenda(1), tokenVendedor))
+
+    expect(r.status).toBe(502)
+    const corpo = await r.json()
+    expect(corpo.vendaRegistrada).toBe(true)
+    expect(corpo.mensagem).toMatch(/NÃO entregue o kit/i)
+    expect(corpo.mensagem).toMatch(/não insista|nao insista/i)
+    expect(corpo.mensagem).not.toMatch(/tente cobrar de novo/i)
+
+    provedor.recusa = false
+  })
+
   it('falha do provedor devolve 502 dizendo que a venda ESTA registrada', async () => {
     provedor.erro = true
 

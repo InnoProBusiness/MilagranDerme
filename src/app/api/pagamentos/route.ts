@@ -4,7 +4,7 @@ import {
   abrirPagamento, vincularAoProvedor, buscarPedidoParaPagamento,
 } from '@/repositories/pagamentos'
 import { conciliarPagamento } from '@/repositories/conciliacao'
-import { criarPagamentoMP, ErroMercadoPago } from '@/lib/mercadopago'
+import { criarPagamentoMP, ErroMercadoPago, falhaDoProvedor } from '@/lib/mercadopago'
 import { mapearStatusMP } from '@/lib/pedido-status'
 import { mensagemDoPagamento } from '@/lib/pagamento-mensagens'
 import { enviarConfirmacaoDePedido } from '@/lib/email-pedido'
@@ -119,14 +119,22 @@ export async function POST(req: Request) {
     )
   } catch (e) {
     if (e instanceof ErroMercadoPago) {
-      // A mensagem do provedor vai so para o log: ela carrega vocabulario
-      // interno e, em alguns erros, ecoa o payload enviado — que tem CPF e
-      // e-mail do comprador.
-      console.error('[pagamentos] provedor recusou:', e.message)
-      return Response.json(
-        { error: 'falha_no_provedor', mensagem: 'O provedor de pagamento não respondeu. Tente de novo em instantes.' },
-        { status: 502 },
-      )
+      // A regra de "o que dizer" mora em falhaDoProvedor (src/lib/mercadopago.ts),
+      // com teste proprio: ela separa "o provedor nao respondeu" — que passa
+      // sozinho — de "o provedor recusou", que nao passa. A mensagem do
+      // provedor vai so para o log, porque carrega vocabulario interno e, em
+      // alguns erros, ecoa o payload enviado, com CPF e e-mail do comprador.
+      const falha = falhaDoProvedor(e)
+      console.error('[pagamentos]', falha.paraOLog)
+
+      // DOIS CODIGOS DE ERRO, e nao um: a tela ja mostra a mensagem certa, mas
+      // quem consome esta rota (hoje src/components/pagamento.tsx, amanha
+      // qualquer outra coisa) precisa poder distinguir "tente de novo" de "nao
+      // adianta tentar" sem ler a frase em portugues.
+      return Response.json({
+        error: falha.podeTentarDeNovo ? 'falha_no_provedor' : 'cobranca_recusada',
+        mensagem: falha.mensagem,
+      }, { status: 502 })
     }
     console.error('[pagamentos] falha inesperada:', e instanceof Error ? e.message : 'erro')
     return Response.json({ error: 'nao_foi_possivel_cobrar' }, { status: 500 })

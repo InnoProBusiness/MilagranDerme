@@ -52,6 +52,60 @@ export class ErroMercadoPago extends Error {
   }
 }
 
+/**
+ * O QUE DIZER quando o Mercado Pago nao cria a cobranca — e se faz sentido
+ * mandar tentar de novo.
+ *
+ * FUNCAO PROPRIA, e nao um `if` dentro da rota, pelo mesmo motivo de
+ * `mapearStatusMP` (src/lib/pedido-status.ts): e uma regra com casos, ela
+ * decide o que a compradora le num momento em que ja tem o cartao na mao, e
+ * precisa de teste sem banco nem rede.
+ *
+ * A DISTINCAO QUE ELA EXISTE PARA FAZER, aprendida em producao em 19/08/2026:
+ *
+ *   - NAO HOUVE RESPOSTA (status 0: timeout, DNS, rede) ou o provedor teve um
+ *     problema DELE (5xx). Isso passa sozinho, e "tente de novo em instantes" e
+ *     o conselho certo.
+ *   - O PROVEDOR RESPONDEU E RECUSOU (4xx). Isso NAO passa sozinho. Naquele dia
+ *     a conta do Mercado Pago ficou com `address_pending` e toda cobranca —
+ *     Pix, boleto e cartao — voltou 403 `PA_UNAUTHORIZED_RESULT_FROM_POLICIES`.
+ *     A tela mandava a compradora tentar de novo em instantes, para sempre, e a
+ *     operacao lia "instabilidade do provedor" no lugar de "va corrigir a
+ *     conta".
+ *
+ * O TEXTO DO PROVEDOR NUNCA VAI PARA A TELA. Ele carrega vocabulario interno e,
+ * em varios erros, ecoa o payload enviado — que tem CPF e e-mail de quem esta
+ * comprando. Vai para `paraOLog`, e so.
+ */
+export type FalhaDoProvedor = {
+  podeTentarDeNovo: boolean
+  /** Frase escrita por nos, para a compradora ler. */
+  mensagem: string
+  /** Linha para o console do servidor: status e codigo do provedor. */
+  paraOLog: string
+}
+
+export function falhaDoProvedor(e: ErroMercadoPago): FalhaDoProvedor {
+  // 0 = nao houve resposta (ver `chamar`). Abaixo de 500 e acima de 0 e recusa.
+  const semResposta = e.status === 0
+  const problemaDoProvedor = e.status >= 500
+  const podeTentarDeNovo = semResposta || problemaDoProvedor
+
+  return {
+    podeTentarDeNovo,
+    mensagem: podeTentarDeNovo
+      ? 'O provedor de pagamento não respondeu. Tente de novo em instantes.'
+      // SEM "tente de novo" e sem "aguarde": a recusa e permanente ate alguem
+      // mexer na conta do Mercado Pago, e prometer o contrario faz a compradora
+      // insistir num botao morto. A frase assume o problema como NOSSO — porque
+      // e — e da uma saida que existe de verdade.
+      : 'Não conseguimos gerar a cobrança deste pedido. O problema é do nosso lado '
+        + 'e já fomos avisados. Seu pedido está guardado: chame a gente no WhatsApp '
+        + 'para concluir a compra.',
+    paraOLog: `mercadopago ${e.status} ${e.codigo}: ${e.message}`,
+  }
+}
+
 export type PagadorMP = {
   email: string
   nome: string
@@ -196,7 +250,15 @@ async function chamar(
     // ecoa o payload enviado — que carrega e-mail e CPF do comprador — e
     // acabaria no log do servidor inteiro se fosse anexado aqui.
     const mensagem = typeof dados.message === 'string' ? dados.message : 'erro sem mensagem'
-    const codigo = typeof dados.error === 'string' ? dados.error : 'desconhecido'
+    // `error` E `code`: o Mercado Pago usa os dois campos conforme o tipo de
+    // falha, e o que interessa aqui e justamente o que so aparece em `code`.
+    // A recusa que derrubou a loja em 19/08/2026 chegou como
+    // {"code":"PA_UNAUTHORIZED_RESULT_FROM_POLICIES", ...} — sem `error`
+    // nenhum. Lendo so `error`, o log dizia 'desconhecido' e a causa (conta com
+    // endereco pendente) nao aparecia em lugar nenhum.
+    const codigo = typeof dados.error === 'string' ? dados.error
+      : typeof dados.code === 'string' ? dados.code
+        : 'desconhecido'
     throw new ErroMercadoPago(resposta.status, codigo, mensagem)
   }
 

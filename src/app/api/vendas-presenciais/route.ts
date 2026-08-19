@@ -3,7 +3,9 @@ import { getDb } from '@/lib/db'
 import { exigirPapel } from '@/lib/guarda'
 import { montarCarrinho, QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { deInteiro, type Centavos } from '@/lib/money'
-import { criarPagamentoMP, ErroMercadoPago, type RespostaPagamentoMP } from '@/lib/mercadopago'
+import {
+  criarPagamentoMP, ErroMercadoPago, falhaDoProvedor, type RespostaPagamentoMP,
+} from '@/lib/mercadopago'
 import { mapearStatusMP } from '@/lib/pedido-status'
 import { mensagemDoPagamento } from '@/lib/pagamento-mensagens'
 import { enviarConfirmacaoDePedido } from '@/lib/email-pedido'
@@ -519,6 +521,13 @@ export async function POST(req: Request) {
     // problema que estava aqui dentro.
     const doProvedor = e instanceof ErroMercadoPago
 
+    // "TENTE DE NOVO" SO QUANDO ADIANTA. O provedor tem duas formas de falhar e
+    // elas pedem acoes opostas do vendedor: se ele NAO RESPONDEU, insistir e o
+    // certo; se ele RECUSOU, insistir e perder tempo com a fila na frente — foi
+    // o que aconteceu em 19/08/2026, quando a conta ficou com `address_pending`
+    // e toda cobranca voltou 403. Ver falhaDoProvedor (src/lib/mercadopago.ts).
+    const podeInsistir = !doProvedor || falhaDoProvedor(e as ErroMercadoPago).podeTentarDeNovo
+
     return Response.json({
       error: doProvedor ? 'falha_no_provedor' : 'nao_foi_possivel_cobrar',
       // As tres linhas que tiram a ambiguidade da tela do balcao. Valem para
@@ -526,7 +535,12 @@ export async function POST(req: Request) {
       vendaRegistrada: true,
       numero: venda.numero,
       token: venda.token,
-      mensagem: 'A venda foi registrada, mas a cobrança não foi criada. NÃO entregue o kit: tente cobrar de novo por este mesmo pedido.',
+      // A PRIMEIRA FRASE NAO MUDA NUNCA: seja qual for a causa, o kit nao sai da
+      // mao do vendedor enquanto a cobranca nao existir.
+      mensagem: podeInsistir
+        ? 'A venda foi registrada, mas a cobrança não foi criada. NÃO entregue o kit: tente cobrar de novo por este mesmo pedido.'
+        : 'A venda foi registrada, mas a cobrança foi RECUSADA pelo provedor. NÃO entregue o kit e NÃO insista: '
+          + 'insistir não vai funcionar. Receba por fora e registre depois, ou chame quem cuida da conta do Mercado Pago.',
     }, { status: doProvedor ? 502 : 500 })
   }
 
