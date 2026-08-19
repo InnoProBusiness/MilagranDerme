@@ -12,6 +12,7 @@ import { formatarBRL } from '@/lib/money'
 import { textoAnvisa } from '@/lib/anvisa'
 import type { AvisoEscassez } from '@/lib/escassez'
 import { LinhaFrete } from '@/components/linha-frete'
+import { linkDeCheckout } from '@/lib/cupom-da-url'
 
 type Representante = { nome: string; slug: string }
 
@@ -45,6 +46,17 @@ type VitrineProps = {
    * conscientemente entre um lote e a ausencia dele.
    */
   escassez: Escassez | null
+  /**
+   * Cupom que veio no link de campanha (`/r/maria?cupom=PRE800`), ja
+   * normalizado por cupomDaUrl. So VIAJA — a vitrine nao o exibe nem o valida;
+   * ela o repassa ao checkout, que preenche o campo. Ver linkDeCheckout.
+   *
+   * OBRIGATORIA aceitando `''`, pelo mesmo motivo de `escassez` acima: opcional,
+   * a pagina que esquecesse de repassar quebraria a campanha em silencio — o
+   * link levaria ao checkout certo, sem o desconto anunciado, e ninguem
+   * descobriria antes de a compradora reclamar do preco.
+   */
+  cupom: string
 }
 
 /**
@@ -108,7 +120,7 @@ export function aumentarQuantidade(
   return Math.min(tetoDeQuantidade(disponivelPresencial), quantidade + 1)
 }
 
-export function Vitrine({ kits, representante, escassez }: VitrineProps) {
+export function Vitrine({ kits, representante, escassez, cupom }: VitrineProps) {
   const kit = kits[0]
   const [quantidade, setQuantidade] = useState(1)
 
@@ -310,7 +322,7 @@ export function Vitrine({ kits, representante, escassez }: VitrineProps) {
       */}
       <a
         className="btn btn--solid vitrine__cta"
-        href={`/checkout?kit=${kit.slug}&q=${quantidade}`}
+        href={linkDeCheckout(kit.slug, quantidade, cupom)}
         data-testid="cta"
       >
         {esgotado ? 'COMPRAR ONLINE' : 'Continuar'}

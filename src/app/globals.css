@@ -1691,3 +1691,85 @@ main{position:relative;z-index:1;}
      tudo. Quem pediu menos movimento nao perde nada ao perde-lo. */
   .escassez--ultimos .escassez__pulso{animation:none;}
 }
+
+/*
+  CAMPANHAS (/admin/cupons). O elemento central desta tela e o LINK, e o CSS
+  existe quase todo para ele: a URL fica em `code`, com quebra permitida no
+  meio (`overflow-wrap:anywhere`), porque um link de campanha com codigo longo
+  em tela de celular ou vaza da caixa ou fica cortado — e um link cortado pela
+  metade e o unico defeito desta tela que produz vendas perdidas em silencio.
+*/
+.cupom-form{
+  margin-bottom:28px;
+}
+
+.cupom-lista{
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:grid;
+  gap:14px;
+}
+
+.cupom{
+  border:1px solid var(--line);
+  border-radius:var(--raio);
+  background:var(--bg-elevado);
+  padding:16px 18px;
+  display:grid;
+  gap:10px;
+}
+
+.cupom__topo{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+.cupom__codigo{
+  font-family:var(--sans);
+  font-size:18px;
+  letter-spacing:.06em;
+  color:var(--ink);
+}
+
+.cupom__desconto{
+  margin:0;
+  color:var(--ink);
+  font-size:15px;
+}
+
+.cupom__link{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+  background:var(--bg-panel);
+  border:1px solid var(--line);
+  border-radius:var(--raio);
+  padding:10px 12px;
+}
+
+.cupom__link code{
+  flex:1 1 260px;
+  min-width:0;
+  /* `anywhere` e nao `break-word`: a URL nao tem espacos, entao so a quebra
+     em qualquer ponto impede o estouro horizontal no celular. */
+  overflow-wrap:anywhere;
+  font-size:13px;
+  color:var(--ink);
+}
+
+.cupom__copiar{
+  flex:0 0 auto;
+  padding:6px 14px;
+  font-size:13px;
+}
+
+.cupom__meta{
+  margin:0;
+  color:var(--ink-muted);
+  font-size:13px;
+}

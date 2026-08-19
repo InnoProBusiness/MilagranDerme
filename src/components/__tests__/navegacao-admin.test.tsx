@@ -63,14 +63,14 @@ describe('AbasAdmin', () => {
     expect(atuais[0]).toHaveTextContent('Estoque')
   })
 
-  // As cinco secoes de §17 vivem numa lista so, e e ela que faz uma tela nova
-  // aparecer em todas as outras de uma vez.
-  it('lista as cinco secoes do painel', () => {
+  // As secoes de §17 vivem numa lista so, e e ela que faz uma tela nova
+  // aparecer em todas as outras de uma vez. Campanhas entrou em 19/08/2026.
+  it('lista as secoes do painel, na ordem', () => {
     caminhoAtual = '/admin'
     render(<AbasAdmin />)
 
     const rotulos = screen.getAllByRole('link').map((link) => link.textContent)
-    expect(rotulos).toEqual(['Resumo', 'Vendas', 'Estoque', 'Logística', 'Leads'])
+    expect(rotulos).toEqual(['Resumo', 'Vendas', 'Estoque', 'Logística', 'Campanhas', 'Leads'])
   })
 })
 

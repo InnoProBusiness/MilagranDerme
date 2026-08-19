@@ -41,3 +41,22 @@ export async function buscarRepresentanteAtivoPorSlug(
     .executeTakeFirst()
   return linha ? paraRepresentante(linha) : null
 }
+
+/**
+ * As representantes ATIVAS, em ordem de nome — a lista de um `<select>`.
+ *
+ * So as ativas, e nao todas: um cupom criado para uma representante desligada
+ * ja nasceria recusado no checkout (`resgatarCupom` reconsulta o `ativo` e
+ * devolve 'representante_inativo'). Oferecer o nome dela no formulario seria
+ * oferecer uma campanha que nao funciona.
+ */
+export async function listarRepresentantesAtivas(): Promise<Representante[]> {
+  const linhas = await getDb()
+    .selectFrom('representantes')
+    .selectAll()
+    .where('ativo', '=', true)
+    .orderBy('nome', 'asc')
+    .execute()
+
+  return linhas.map(paraRepresentante)
+}

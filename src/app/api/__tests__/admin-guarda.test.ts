@@ -12,6 +12,9 @@ import { GET as estoque } from '@/app/api/admin/estoque/route'
 import { GET as logistica } from '@/app/api/admin/logistica/route'
 import { GET as leads } from '@/app/api/admin/leads/route'
 import { PATCH as atualizarPedido } from '@/app/api/admin/pedidos/[id]/route'
+import {
+  GET as cupons, POST as criarCupomRota, PATCH as alternarCupom,
+} from '@/app/api/admin/cupons/route'
 
 /**
  * SEGURANCA: este arquivo vale por TODAS as rotas /api/admin/* de uma vez.
@@ -67,7 +70,7 @@ const SENHA = 'guarda-de-teste-9f2a'
 const ID_PEDIDO_INEXISTENTE = '00000000-0000-4000-8000-000000000000'
 
 type RotaAdmin = {
-  metodo: 'GET' | 'PATCH'
+  metodo: 'GET' | 'POST' | 'PATCH'
   /**
    * O caminho como ele existe NO DISCO, com o segmento dinamico entre
    * colchetes — e o que o ultimo teste compara com src/app/api/admin.
@@ -109,6 +112,33 @@ const ROTAS: readonly RotaAdmin[] = [
     caminho: '/api/admin/leads',
     url: 'http://localhost/api/admin/leads',
     chamar: (req) => leads(req),
+  },
+  {
+    metodo: 'GET',
+    caminho: '/api/admin/cupons',
+    url: 'http://localhost/api/admin/cupons',
+    chamar: (req) => cupons(req),
+  },
+  {
+    // AS TRES DA MESMA ROTA, e nao so a leitura. POST cria desconto e PATCH
+    // desliga campanha: um vendedor que alcancasse qualquer uma das duas
+    // poderia criar para si um cupom de 100% ou derrubar a oferta do
+    // lancamento. Um `caminho` repetido nao atrapalha a varredura de diretorio
+    // la embaixo — ela so exige que todo arquivo esteja representado.
+    metodo: 'POST',
+    caminho: '/api/admin/cupons',
+    url: 'http://localhost/api/admin/cupons',
+    // Corpo vazio: recusado com 422 DEPOIS da guarda, do mesmo jeito que o
+    // PATCH de pedidos abaixo.
+    corpo: '{}',
+    chamar: (req) => criarCupomRota(req),
+  },
+  {
+    metodo: 'PATCH',
+    caminho: '/api/admin/cupons',
+    url: 'http://localhost/api/admin/cupons',
+    corpo: '{}',
+    chamar: (req) => alternarCupom(req),
   },
   {
     metodo: 'PATCH',
@@ -253,8 +283,15 @@ describe('SEGURANCA: /api/admin/* atras de exigirPapel', () => {
       return achadas
     }
 
-    expect(rotasNoDisco(dirAdmin, '/api/admin').sort()).toEqual(
-      ROTAS.map((r) => r.caminho).sort(),
+    // DEDUPLICADO dos dois lados: desde 19/08/2026 uma mesma rota aparece em
+    // ROTAS uma vez por METODO (/api/admin/cupons tem GET, POST e PATCH). A
+    // varredura continua respondendo a pergunta que importa — existe algum
+    // arquivo `route.ts` sob src/app/api/admin que este teste nao exercita? —,
+    // e cobrir uma rota com mais metodos deixou de fazer o teste falhar.
+    const unicos = (l: string[]) => [...new Set(l)].sort()
+
+    expect(unicos(rotasNoDisco(dirAdmin, '/api/admin'))).toEqual(
+      unicos(ROTAS.map((r) => r.caminho)),
     )
   })
 })

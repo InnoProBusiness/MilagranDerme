@@ -23,11 +23,18 @@ function civilBR(instante: Date): Civil {
 
 /**
  * Encontra o instante UTC correspondente a uma data/hora civil de Sao Paulo.
+ *
+ * EXPORTADA desde 19/08/2026, quando a tela de campanhas passou a converter a
+ * data escolhida num `<input type="date">` para o instante de expiracao do
+ * cupom. Aquela conversao tem exatamente o mesmo modo de falha que o comentario
+ * de DATA_LANCAMENTO descreve — 'AAAA-MM-DD' lido como UTC vira 21h do dia
+ * ANTERIOR em Sao Paulo —, e escrever `T03:00:00Z` a mao seria fixar um offset
+ * que esta funcao existe para nao fixar.
  * Usa aproximacao sucessiva para resolver a ambiguidade causada por mudancas de horario de verao.
  * Quando a data/hora civil solicitada nao existe (na transicao de primavera),
  * retorna o primeiro instante valido depois da lacuna horaria.
  */
-function instanteDeCivilBR(ano: number, mes: number, dia: number, hora = 0, minuto = 0, segundo = 0, ms = 0): Date {
+export function instanteDeCivilBR(ano: number, mes: number, dia: number, hora = 0, minuto = 0, segundo = 0, ms = 0): Date {
   let palpite = Date.UTC(ano, mes - 1, dia, hora, minuto, segundo, ms)
   let converged = false
   for (let i = 0; i < 3; i++) {

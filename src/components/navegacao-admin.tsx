@@ -38,6 +38,7 @@ const SECOES: ReadonlyArray<{ href: string; rotulo: string }> = [
   { href: '/admin/vendas', rotulo: 'Vendas' },
   { href: '/admin/estoque', rotulo: 'Estoque' },
   { href: '/admin/logistica', rotulo: 'Logística' },
+  { href: '/admin/cupons', rotulo: 'Campanhas' },
   { href: '/admin/leads', rotulo: 'Leads' },
 ]
 

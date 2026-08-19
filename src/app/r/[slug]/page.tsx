@@ -3,6 +3,7 @@ import { buscarRepresentanteAtivoPorSlug } from '@/repositories/representantes'
 import { listarKitsAtivos } from '@/repositories/produtos'
 import { escassezPresencialDoKit } from '@/lib/escassez-do-lote'
 import { Vitrine } from '@/components/vitrine'
+import { cupomDaUrl } from '@/lib/cupom-da-url'
 
 // A atribuicao depende de cookie e query string, entao a pagina nao pode
 // ser estatica. A gravacao do cookie em si acontece em src/proxy.ts —
@@ -15,12 +16,20 @@ import { Vitrine } from '@/components/vitrine'
 // src/proxy.ts sobre por que isso nao deve virar um header repassado.
 export const dynamic = 'force-dynamic'
 
+/**
+ * `?cupom=` importa MAIS AQUI do que em qualquer outra tela: o link que uma
+ * representante espalha e este, e uma campanha de desconto sai pelas
+ * representantes antes de sair por qualquer outro lugar. Sem repassar o
+ * codigo, `/r/maria?cupom=PRE800` levaria ao checkout sem desconto nenhum —
+ * URL certa na barra de enderecos, promessa quebrada na tela de pagamento.
+ */
 type Props = {
   params: Promise<{ slug: string }>
+  searchParams: Promise<{ cupom?: string | string[] }>
 }
 
-export default async function PaginaRepresentante({ params }: Props) {
-  const { slug } = await params
+export default async function PaginaRepresentante({ params, searchParams }: Props) {
+  const [{ slug }, sp] = await Promise.all([params, searchParams])
 
   const representante = await buscarRepresentanteAtivoPorSlug(slug)
   if (!representante) notFound()
@@ -43,6 +52,7 @@ export default async function PaginaRepresentante({ params }: Props) {
       kits={kits}
       representante={{ nome: representante.nome, slug: representante.slug }}
       escassez={escassez}
+      cupom={cupomDaUrl(sp.cupom)}
     />
   )
 }

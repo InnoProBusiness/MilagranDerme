@@ -42,3 +42,21 @@ export function cupomDaUrl(valor: string | string[] | undefined): string {
   if (typeof bruto !== 'string') return ''
   return bruto.trim().toUpperCase().slice(0, TAMANHO_MAXIMO_CUPOM)
 }
+
+/**
+ * O link "Continuar" da Vitrine (/comprar e /r/[slug]) para o checkout.
+ *
+ * EXISTE POR CAUSA DE UM ELO QUE SE PERDIA. As duas telas de vitrine sao onde
+ * a campanha de verdade cai — o link de uma representante e /r/<slug>, nao a
+ * home —, mas a Vitrine monta o destino do botao a mao. Sem carregar o cupom
+ * aqui, `/r/maria?cupom=PRE800` levava a visitante ao checkout SEM CUPOM
+ * NENHUM, e o desconto prometido no anuncio simplesmente nao aparecia: um
+ * defeito invisivel de quem ve a URL certa na barra de enderecos.
+ *
+ * Sem cupom o link fica byte a byte igual ao que sempre foi — nenhum `&cupom=`
+ * vazio pendurado na URL que a compradora ve.
+ */
+export function linkDeCheckout(kitSlug: string, quantidade: number, cupom: string): string {
+  const base = `/checkout?kit=${encodeURIComponent(kitSlug)}&q=${quantidade}`
+  return cupom ? `${base}&cupom=${encodeURIComponent(cupom)}` : base
+}

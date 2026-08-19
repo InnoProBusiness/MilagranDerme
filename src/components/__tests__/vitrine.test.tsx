@@ -48,12 +48,12 @@ function escassezDe(disponivel: number) {
 
 describe('Vitrine', () => {
   it('mostra o preco formatado em reais', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     expect(screen.getByText('R$ 1.000,00')).toBeDefined()
   })
 
   it('recalcula subtotal e total ao aumentar a quantidade', async () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     const aumentar = screen.getByRole('button', { name: /aumentar/i })
     await userEvent.click(aumentar)
     await userEvent.click(aumentar)
@@ -62,7 +62,7 @@ describe('Vitrine', () => {
   })
 
   it('mantem subtotal, frete e total consistentes na quantidade 3', async () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     const aumentar = screen.getByRole('button', { name: /aumentar/i })
     await userEvent.click(aumentar)
     await userEvent.click(aumentar)
@@ -80,7 +80,7 @@ describe('Vitrine', () => {
   // checar so o texto da quantidade depois de um clique nao prova nada sobre
   // este botao especificamente).
   it('desabilita "Diminuir" na quantidade minima e habilita apos incrementar', async () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     const diminuir = screen.getByRole('button', { name: /diminuir/i })
     expect(diminuir).toBeDisabled()
     expect(screen.getByTestId('quantidade')).toHaveTextContent('1')
@@ -92,7 +92,7 @@ describe('Vitrine', () => {
   // Mesma logica para o teto, alcancado programaticamente a partir da
   // constante (nao um "19" magico escrito a mao no teste).
   it('desabilita "Aumentar" ao atingir QUANTIDADE_MAXIMA', async () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     const aumentar = screen.getByRole('button', { name: /aumentar/i })
     for (let i = 1; i < QUANTIDADE_MAXIMA; i++) {
       await userEvent.click(aumentar)
@@ -119,7 +119,7 @@ describe('Vitrine', () => {
   })
 
   it('DINHEIRO: mostra "a cotar" no frete, nunca R$ 0,00', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(12)} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(12)} cupom="" />)
     const frete = screen.getByTestId('frete')
     expect(frete).toHaveTextContent(TEXTO_FRETE_A_COTAR)
     // O TESTE INTEIRO E ESTA LINHA. A vitrine nao conhece o CEP do visitante,
@@ -131,7 +131,7 @@ describe('Vitrine', () => {
   })
 
   it('avisa que o registro ANVISA esta em breve quando nao ha numero', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     expect(screen.getByTestId('anvisa')).toHaveTextContent(/em breve/i)
   })
 
@@ -141,6 +141,7 @@ describe('Vitrine', () => {
         kits={[{ ...KITS[0]!, anvisaRegistro: '25351.000123/2026-01' }]}
         representante={null}
         escassez={null}
+        cupom=""
       />,
     )
     expect(screen.getByTestId('anvisa')).toHaveTextContent('25351.000123/2026-01')
@@ -159,6 +160,7 @@ describe('Vitrine', () => {
         kits={[{ ...KITS[0]!, anvisaDispensado: true }]}
         representante={null}
         escassez={null}
+        cupom=""
       />,
     )
     const anvisa = screen.getByTestId('anvisa')
@@ -170,13 +172,13 @@ describe('Vitrine', () => {
 
   it('identifica o representante quando a vitrine e dele', () => {
     render(
-      <Vitrine kits={KITS} representante={{ nome: 'Maria', slug: 'maria' }} escassez={null} />,
+      <Vitrine kits={KITS} representante={{ nome: 'Maria', slug: 'maria' }} escassez={null} cupom="" />,
     )
     expect(screen.getByText(/Maria/)).toBeDefined()
   })
 
   it('mostra mensagem honesta quando nao ha kit disponivel', () => {
-    render(<Vitrine kits={[]} representante={null} escassez={null} />)
+    render(<Vitrine kits={[]} representante={null} escassez={null} cupom="" />)
     expect(screen.getByText('Nenhum kit disponivel no momento.')).toBeDefined()
   })
 
@@ -190,7 +192,7 @@ describe('Vitrine', () => {
    * o numero saiu.
    */
   it('DINHEIRO: mantem "Valor unitário" no preco de uma unidade ao subir a quantidade', async () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     expect(screen.getByTestId('valor-unitario')).toHaveTextContent('Valor unitário: R$ 1.000,00')
 
     const aumentar = screen.getByRole('button', { name: /aumentar/i })
@@ -209,7 +211,7 @@ describe('Vitrine', () => {
    * teste consegue dizer qual esta olhando.
    */
   it('distingue valor unitario, subtotal e total quando os tres tem o mesmo valor', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     expect(screen.getByTestId('valor-unitario')).toHaveTextContent('Valor unitário: R$ 1.000,00')
     expect(screen.getByTestId('subtotal')).toHaveTextContent('Subtotal: R$ 1.000,00')
     expect(screen.getByTestId('total')).toHaveTextContent('Total: R$ 1.000,00 + frete')
@@ -225,7 +227,7 @@ describe('Vitrine', () => {
    * compra.
    */
   it('o total da vitrine nunca se apresenta como valor final', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
 
     const total = screen.getByTestId('total')
     expect(total).toHaveTextContent('+ frete')
@@ -236,7 +238,7 @@ describe('Vitrine', () => {
   // ---------- §5 e §11: escassez do lote presencial ----------
 
   it('mostra o contador e a frase combinada do lote presencial', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(8)} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(8)} cupom="" />)
     expect(screen.getByTestId('kits-disponiveis')).toHaveTextContent('Kits disponíveis: 8 de 50')
     expect(screen.getByTestId('aviso-escassez'))
       .toHaveTextContent(avisoDeEscassez(8, LOTE).mensagem)
@@ -251,14 +253,14 @@ describe('Vitrine', () => {
    * inventa "0", que anunciaria um esgotamento que nunca aconteceu.
    */
   it('nao mostra contador nenhum quando nao ha lote presencial', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={null} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
     expect(screen.queryByTestId('escassez')).toBeNull()
     expect(screen.queryByTestId('kits-disponiveis')).toBeNull()
     expect(screen.queryByTestId('aviso-escassez')).toBeNull()
   })
 
   it('troca a CTA para "COMPRAR ONLINE" quando o lote presencial esgota', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(0)} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(0)} cupom="" />)
 
     expect(screen.getByTestId('cta')).toHaveTextContent('COMPRAR ONLINE')
     // Esgotado precisa ser inconfundivel: o bloco troca de nivel (e de cor, no
@@ -271,7 +273,7 @@ describe('Vitrine', () => {
   })
 
   it('mantem a CTA em "Continuar" enquanto ha lote presencial', () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(3)} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(3)} cupom="" />)
     expect(screen.getByTestId('cta')).toHaveTextContent('Continuar')
     expect(screen.getByTestId('cta')).not.toHaveTextContent('COMPRAR ONLINE')
   })
@@ -291,7 +293,7 @@ describe('Vitrine', () => {
     // segundo teto — os dois limites coincidiriam.
     expect(NA_CAIXA).toBeLessThan(QUANTIDADE_MAXIMA)
 
-    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(NA_CAIXA)} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(NA_CAIXA)} cupom="" />)
     const aumentar = screen.getByRole('button', { name: /aumentar/i })
 
     for (let i = 0; i < NA_CAIXA + 3; i++) {
@@ -309,7 +311,7 @@ describe('Vitrine', () => {
    * evento a uma compra que nao sai mais dessa caixa.
    */
   it('nao trava a quantidade em 1 depois de o lote presencial esgotar', async () => {
-    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(0)} />)
+    render(<Vitrine kits={KITS} representante={null} escassez={escassezDe(0)} cupom="" />)
     const aumentar = screen.getByRole('button', { name: /aumentar/i })
 
     await userEvent.click(aumentar)
@@ -345,5 +347,29 @@ describe('Vitrine', () => {
     expect(tetoDeQuantidade(Number.NaN)).toBe(QUANTIDADE_MAXIMA)
     // Fracionario nao existe em kit: 3.9 kits sao 3 kits.
     expect(tetoDeQuantidade(3.9)).toBe(3)
+  })
+
+  /**
+   * O elo da campanha (19/08/2026). A vitrine e o lugar onde o link de
+   * desconto REALMENTE cai — o que a representante divulga e /r/<slug>, nao a
+   * home —, e o href do botao e montado a mao aqui dentro. Este teste existe
+   * porque o cupom se perdia exatamente neste ponto: a URL de origem estava
+   * certa, a compradora chegava ao checkout, e o desconto anunciado nao
+   * aparecia.
+   */
+  it('CAMPANHA: o cupom do link sobrevive ate o checkout, com a quantidade escolhida', async () => {
+    const usuario = userEvent.setup()
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="PRE800" />)
+
+    await usuario.click(screen.getByRole('button', { name: /aumentar/i }))
+
+    expect(screen.getByTestId('cta')).toHaveAttribute(
+      'href', '/checkout?kit=kit-milagran&q=2&cupom=PRE800',
+    )
+  })
+
+  it('sem campanha, o link do botao continua o de sempre', () => {
+    render(<Vitrine kits={KITS} representante={null} escassez={null} cupom="" />)
+    expect(screen.getByTestId('cta')).toHaveAttribute('href', '/checkout?kit=kit-milagran&q=1')
   })
 })
