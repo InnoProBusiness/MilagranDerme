@@ -13,6 +13,13 @@ import { deInteiro } from '@/lib/money'
 const provedor = vi.hoisted(() => ({
   resposta: null as null | Record<string, unknown>,
   erro: false,
+  /**
+   * QUAL DAS DUAS APIS o webhook foi reler. Nao e detalhe de implementacao: o
+   * id ULID de uma order nao existe em `/v1/payments` e vice-versa, entao
+   * bater na porta errada e um 404 garantido — que o handler traduz em 503 e o
+   * Mercado Pago transforma em reentrega infinita.
+   */
+  lidoPor: [] as string[],
 }))
 
 vi.mock('@/lib/mercadopago', async (importOriginal) => {
@@ -21,6 +28,12 @@ vi.mock('@/lib/mercadopago', async (importOriginal) => {
     ...real,
     segredoDoWebhook: () => SEGREDO,
     buscarPagamentoMP: async (id: string) => {
+      provedor.lidoPor.push('payments')
+      if (provedor.erro) throw new real.ErroMercadoPago(0, 'sem_resposta', 'timeout')
+      return { id, statusDetail: '', ...provedor.resposta }
+    },
+    buscarOrderMP: async (id: string) => {
+      provedor.lidoPor.push('orders')
       if (provedor.erro) throw new real.ErroMercadoPago(0, 'sem_resposta', 'timeout')
       return { id, statusDetail: '', ...provedor.resposta }
     },
@@ -80,6 +93,7 @@ function requisicao(opcoes: {
 async function semear() {
   provedor.resposta = null
   provedor.erro = false
+  provedor.lidoPor = []
   emails.enviados = []
 
   const db = getDb()
@@ -284,5 +298,145 @@ describe('webhook do Mercado Pago', () => {
     const r = await POST(requisicao({ dataId: String(Date.now() + 8) }))
     expect(r.status).toBe(200)
     expect(await r.json()).toMatchObject({ semPedido: true })
+  })
+
+  /**
+   * O TOPICO `order` — a saida de emergencia do Pix, testada ANTES de precisar
+   * dela.
+   *
+   * Nenhuma rota cria order hoje: Pix e cartao saem os dois por
+   * `/v1/payments`, e e o topico `payment` (testado acima) que roda em
+   * producao. `criarOrderPixMP` existe para o dia em que o PolicyAgent voltar a
+   * recusar `/v1/payments`, como recusou em 19/08/2026 — ver
+   * src/lib/mercadopago.ts.
+   *
+   * POR QUE TESTAR UM CAMINHO QUE NAO RODA: porque o dia em que ele rodar sera
+   * um dia de loja parada, e ninguem escreve teste com a loja parada. Adotar a
+   * Orders muda TRES coisas nesta rota ao mesmo tempo — o topico da
+   * notificacao, a API onde reler e o vocabulario de status — e errar qualquer
+   * uma das tres tem o mesmo desfecho: o dinheiro entra e o pedido nunca vira
+   * 'pago'.
+   *
+   * O QUE ESTES TESTES NAO PROVAM: que a notificacao de order CHEGA. Isso
+   * depende do evento `order` estar marcado no painel do Mercado Pago, e nunca
+   * foi observado.
+   */
+  describe('notificacao de order (Pix)', () => {
+    const ORDER = 'ORD01M0DW0CJ1QGRJP9KM4MHHFM8S'
+
+    it('order aprovada marca o pedido como pago e credita a comissao', async () => {
+      const pedido = await novoPedido()
+      provedor.resposta = {
+        status: 'processed', statusDetail: 'accredited', referenciaExterna: pedido.id,
+      }
+
+      const r = await POST(requisicao({ dataId: ORDER, tipo: 'order' }))
+
+      expect(r.status).toBe(200)
+      expect(await statusDoPedido(pedido.id)).toBe('pago')
+      expect((await saldoDoRepresentante(idRep)).totalCreditado).toBe(20000)
+    })
+
+    // A releitura tem que ir em /v1/orders. O ULID da order nao existe em
+    // /v1/payments — medido em producao: `resource not found`.
+    it('rele a order em /v1/orders, nunca em /v1/payments', async () => {
+      const pedido = await novoPedido()
+      provedor.resposta = {
+        status: 'processed', statusDetail: 'accredited', referenciaExterna: pedido.id,
+      }
+
+      await POST(requisicao({ dataId: ORDER, tipo: 'order' }))
+
+      expect(provedor.lidoPor).toEqual(['orders'])
+    })
+
+    // A assinatura e o unico portao desta rota, e ela nao pode ter ficado para
+    // tras na migracao: um POST forjado com topico `order` pagaria pedido de
+    // graca exatamente como um com topico `payment`.
+    it('order com assinatura invalida e recusada sem tocar no pedido', async () => {
+      const pedido = await novoPedido()
+      provedor.resposta = {
+        status: 'processed', statusDetail: 'accredited', referenciaExterna: pedido.id,
+      }
+
+      const r = await POST(requisicao({
+        dataId: ORDER, tipo: 'order', assinatura: 'ts=1,v1=deadbeef',
+      }))
+
+      expect(r.status).toBe(401)
+      expect(await statusDoPedido(pedido.id)).toBe('pendente')
+      expect((await saldoDoRepresentante(idRep)).totalCreditado).toBe(0)
+    })
+
+    // O estado em que todo Pix nasce: QR na tela, dinheiro ainda nao. Nao
+    // credita nada e nao manda e-mail.
+    it('Pix aguardando transferencia nao credita nem manda e-mail', async () => {
+      const pedido = await novoPedido()
+      provedor.resposta = {
+        status: 'action_required', statusDetail: 'waiting_transfer', referenciaExterna: pedido.id,
+      }
+
+      await POST(requisicao({ dataId: ORDER, tipo: 'order' }))
+
+      expect(await statusDoPedido(pedido.id)).toBe('aguardando_pagamento')
+      expect((await saldoDoRepresentante(idRep)).totalCreditado).toBe(0)
+      expect(emails.enviados).toEqual([])
+    })
+
+    /**
+     * O PIX QUE EXPIROU DEIXA O PEDIDO VENDAVEL. Se este teste virar
+     * 'cancelado', a compradora que gerar o QR a noite e voltar no dia
+     * seguinte encontra a loja recusando o proprio pedido dela: 'cancelado' e
+     * terminal e /api/pagamentos so aceita 'pendente' ou
+     * 'aguardando_pagamento'.
+     */
+    it('Pix expirado devolve o pedido para pendente', async () => {
+      const pedido = await novoPedido()
+      provedor.resposta = {
+        status: 'action_required', statusDetail: 'waiting_transfer', referenciaExterna: pedido.id,
+      }
+      await POST(requisicao({ dataId: ORDER, tipo: 'order' }))
+
+      provedor.resposta = {
+        status: 'expired', statusDetail: 'expired', referenciaExterna: pedido.id,
+      }
+      await POST(requisicao({ dataId: ORDER, tipo: 'order' }))
+
+      expect(await statusDoPedido(pedido.id)).toBe('pendente')
+    })
+
+    /**
+     * A ARMADILHA DA REENTREGA INFINITA.
+     *
+     * Uma order Pix contem um pagamento com id ULID (`PAY01...`). Se o Mercado
+     * Pago notificar esse pagamento no topico `payment`, a releitura em
+     * `/v1/payments/{PAY01...}` responde `resource not found` — medido. Sem a
+     * guarda, o handler devolveria 503 pedindo reenvio, e o provedor reenviaria
+     * a MESMA notificacao por horas: uma fila de retentativas que nunca passa,
+     * escondendo as notificacoes que importam.
+     *
+     * 200 e "decidimos conscientemente ignorar": quem confirma esse pagamento e
+     * a notificacao da order, que chega em paralelo.
+     */
+    it('id ULID no topico payment e ignorado, e nao vira laco de 503', async () => {
+      const r = await POST(requisicao({
+        dataId: 'PAY01M0DW0CJA5GXQ3M22H5JB1N84', tipo: 'payment',
+      }))
+
+      expect(r.status).toBe(200)
+      expect(provedor.lidoPor).toEqual([])
+    })
+
+    // O caminho do cartao nao pode ter sido quebrado pela guarda acima: id
+    // numerico continua sendo lido em /v1/payments.
+    it('id numerico no topico payment continua indo para /v1/payments', async () => {
+      const pedido = await novoPedido()
+      provedor.resposta = { status: 'approved', referenciaExterna: pedido.id }
+
+      await POST(requisicao({ dataId: String(Date.now() + 30), tipo: 'payment' }))
+
+      expect(provedor.lidoPor).toEqual(['payments'])
+      expect(await statusDoPedido(pedido.id)).toBe('pago')
+    })
   })
 })

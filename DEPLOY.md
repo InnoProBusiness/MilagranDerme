@@ -84,6 +84,7 @@ elas (o molde foi `/opt/innofin`).
 | Gerador do stack | `deploy/make-milagran-stack.sh` → `/root/` na VPS |
 | Migrations | `deploy/milagran-migrate.sh` → `/root/` na VPS |
 | Deploy automatico | `deploy/milagran-ci-deploy.sh` → `/root/` na VPS (forced command) |
+| Diagnostico do Mercado Pago | `scripts/diagnostico-mercadopago.mjs` → `/root/` na VPS (ver abaixo) |
 | Chave de deploy | `/root/.ssh/milagran-ci` (privada vai para o secret `VPS_SSH_KEY`) |
 | Segredos | `/root/.milagran-db-pass`, `/root/.milagran-atribuicao-secret` |
 | Resend (opcional) | `/root/.milagran-resend-key`, `.milagran-email-from`, `.milagran-email-to` |
@@ -91,6 +92,32 @@ elas (o molde foi `/opt/innofin`).
 | Frete (Clube Envios) | `/root/.milagran-clube-envios-token`, `.milagran-clube-envios-cliente-id`, `.milagran-cep-origem` (e `.milagran-clube-envios-base-url` para homologacao) |
 | Banco | database `milagran` no Postgres **14** compartilhado do swarm |
 | Roteamento | Traefik, `https://milagranoficial.com.br` |
+
+### Diagnosticar a cobranca em producao
+
+`scripts/diagnostico-mercadopago.mjs` responde, medindo contra a API real, as tres perguntas que
+sempre aparecem quando a loja para de cobrar: **a conta esta bloqueada? o cartao vende? o Pix
+vende?**
+
+**A VPS nao tem `node` no host** — o script roda dentro do container da aplicacao:
+
+```bash
+scp -P $VPS_PORT scripts/diagnostico-mercadopago.mjs root@$VPS_HOST:/root/
+ssh -p $VPS_PORT root@$VPS_HOST
+APP=$(docker ps --filter name=milagran_app -q)
+docker cp /root/diagnostico-mercadopago.mjs "$APP":/tmp/diag.mjs
+docker exec -e MERCADOPAGO_ACCESS_TOKEN="$(cat /root/.milagran-mp-access-token)" \
+  "$APP" node /tmp/diag.mjs
+```
+
+Sem argumentos ele **nao cria cobranca nenhuma** — a sonda de cartao usa um token invalido de
+proposito, justamente para descobrir *quem* recusa (o PolicyAgent ou o token) sem gerar cobranca.
+Com `--criar` ele gera um Pix real de R$ 0,01, e com `--aguardar` fica imprimindo cada transicao
+de status ate o Pix ser pago. `--help` lista o resto.
+
+Contexto de por que ele existe: `docs/2026-08-19-migrar-pix-para-orders.md`, §8.
+
+### Os scripts de deploy
 
 Os dois scripts sao versionados em `deploy/` e **copiados** para `/root/` da
 VPS (e de la que rodam, porque leem os segredos em `/root/.milagran-*`). Se

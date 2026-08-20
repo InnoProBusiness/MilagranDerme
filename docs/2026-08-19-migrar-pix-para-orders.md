@@ -5,6 +5,17 @@
 Este documento é um handoff. Tudo abaixo foi **medido contra a API de produção**, não lido em
 documentação. Onde algo não foi provado, está escrito que não foi.
 
+> ## ⚑ A MIGRAÇÃO NÃO FOI FEITA — porque deixou de ser necessária
+>
+> **Leia a §8 antes de agir com base neste documento.** Em 20/08/2026 o bloqueio descrito na §1
+> foi remedido em produção e **não existe mais**: `/v1/payments` voltou a criar Pix, e o cartão
+> também destravou. O Pix continua saindo por `/v1/payments`.
+>
+> As seções 1 a 7 continuam valendo como **registro fiel do que foi medido em 19/08** — inclusive
+> porque o bloqueio pode voltar (a conta segue com `address_pending`). O código da Orders API foi
+> escrito e testado e está no repositório como **saída de emergência**, desligado. A §8 diz o que
+> existe, por que está desligado, e o que fazer para ligá-lo.
+
 ---
 
 ## 1. O problema
@@ -249,3 +260,142 @@ curl -s -X POST https://api.mercadopago.com/v1/orders \
 curl -s https://api.mercadopago.com/users/me -H "Authorization: Bearer $TOKEN"
 # → status.billing.allow === false enquanto o endereço não entrar
 ```
+
+Desde 20/08/2026 há um script que faz tudo isto de uma vez, com relatório:
+
+```bash
+export MERCADOPAGO_ACCESS_TOKEN=$(cat /root/.milagran-mp-access-token)   # na VPS
+node scripts/diagnostico-mercadopago.mjs
+```
+
+---
+
+## 8. O que aconteceu em 20/08/2026
+
+Tudo nesta seção foi **medido contra a produção**, com o token real, a partir da VPS. O comando
+que reproduz é `node scripts/diagnostico-mercadopago.mjs`.
+
+### 8.1 O bloqueio da §1 acabou
+
+| Medição | Resultado |
+|---|---|
+| `GET /users/me` | `status.billing.allow = false`, `codes: ["address_pending"]`, `address` vazio — **igual a ontem** |
+| `POST /v1/payments` Pix R$ 0,01 | ✅ **201**, `pending` / `pending_waiting_transfer`, com QR code utilizável |
+| `POST /v1/payments` cartão (sonda) | ✅ **400 `Invalid card_token_id`** — e **não** 403 do PolicyAgent |
+| `POST /v1/orders` Pix R$ 0,01 | ✅ 201, `action_required` / `waiting_transfer`, com QR |
+
+A sonda de cartão é o dado que fecha a questão: manda-se um token deliberadamente inválido e
+lê-se **de quem vem a recusa**. Se o PolicyAgent ainda bloqueasse, ele recusaria *antes* de olhar
+o cartão (403 `PA_UNAUTHORIZED_RESULT_FROM_POLICIES`). Veio 400 falando do token. **O
+PolicyAgent liberou.** A sonda não cria cobrança em nenhum dos dois desfechos.
+
+> **`status.billing.allow` continua `false` e isso não impede vender.** O flag é cosmético; quem
+> decide é a API respondendo. Não use esse campo para diagnosticar "a loja consegue cobrar?" —
+> use o script.
+
+### 8.2 O webhook está entregando — e a assinatura passa
+
+Este era o maior risco em aberto de toda a §4.4, e ele foi resolvido por observação, não por
+argumento. As duas cobranças de teste geraram notificação real, e o log do container mostrou:
+
+```
+[webhook-mp] pagamento sem pedido correspondente: 173837993235
+[webhook-mp] pagamento sem pedido correspondente: 173839154781
+```
+
+Para chegar nessa linha a notificação teve que: chegar na URL certa, **passar na validação HMAC**
+(senão seria 401), passar na deduplicação, e ser **relida pela API do Mercado Pago**. Só parou em
+"sem pedido correspondente" — que é o comportamento correto para uma cobrança avulsa, sem pedido.
+
+**O caminho `/v1/payments` está provado ponta a ponta em produção.** É o único que está.
+
+### 8.3 A decisão: o Pix ficou onde estava
+
+Com o bloqueio removido, migrar deixou de ser conserto e passou a ser risco. O Pix continua
+saindo por `criarPagamentoMP` (`/v1/payments`), no checkout e no balcão.
+
+**Por quê:** o tópico `payment` tem entrega comprovada nesta conta; o tópico `order` **nunca foi
+visto chegando**. Adotar a Orders a cinco dias do lançamento trocaria um risco conhecido e
+resolvido por um não medido — e a forma de falhar é a pior possível: a cobrança acontece, o
+dinheiro entra, e o pedido nunca vira `pago`.
+
+Bônus da decisão: cartão e Pix voltam a falar **um vocabulário só**, e o cartão vende de novo.
+
+### 8.4 O que ficou no repositório, desligado
+
+Escrito, testado e **fora do caminho crítico** — nenhuma rota chama:
+
+| O quê | Onde |
+|---|---|
+| `criarOrderPixMP` / `buscarOrderMP` | `src/lib/mercadopago.ts` |
+| `mapearStatusOrder(status, statusDetail)` | `src/lib/pedido-status.ts` |
+| Testes do contrato da Orders (15) | `src/lib/__tests__/mercadopago-orders.test.ts` |
+| Testes do vocabulário (13) | `src/lib/__tests__/pedido-status.test.ts` |
+| Testes do webhook no tópico `order` (7) | `src/app/api/__tests__/webhook-mp-route.test.ts` |
+
+O vocabulário de `mapearStatusOrder` saiu da documentação oficial (páginas *Status da order* e
+*Status da transação*), com `action_required`/`waiting_transfer` confirmado por medição:
+
+| Order | Vira | Por quê |
+|---|---|---|
+| `processed` / `accredited` | `aprovado` | o dinheiro entrou |
+| `processed` / `partially_refunded` | `aprovado` | estorno parcial não desfaz a venda — é o que `/v1/payments` já faz |
+| `created` | `pendente` | criada, não processada |
+| `action_required` / `waiting_transfer`, `waiting_payment`, `waiting_retry`, `pending_challenge` | `pendente` | estado em que todo Pix nasce |
+| `action_required` / `waiting_capture` | `em_analise` | autorizado e não capturado — não é dinheiro nosso |
+| `processing`, `in_review` | `em_analise` | análise de risco / revisão manual |
+| `charged_back` / `in_process` | `em_analise` | disputa aberta: segurar em vez de estornar |
+| `charged_back` / `settled`, `reimbursed` | `estornado` | o valor voltou |
+| `refunded` | `estornado` | — |
+| `canceled` / `cancelled` | `cancelado` | a Orders escreve com um L; `/v1/payments` com dois |
+| `expired`, `failed` | `recusado` | ver abaixo |
+| qualquer outro | `null` | fila de `processado_em NULL`, inspeção humana |
+
+**`expired` → `recusado`, e não `cancelado`.** `cancelado` é **terminal** (`TRANSICOES.cancelado`
+é vazio) e `/api/pagamentos` só aceita pedido em `pendente` ou `aguardando_pagamento`. Um Pix
+gerado à noite e não pago cancelaria o pedido, e a compradora que voltasse no dia seguinte
+encontraria a loja recusando o próprio pedido dela, sem saída.
+
+### 8.5 O que MUDOU no caminho que está no ar
+
+Duas correções que valem independentemente da Orders, e que ficam:
+
+1. **`chamar()` aprendeu o formato `errors: [{code, message}]`.** Antes, um erro nesse formato
+   chegava ao log como `desconhecido: erro sem mensagem` — foi assim que a causa real da parada
+   de 19/08 ficou invisível por horas. Os três formatos que o Mercado Pago usa agora são lidos.
+2. **O webhook não entra mais em laço de reentrega com id ULID.** Uma order Pix contém um
+   pagamento com id `PAY01…` que **não existe** em `/v1/payments/{id}`. Se o Mercado Pago
+   notificar esse id no tópico `payment`, a releitura falha, o handler responde 503 pedindo
+   reenvio, e o provedor reenvia **em laço por horas**, escondendo as notificações que importam.
+   Agora o tópico `payment` só é tratado com `data.id` numérico (ids de `/v1/payments` sempre
+   são); ULID responde 200 e é ignorado.
+
+O webhook também passou a **aceitar** o tópico `order`. Ele não chega hoje; aceitar de antemão
+evita que ligar a saída de emergência vire dois deploys encadeados com pagamento perdido no meio.
+
+### 8.6 Para ligar a Orders API, se o bloqueio voltar
+
+Nesta ordem. Pular o passo 1 é o erro caro.
+
+1. **Marcar o evento `order`** no painel: *Suas integrações → a aplicação → Webhooks*. Sem isso
+   **nenhuma** notificação de Pix chega, e não há erro em lugar nenhum — só pedidos parados em
+   `aguardando_pagamento`.
+2. Trocar `criarPagamentoMP` por `criarOrderPixMP` no ramo do Pix, **e `mapearStatusMP` por
+   `mapearStatusOrder` junto**, nos **dois** arquivos: `src/app/api/pagamentos/route.ts` e
+   `src/app/api/vendas-presenciais/route.ts`.
+3. `node scripts/diagnostico-mercadopago.mjs --criar --aguardar`, pagar o Pix, e conferir que o
+   par de status impresso é o que `mapearStatusOrder` lê como `aprovado`.
+4. Fazer um pedido de verdade na loja, pagar, e confirmar **três coisas**: o pedido virou `pago`,
+   a comissão foi lançada, e o e-mail de confirmação saiu.
+
+### 8.7 O que continua pendente
+
+- **Corrigir o endereço da conta.** `address_pending` continua lá. Hoje não bloqueia nada, mas
+  foi ele que derrubou a loja em 19/08 e nada garante que o Mercado Pago não reaperte. A correção
+  é em *Seu perfil → Informações do seu perfil (Dados do negócio)* — **não** na agenda de entrega
+  ("Endereços salvos na sua conta"), que é outra tela.
+- **Um pedido real pago ponta a ponta.** O webhook está provado até a releitura; o que ainda não
+  foi visto é um pedido de verdade indo a `pago` com comissão lançada e e-mail enviado.
+- **Rotacionar as credenciais.** Já circularam em chat.
+- **Duas cobranças de R$ 0,01 pendentes** ficaram do diagnóstico (`173837993235` e
+  `173839154781`, mais a order `ORD01M0FWG5SD5NYTAJY8CR1STYHB`). Expiram sozinhas.

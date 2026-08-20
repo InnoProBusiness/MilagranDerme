@@ -485,6 +485,18 @@ export async function POST(req: Request) {
       parcelas: d.metodo === 'cartao' ? d.parcelas : 1,
     })
 
+    // O BALCAO COBRA PELA MESMA PORTA DA LOJA ONLINE, e trocar de porta aqui
+    // sem trocar la (ou vice-versa) e o jeito mais facil de quebrar so um dos
+    // dois. O porque de o Pix continuar em `/v1/payments` — o bloqueio do
+    // PolicyAgent de 19/08/2026 e a medicao de 20/08/2026 que mostrou que ele
+    // caiu — esta escrito por extenso em src/app/api/pagamentos/route.ts, e
+    // vale igual para este arquivo.
+    //
+    // O QUE ESTE CAMINHO TEM DE DIFERENTE: aqui a falha custa mais. Uma recusa
+    // do provedor cai no catch logo abaixo com a venda JA registrada e o
+    // estoque JA baixado, e o vendedor descobre isso com a fila na frente.
+    const pagador = { email: d.email, nome, sobrenome, cpf: d.cpf }
+
     resposta = await criarPagamentoMP(
       d.metodo === 'pix'
         ? {
@@ -492,14 +504,14 @@ export async function POST(req: Request) {
             valor: venda.totalCentavos,
             descricao: `Pedido #${venda.numero} — Milagran`,
             referenciaExterna: venda.id,
-            pagador: { email: d.email, nome, sobrenome, cpf: d.cpf },
+            pagador,
           }
         : {
             metodo: 'cartao',
             valor: venda.totalCentavos,
             descricao: `Pedido #${venda.numero} — Milagran`,
             referenciaExterna: venda.id,
-            pagador: { email: d.email, nome, sobrenome, cpf: d.cpf },
+            pagador,
             token: d.token,
             parcelas: d.parcelas,
             metodoPagamentoId: d.metodoPagamentoId,
@@ -544,6 +556,9 @@ export async function POST(req: Request) {
     }, { status: doProvedor ? 502 : 500 })
   }
 
+  // Trocar a chamada acima para `criarOrderPixMP` obriga a trocar esta linha
+  // para `mapearStatusOrder` — as duas APIs falam vocabularios diferentes. Ver
+  // src/app/api/pagamentos/route.ts, que carrega a mesma dupla.
   const status = mapearStatusMP(resposta.status)
   if (status === null) {
     // Status que nao sabemos ler: a cobranca EXISTE no provedor, entao a linha

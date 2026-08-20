@@ -93,6 +93,35 @@ export async function POST(req: Request) {
     parcelas: d.metodo === 'cartao' ? d.parcelas : 1,
   })
 
+  // POR QUE O PIX CONTINUA EM `/v1/payments` — e onde esta o plano B.
+  //
+  // Em 19/08/2026 a conta ficou com `address_pending` e o PolicyAgent passou a
+  // recusar TODA criacao de cobranca aqui: 403
+  // `PA_UNAUTHORIZED_RESULT_FROM_POLICIES`, nos tres metodos. A saida medida na
+  // epoca foi criar o Pix por `/v1/orders`, que nao passava pelo mesmo
+  // bloqueio (docs/2026-08-19-migrar-pix-para-orders.md).
+  //
+  // EM 20/08/2026 O BLOQUEIO CAIU, medido contra a producao: o Pix voltou a
+  // devolver 201 com QR utilizavel, e uma sonda de cartao com token invalido
+  // voltou 400 falando do TOKEN — nao 403 da politica. `status.billing.allow`
+  // continua `false` com `address_pending`: o flag e cosmetico, quem decide e
+  // a API respondendo.
+  //
+  // ENTAO O PIX FICOU ONDE ESTAVA, e isso e escolha, nao inercia. Este e o
+  // unico caminho com ENTREGA DE WEBHOOK COMPROVADA nesta conta: em
+  // 20/08/2026 duas notificacoes reais chegaram, passaram na assinatura HMAC e
+  // foram relidas pela API. O topico `order` nunca foi visto chegando —
+  // adota-lo trocaria um risco conhecido e resolvido por um nao medido, a
+  // dias do lancamento.
+  //
+  // O PLANO B ESTA PRONTO E TESTADO: `criarOrderPixMP` (src/lib/mercadopago.ts)
+  // e `mapearStatusOrder` (src/lib/pedido-status.ts) existem, e o webhook ja
+  // entende o topico `order`. Se o PolicyAgent voltar a bloquear, trocar a
+  // chamada abaixo e a mudanca inteira. ANTES DE TROCAR: marque o evento
+  // `order` no painel de webhooks do Mercado Pago e prove que a notificacao
+  // chega — senao a cobranca acontece e o pedido nunca vira 'pago'.
+  const pagador = { email: pedido.clienteEmail, nome, sobrenome, cpf: pedido.clienteCpf }
+
   let resposta
   try {
     resposta = await criarPagamentoMP(
@@ -102,14 +131,14 @@ export async function POST(req: Request) {
             valor: pedido.totalCentavos,
             descricao: `Pedido #${pedido.numero} — Milagran`,
             referenciaExterna: pedido.id,
-            pagador: { email: pedido.clienteEmail, nome, sobrenome, cpf: pedido.clienteCpf },
+            pagador,
           }
         : {
             metodo: 'cartao',
             valor: pedido.totalCentavos,
             descricao: `Pedido #${pedido.numero} — Milagran`,
             referenciaExterna: pedido.id,
-            pagador: { email: pedido.clienteEmail, nome, sobrenome, cpf: pedido.clienteCpf },
+            pagador,
             token: d.token,
             parcelas: d.parcelas,
             metodoPagamentoId: d.metodoPagamentoId,
@@ -140,6 +169,10 @@ export async function POST(req: Request) {
     return Response.json({ error: 'nao_foi_possivel_cobrar' }, { status: 500 })
   }
 
+  // Se a chamada acima trocar para `criarOrderPixMP`, esta linha TEM que trocar
+  // junto para `mapearStatusOrder(resposta.status, resposta.statusDetail)`: as
+  // duas APIs falam vocabularios diferentes, e `mapearStatusMP` leria uma order
+  // aprovada ('processed'/'accredited') como status desconhecido.
   const status = mapearStatusMP(resposta.status)
   if (status === null) {
     // Status que nao sabemos ler: a cobranca EXISTE no provedor, entao a

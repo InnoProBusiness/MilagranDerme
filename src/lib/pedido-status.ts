@@ -49,6 +49,113 @@ export function mapearStatusMP(status: string): PagamentoStatus | null {
 }
 
 /**
+ * Traduz o status de uma ORDER (`/v1/orders`) para o mesmo ENUM
+ * pagamento_status.
+ *
+ * NAO ESTA EM USO HOJE, e isso e deliberado: ela acompanha `criarOrderPixMP`
+ * (src/lib/mercadopago.ts), que e a saida de emergencia do Pix e nao o caminho
+ * atual. As condicoes para liga-la estao escritas la, e ligar uma sem a outra
+ * quebra a conciliacao — por isso as duas se citam.
+ *
+ * A SEGUNDA FUNCAO EXISTE PORQUE HA UM SEGUNDO VOCABULARIO, e nao porque ha um
+ * segundo gateway. A Orders API NAO fala as mesmas palavras de `/v1/payments`:
+ * onde o pagamento diz `approved`, a order diz `processed` + `accredited`; onde
+ * diz `pending`, a order diz `action_required` + `waiting_transfer`.
+ * Reaproveitar `mapearStatusMP` devolveria null para TODOS eles — inclusive
+ * para a aprovacao — e o pedido pago nunca sairia de `aguardando_pagamento`.
+ *
+ * PRECISA DOS DOIS CAMPOS. Ao contrario de `/v1/payments`, aqui o `status`
+ * sozinho e ambiguo: `action_required` tanto significa "a compradora ainda nao
+ * pagou o Pix" quanto "o cartao foi autorizado e falta capturar" — estados com
+ * efeitos opostos sobre a comissao. Quem separa e o `status_detail`.
+ *
+ * A REGRA DE DEVOLVER null PARA O DESCONHECIDO e a mesma de `mapearStatusMP`, e
+ * pelo mesmo motivo: o webhook grava o evento, responde 200 (senao o Mercado
+ * Pago reenvia em laco) e deixa `processado_em` NULL — a fila do que chegou e
+ * ninguem tratou.
+ *
+ * Vocabulario conferido na documentacao oficial da Orders API (paginas "Status
+ * da order" e "Status da transacao"). O par `action_required`/`waiting_transfer`
+ * foi observado em producao na criacao de um Pix real; os demais vieram da
+ * documentacao. O QUE ISSO SIGNIFICA NA PRATICA: se um par desconhecido
+ * aparecer, ele cai em null e vira linha na fila — nao vira pedido pago por
+ * engano nem comissao creditada por engano.
+ */
+export function mapearStatusOrder(status: string, statusDetail: string): PagamentoStatus | null {
+  switch (status) {
+    // 'processed' e o unico estado em que o dinheiro entrou. Vale tambem com
+    // status_detail 'partially_refunded': a venda aconteceu e o pedido esta
+    // pago: quem devolveu parte do valor foi a Milagran, depois. E exatamente
+    // o que `/v1/payments` ja fazia — la um pagamento parcialmente estornado
+    // continua com status 'approved', e o estorno parcial e um recurso a
+    // parte. O ENUM nao tem estado para "pago menos um pedaco", e inventar um
+    // aqui reverteria a comissao inteira de uma venda que so foi desfeita pela
+    // metade.
+    case 'processed':
+      return 'aprovado'
+
+    // A order nasceu e ainda nao foi processada.
+    case 'created':
+      return 'pendente'
+
+    // Falta alguem agir. QUEM age muda tudo:
+    //   waiting_capture -> nos. O cartao esta AUTORIZADO e nao capturado: e
+    //     limite reservado, nao dinheiro nosso. Mesmo tratamento que
+    //     'authorized' recebe em mapearStatusMP, e pelo mesmo motivo —
+    //     creditar comissao aqui paga o representante por uma venda que pode
+    //     nunca liquidar.
+    //   waiting_transfer / waiting_payment / waiting_retry / pending_challenge
+    //     -> a compradora. E o estado normal de um Pix recem-criado: o QR
+    //     esta na tela dela e o dinheiro ainda nao saiu.
+    case 'action_required':
+      return statusDetail === 'waiting_capture' ? 'em_analise' : 'pendente'
+
+    // Analise de risco, revisao manual, processamento assincrono. Segura o
+    // saldo sem decidir nada.
+    case 'processing':
+    case 'in_review':
+      return 'em_analise'
+
+    // Contestacao. 'in_process' e a disputa ABERTA, com o dinheiro ainda
+    // retido — segurar aqui evita estornar a comissao de uma disputa que a
+    // Milagran vai ganhar, exatamente como 'in_mediation' em mapearStatusMP.
+    // 'settled' e 'reimbursed' sao o desfecho com o valor de volta na mao da
+    // compradora, e ai o credito tem que ser revertido.
+    case 'charged_back':
+      return statusDetail === 'in_process' ? 'em_analise' : 'estornado'
+
+    case 'refunded':
+      return 'estornado'
+
+    // A Orders API escreve com um L so; `/v1/payments` escreve com dois. Os
+    // dois entram porque errar a grafia aqui deixaria uma order cancelada
+    // caindo em null para sempre, e ninguem descobriria olhando o codigo.
+    case 'canceled':
+    case 'cancelled':
+      return 'cancelado'
+
+    // A COBRANCA MORREU SEM PAGAMENTO — e o pedido precisa continuar
+    // VENDAVEL.
+    //
+    // 'recusado' e nao 'cancelado', e a escolha e deliberada: 'cancelado'
+    // leva o pedido a um estado TERMINAL (ver TRANSICOES abaixo: nao ha
+    // aresta saindo de 'cancelado'), e a rota de pagamento so aceita pedido
+    // em 'pendente' ou 'aguardando_pagamento'. Um Pix que expirou de
+    // madrugada cancelaria o pedido, e a compradora que voltasse no dia
+    // seguinte para pagar encontraria a loja recusando o proprio pedido dela,
+    // sem saida nenhuma. 'recusado' devolve o pedido para 'pendente' — pronto
+    // para a proxima tentativa, que e o que 'recusado' ja faz com cartao
+    // negado.
+    case 'expired':
+    case 'failed':
+      return 'recusado'
+
+    default:
+      return null
+  }
+}
+
+/**
  * Transicoes validas de pedido_status. Nao ha caminho de volta a partir de
  * 'cancelado' e 'reembolsado': sao terminais, e corrigir um deles significa
  * pedido novo, nunca reabrir o antigo (ver

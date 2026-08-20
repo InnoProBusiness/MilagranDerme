@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  mapearStatusMP, transicaoPermitida, pedidoAposPagamento,
+  mapearStatusMP, mapearStatusOrder, transicaoPermitida, pedidoAposPagamento,
   geraCreditoDeComissao, geraEstornoDeComissao, ROTULOS_STATUS,
   transicaoPermitidaNaEntrega, EXIGE_POSTAGEM,
 } from '@/lib/pedido-status'
@@ -37,6 +37,118 @@ describe('traducao do status do Mercado Pago', () => {
 
   it('status desconhecido devolve null em vez de lancar', () => {
     expect(mapearStatusMP('quantum_superposition')).toBeNull()
+  })
+})
+
+/**
+ * O SEGUNDO VOCABULARIO — o da Orders API, por onde o Pix passa desde
+ * 20/08/2026 (docs/2026-08-19-migrar-pix-para-orders.md).
+ *
+ * O DEFEITO QUE ESTE BLOCO EXISTE PARA IMPEDIR e silencioso e caro: a Orders
+ * NAO diz 'approved'. Se o webhook passasse a resposta de uma order por
+ * `mapearStatusMP`, TODO status cairia em `default: return null` — inclusive a
+ * aprovacao. A compradora pagaria o Pix, o dinheiro entraria na conta, e o
+ * pedido ficaria parado em 'aguardando_pagamento', sem comissao e sem e-mail
+ * de confirmacao, sem NENHUM erro em log alem de uma linha de "status
+ * desconhecido".
+ */
+describe('traducao do status da Orders API', () => {
+  // A aprovacao. Se so um teste deste bloco puder existir, e este.
+  it('processed/accredited e o pedido pago', () => {
+    expect(mapearStatusOrder('processed', 'accredited')).toBe('aprovado')
+  })
+
+  // O estado em que todo Pix nasce — observado em producao na criacao real de
+  // uma cobranca.
+  it('action_required/waiting_transfer e Pix aguardando pagamento', () => {
+    expect(mapearStatusOrder('action_required', 'waiting_transfer')).toBe('pendente')
+    expect(mapearStatusOrder('action_required', 'waiting_payment')).toBe('pendente')
+  })
+
+  /**
+   * MESMO `status`, LEITURAS OPOSTAS — e por isso a funcao recebe os dois
+   * campos. 'waiting_capture' e limite reservado no cartao, nao dinheiro
+   * capturado: trata-lo como pendente ja seria errado, e trata-lo como
+   * aprovado pagaria comissao por uma venda que pode nunca liquidar.
+   */
+  it('action_required/waiting_capture segura o saldo em vez de aguardar a compradora', () => {
+    expect(mapearStatusOrder('action_required', 'waiting_capture')).toBe('em_analise')
+  })
+
+  it('processing e in_review seguram o saldo sem decidir nada', () => {
+    expect(mapearStatusOrder('processing', 'in_process')).toBe('em_analise')
+    expect(mapearStatusOrder('processing', 'pending_review_manual')).toBe('em_analise')
+    expect(mapearStatusOrder('in_review', 'in_review')).toBe('em_analise')
+  })
+
+  it('o dinheiro de volta e estorno, venha por refund ou por contestacao', () => {
+    expect(mapearStatusOrder('refunded', 'refunded')).toBe('estornado')
+    expect(mapearStatusOrder('charged_back', 'settled')).toBe('estornado')
+    expect(mapearStatusOrder('charged_back', 'reimbursed')).toBe('estornado')
+  })
+
+  // Mesma regra de 'in_mediation' em mapearStatusMP: disputa ABERTA com o
+  // dinheiro retido nao estorna comissao de uma briga que a Milagran pode
+  // ganhar.
+  it('contestacao em andamento segura, nao estorna', () => {
+    expect(mapearStatusOrder('charged_back', 'in_process')).toBe('em_analise')
+  })
+
+  /**
+   * O PIX QUE EXPIROU PRECISA DEIXAR O PEDIDO VENDAVEL.
+   *
+   * 'cancelado' seria o rotulo intuitivo e o errado: e um estado TERMINAL, e a
+   * rota de pagamento so aceita pedido em 'pendente' ou 'aguardando_pagamento'.
+   * A compradora que gerasse o QR a noite e voltasse no dia seguinte
+   * encontraria a loja recusando o proprio pedido dela. 'recusado' devolve o
+   * pedido a 'pendente', pronto para a proxima tentativa — e o teste logo
+   * abaixo prova o caminho inteiro, nao so o rotulo.
+   */
+  it('Pix expirado e cobranca falha nao matam o pedido', () => {
+    expect(mapearStatusOrder('expired', 'expired')).toBe('recusado')
+    expect(mapearStatusOrder('failed', 'rejected_by_issuer')).toBe('recusado')
+  })
+
+  it('Pix expirado devolve o pedido para pendente, e nao para um beco sem saida', () => {
+    const status = mapearStatusOrder('expired', 'expired')!
+    expect(pedidoAposPagamento(status, 'aguardando_pagamento')).toBe('pendente')
+  })
+
+  // A Orders escreve 'canceled' com um L; /v1/payments escreve 'cancelled'
+  // com dois. Os dois precisam cair no mesmo lugar.
+  it('canceled e cancelled sao o mesmo estado', () => {
+    expect(mapearStatusOrder('canceled', 'canceled')).toBe('cancelado')
+    expect(mapearStatusOrder('cancelled', 'cancelled')).toBe('cancelado')
+  })
+
+  it('created e a order que ainda nao foi processada', () => {
+    expect(mapearStatusOrder('created', 'created')).toBe('pendente')
+  })
+
+  /**
+   * Estorno PARCIAL continua sendo venda paga. O ENUM nao tem "pago menos um
+   * pedaco", e devolver 'estornado' reverteria a comissao INTEIRA de uma venda
+   * desfeita pela metade. E o mesmo que `/v1/payments` ja faz: la um pagamento
+   * parcialmente estornado permanece 'approved'.
+   */
+  it('estorno parcial continua sendo pedido pago', () => {
+    expect(mapearStatusOrder('processed', 'partially_refunded')).toBe('aprovado')
+  })
+
+  // A rede embaixo de tudo: o que nao e reconhecido nao vira pedido pago por
+  // engano. Vai para a fila de processado_em NULL.
+  it('par desconhecido devolve null em vez de adivinhar', () => {
+    expect(mapearStatusOrder('quantum_superposition', 'x')).toBeNull()
+    expect(mapearStatusOrder('', '')).toBeNull()
+    // 'approved' e do OUTRO vocabulario: nao pode ser aceito aqui por acidente.
+    expect(mapearStatusOrder('approved', '')).toBeNull()
+  })
+
+  // E a reciproca: o vocabulario da Orders nao pode ser lido pela funcao de
+  // /v1/payments. Se um dia alguem trocar a chamada de lugar, este teste cai.
+  it('mapearStatusMP nao entende o vocabulario da Orders', () => {
+    expect(mapearStatusMP('processed')).toBeNull()
+    expect(mapearStatusMP('action_required')).toBeNull()
   })
 })
 

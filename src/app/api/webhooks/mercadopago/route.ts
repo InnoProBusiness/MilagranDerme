@@ -1,7 +1,9 @@
 import { getDb } from '@/lib/db'
 import { verificarAssinaturaMP } from '@/lib/webhook-mp'
-import { buscarPagamentoMP, segredoDoWebhook, ErroMercadoPago } from '@/lib/mercadopago'
-import { mapearStatusMP } from '@/lib/pedido-status'
+import {
+  buscarPagamentoMP, buscarOrderMP, segredoDoWebhook, ErroMercadoPago,
+} from '@/lib/mercadopago'
+import { mapearStatusMP, mapearStatusOrder } from '@/lib/pedido-status'
 import { atualizarStatusPorProvedorId } from '@/repositories/pagamentos'
 import { conciliarPagamento } from '@/repositories/conciliacao'
 import { enviarConfirmacaoDePedido } from '@/lib/email-pedido'
@@ -84,24 +86,26 @@ export async function POST(req: Request) {
     return Response.json({ error: 'assinatura_invalida' }, { status: 401 })
   }
 
-  // Notificacao de outro assunto (merchant_order, plano, assinatura). Nada a
-  // fazer, e nada a reenviar.
-  if (tipo !== 'payment' || !dataId) {
+  // O que ha para tratar nesta notificacao — e em qual das duas APIs do Mercado
+  // Pago reler a cobranca. Ver `notificacaoTratavel`, logo abaixo.
+  const notificacao = notificacaoTratavel(tipo, dataId)
+  if (notificacao === null) {
     return Response.json({ ok: true, ignorado: tipo ?? 'sem_tipo' }, { status: 200 })
   }
+  const { fonte, recursoId } = notificacao
 
   // BARREIRA 2. Sem x-request-id nao ha chave de entrega; usar o id do
   // pagamento no lugar tornaria a SEGUNDA notificacao do mesmo pagamento
   // (pendente -> aprovado) um duplicado, e o pedido nunca sairia de
   // aguardando_pagamento. Por isso o fallback carrega o status junto.
-  const chaveDeEntrega = requestId ?? `${dataId}:${String(corpo.action ?? 'sem_acao')}`
+  const chaveDeEntrega = requestId ?? `${recursoId}:${String(corpo.action ?? 'sem_acao')}`
 
   const registrado = await getDb()
     .insertInto('webhook_eventos')
     .values({
       evento_id: chaveDeEntrega,
-      tipo,
-      recurso_id: dataId,
+      tipo: notificacao.tipo,
+      recurso_id: recursoId,
       payload: JSON.stringify(corpo),
     })
     .onConflict((oc) => oc.columns(['provedor', 'evento_id']).doNothing())
@@ -118,7 +122,7 @@ export async function POST(req: Request) {
   // "pedido pago" em fato verificado.
   let pagamento
   try {
-    pagamento = await buscarPagamentoMP(dataId)
+    pagamento = fonte === 'order' ? await buscarOrderMP(recursoId) : await buscarPagamentoMP(recursoId)
   } catch (e) {
     const detalhe = e instanceof ErroMercadoPago ? e.message : 'erro desconhecido'
     console.error('[webhook-mp] falha ao reler o pagamento:', detalhe)
@@ -127,9 +131,15 @@ export async function POST(req: Request) {
     return Response.json({ error: 'releitura_falhou' }, { status: 503 })
   }
 
-  const status = mapearStatusMP(pagamento.status)
+  // O VOCABULARIO SEGUE A PORTA POR ONDE A COBRANCA FOI LIDA. Uma order
+  // aprovada diz 'processed'/'accredited'; um pagamento aprovado diz
+  // 'approved'. Passar uma pela funcao da outra devolve null para TUDO — e o
+  // pedido pago ficaria parado em `aguardando_pagamento` para sempre.
+  const status = fonte === 'order'
+    ? mapearStatusOrder(pagamento.status, pagamento.statusDetail)
+    : mapearStatusMP(pagamento.status)
   if (status === null) {
-    console.error('[webhook-mp] status desconhecido:', pagamento.status)
+    console.error(`[webhook-mp] status desconhecido (${fonte}):`, pagamento.status, pagamento.statusDetail)
     // 200: reenviar nao ajuda, o status continuaria desconhecido. Fica na
     // fila de processado_em NULL para inspecao humana.
     return Response.json({ ok: true, statusDesconhecido: pagamento.status }, { status: 200 })
@@ -176,6 +186,53 @@ export async function POST(req: Request) {
     console.error('[webhook-mp] falha ao conciliar:', e instanceof Error ? e.message : 'erro')
     return Response.json({ error: 'conciliacao_falhou' }, { status: 503 })
   }
+}
+
+/**
+ * O QUE HA PARA TRATAR nesta notificacao, e em qual API reler a cobranca que
+ * ela anuncia — ou `null` para "nao e conosco".
+ *
+ * DEVOLVE UM OBJETO, e nao so a fonte, porque quem chama precisa dos tres
+ * campos ja sem `null`: `tipo` e `recurso_id` vao para `webhook_eventos`, que
+ * nao aceita nulo em `tipo`, e `recursoId` e o argumento da releitura.
+ *
+ * DOIS TOPICOS, e hoje SO UM DELES E EXERCITADO. Pix e cartao nascem os dois em
+ * `/v1/payments` e notificam no topico `payment` — em 20/08/2026 duas
+ * notificacoes reais chegaram por aqui, passaram na assinatura e foram relidas
+ * pela API. O topico `order` esta aceito de antemao porque `criarOrderPixMP`
+ * (src/lib/mercadopago.ts) e a saida de emergencia do Pix: se ela precisar ser
+ * ligada, o webhook ja entende o que vai chegar, e a troca nao vira dois
+ * deploys encadeados com pagamento perdido no meio.
+ *
+ * ATENCAO: aceitar o topico aqui NAO faz a notificacao chegar. O evento `order`
+ * tambem precisa estar marcado no painel do Mercado Pago. Nunca foi visto
+ * chegando — ver a lista de pre-requisitos em src/lib/mercadopago.ts.
+ *
+ * A GUARDA DO ID NAO E PARANOIA. Uma order Pix contem um pagamento com id ULID
+ * (`PAY01...`), e esse id NAO EXISTE em `/v1/payments/{id}` — medido em
+ * producao, a API responde `resource not found`. Se uma notificacao de topico
+ * `payment` chegar carregando um ULID, a releitura falha, o handler devolve 503
+ * pedindo reenvio, e o Mercado Pago reenvia a mesma coisa em laco por horas —
+ * uma fila de retentativas que NUNCA vai passar, escondendo as notificacoes que
+ * importam. Ids de `/v1/payments` sao numericos, sempre; qualquer outra coisa
+ * no topico `payment` e ruido de um recurso que nao sabemos ler, e ruido se
+ * responde com 200.
+ *
+ * O evento continua sendo GRAVADO em `webhook_eventos` so quando ha o que
+ * fazer: esta funcao roda ANTES da gravacao, exatamente como o filtro de topico
+ * que ela substituiu.
+ */
+function notificacaoTratavel(
+  tipo: string | null,
+  dataId: string | null,
+): { tipo: string; recursoId: string; fonte: 'order' | 'payment' } | null {
+  if (!dataId) return null
+  if (tipo === 'order') return { tipo, recursoId: dataId, fonte: 'order' }
+  if (tipo === 'payment') {
+    return /^\d+$/.test(dataId) ? { tipo, recursoId: dataId, fonte: 'payment' } : null
+  }
+  // merchant_order, plano, assinatura, topico novo que o painel ligou sozinho.
+  return null
 }
 
 export async function GET() {
