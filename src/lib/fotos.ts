@@ -47,13 +47,20 @@
  * somavam 6,5 MB e as publicadas somam 127 KB.
  *
  * COMO A DO HERO FOI PREPARADA, para as proximas seguirem o mesmo caminho: o
- * arquivo original tinha 1,9 MB em PNG. Foi reduzido para 1100px de largura —
+ * arquivo original tinha 1,5 MB em PNG. Foi reduzido para 1100px de largura —
  * o dobro da coluna em que ele aparece no desktop (~490px), o que cobre tela
- * de densidade 2x — e salvo em WebP com qualidade 84, chegando a 121 KB. As
- * qualidades 78/84/90 foram comparadas: 84 e onde a curva para de valer a pena,
- * e os gradientes escuros da foto (onde WebP costuma criar bandas) foram
- * conferidos ampliados antes de publicar. Os originais ficam em `design/`, para
- * que um recorte novo saia da foto e nao de um JPEG ja comprimido.
+ * de densidade 2x — e salvo em WebP com qualidade 84, chegando a 93 KB. As
+ * qualidades 78/84/90 foram comparadas duas vezes (a foto do hero foi trocada
+ * em 20/08/2026) e 84 venceu nas duas.
+ *
+ * UMA LICAO DA SEGUNDA COMPARACAO, para nao custar tempo de novo: ampliar o
+ * gradiente escuro em 3,5x faz o q84 parecer blocado e assusta. No brilho REAL
+ * — que e como a compradora ve — q84 e q90 sao indistinguiveis, e o artefato
+ * vive em valores quase pretos que ninguem percebe. Compare no brilho real
+ * antes de gastar 30 KB a mais.
+ *
+ * Os originais ficam em `design/`, para que um recorte novo saia da foto e nao
+ * de um JPEG ja comprimido.
  *
  * TAMANHO. A foto do hero e a unica com `preload` (§33): ela e o maior
  * elemento acima da dobra e define o LCP. Mire abaixo de 250 KB nela; as
@@ -80,14 +87,21 @@ export type Foto = {
 export const FOTO_HERO: Foto = {
   src: '/assets/kit/kit-milagran-hero.webp',
   /*
-    O `alt` DESCREVE O QUE A FOTO MOSTRA, e nao o que gostariamos que ela
-    mostrasse: sao a caixa e TRES frascos. O papel removedor, que e o quarto
-    item do kit, nao aparece nesta imagem — prometer os quatro aqui seria a
-    unica pessoa que depende do `alt` recebendo uma descricao que nao bate com
-    a foto ao lado do texto.
+    O `alt` DESCREVE O QUE A FOTO MOSTRA, e ele MUDOU JUNTO COM A FOTO em
+    20/08/2026.
+    A imagem anterior trazia a caixa e apenas tres itens, e este texto dizia
+    isso, com o comentario explicando que o papel removedor ficava de fora. A
+    nova mostra o kit COMPLETO — os quatro produtos, cada um com o rotulo
+    legivel.
+
+    Trocar o arquivo sem trocar esta linha e o jeito silencioso de a descricao
+    apodrecer: nada quebra, nada avisa, e quem depende do texto alternativo
+    passa a receber um inventario que nao bate com a foto. E o mesmo cuidado
+    que o `alt` do papel removedor exige logo abaixo.
   */
-  alt: 'A caixa preta do Kit Milagran, com o nome em dourado, ao lado dos frascos '
-    + 'do sabonete líquido, do hidratante e do pote da máscara, sobre uma bandeja espelhada',
+  alt: 'O Kit Milagran completo: a caixa preta com o nome em dourado e, à frente, '
+    + 'o sabonete líquido facial, a máscara extratora, o hidratante facial e a '
+    + 'caixa do papel removedor',
   largura: 1100,
   altura: 1375,
 }
@@ -109,12 +123,12 @@ export type ProdutoDoKit = 'sabonete' | 'mascara' | 'papel' | 'hidratante'
   As fotos oficiais vem em 2:3 (1024x1536), com o produto centrado e fundo
   escuro em volta. Recortar aquilo num quadrado centrado corta a VALVULA do
   sabonete, que fica na parte alta do quadro — o card mostraria um frasco
-  decapitado. Em 3:4 o corte come so fundo, nas duas fotos ja entregues.
+  decapitado. Em 3:4 o corte come so fundo, nas quatro.
 
-  `object-fit: cover` continua em .kit-card__foto de proposito, mesmo com os
-  arquivos ja publicados na proporcao certa: faltam duas fotos, e se elas
-  chegarem em outro enquadramento a grade continua uniforme em vez de ganhar um
-  card mais alto que os outros.
+  `object-fit: cover` continua em .kit-card__foto de proposito, mesmo com as
+  quatro ja publicadas na proporcao certa: uma foto substituida um dia (arte
+  nova, produto reformulado) pode chegar em outro enquadramento, e a grade
+  continua uniforme em vez de ganhar um card mais alto que os outros.
 */
 export const FOTOS_DOS_PRODUTOS: Record<ProdutoDoKit, Foto> = {
   sabonete: {
