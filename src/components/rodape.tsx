@@ -30,7 +30,18 @@ export function Rodape() {
           <p>CNPJ {CNPJ}</p>
         </div>
 
-        <div className="rodape__coluna">
+        {/*
+          `id="contato"` e o alvo do item "Contato" do menu de §25. Ele mora no
+          RODAPE, e nao numa secao propria da home, porque os canais de contato
+          da marca ja estao aqui e uma secao separada seria a mesma lista escrita
+          duas vezes — que e como duas superficies acabam publicando telefones
+          diferentes.
+
+          Consequencia que vale saber: como o rodape aparece em TODAS as rotas,
+          `#contato` funciona no checkout e no painel tambem, sem voltar para a
+          home.
+        */}
+        <div className="rodape__coluna" id="contato">
           <h2>Contato</h2>
           <ul className="rodape__lista">
             <li>

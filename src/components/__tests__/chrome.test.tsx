@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
+
+/**
+ * O CABECALHO VIROU CLIENT COMPONENT em 20/08/2026 (§3/§4 pedem menu sanfona,
+ * e menu que abre precisa de estado) e passou a ler `usePathname` para decidir
+ * o que mostrar: a loja tem menu, o painel e o balcao nao.
+ *
+ * Fora do App Router `usePathname` devolve null e o componente ainda funciona
+ * — mas um mock explicito e o que permite testar as DUAS decisoes (loja e
+ * operacao) em vez de so a que o default entrega.
+ */
+const rota = vi.hoisted(() => ({ atual: '/' }))
+vi.mock('next/navigation', () => ({ usePathname: () => rota.atual }))
+
 import { Cabecalho } from '@/components/cabecalho'
 import { Rodape } from '@/components/rodape'
 
@@ -31,12 +44,85 @@ describe('Cabecalho', () => {
     expect(screen.getAllByRole('link')[0]).toBe(atalho)
   })
 
-  it('nao anuncia as telas de operacao (login, balcao, painel)', () => {
+  /**
+   * §24 INVERTEU METADE DESTA REGRA, e vale registrar o que mudou e o que
+   * NAO mudou.
+   *
+   * Ate 20/08/2026 o cabecalho nao anunciava nenhuma tela de operacao —
+   * login incluido — para nao convidar visitante a bater numa porta que
+   * devolve 401. §24 pede um botao ACESSAR no header, apontando para a area
+   * de acesso que ja existe: quem tem conta (representante, vendedor,
+   * administracao) precisa achar a entrada sem decorar a URL.
+   *
+   * O QUE CONTINUA VALENDO: /venda e /admin seguem fora. Sao telas de
+   * operacao com sessao propria e publico fechado; anuncia-las na loja nao
+   * serve a ninguem.
+   */
+  it('anuncia o acesso de §24, mas nao o balcao nem o painel', () => {
     render(<Cabecalho />)
     const destinos = screen.getAllByRole('link').map((a) => a.getAttribute('href'))
-    expect(destinos).not.toContain('/entrar')
+    expect(destinos).toContain('/entrar')
     expect(destinos).not.toContain('/venda')
     expect(destinos).not.toContain('/admin')
+  })
+
+  // §3 e §25: a barra leva os destinos primarios e os dois botoes; o menu
+  // completo mora na gaveta do hamburger.
+  it('traz o menu de §25 e os dois botoes de §3', () => {
+    render(<Cabecalho />)
+
+    const destinos = screen.getAllByRole('link').map((a) => a.getAttribute('href'))
+    for (const esperado of ['/#a-milagran', '/#o-kit', '/#lancamento', '/#como-funciona', '/#contato']) {
+      expect(destinos).toContain(esperado)
+    }
+    // A compra leva para o checkout embutido na home, nunca para uma tela nova.
+    expect(destinos).toContain('/#comprar')
+    // E o convite de representante continua alcancavel pelo menu (§23).
+    expect(destinos).toContain('/seja-representante.html')
+  })
+
+  // As ancoras sao ABSOLUTAS porque este cabecalho aparece no checkout, no
+  // painel e no balcao: `#o-kit` relativo la dentro rolaria a propria tela em
+  // vez de voltar para a loja.
+  it('as ancoras do menu sao absolutas, para funcionarem fora da home', () => {
+    rota.atual = '/checkout'
+    render(<Cabecalho />)
+
+    const ancoras = screen.getAllByRole('link')
+      .map((a) => a.getAttribute('href') ?? '')
+      .filter((h) => h.includes('#') && h !== '#conteudo')
+    expect(ancoras.length).toBeGreaterThan(0)
+    for (const href of ancoras) expect(href.startsWith('/#')).toBe(true)
+    rota.atual = '/'
+  })
+
+  /**
+   * O painel e o balcao tem chrome proprio e publico proprio: quem esta ali
+   * esta trabalhando, nao comprando. Um "COMPRAR" dourado por cima de uma
+   * tabela de pedidos e ruido — mas a MARCA continua, e continua clicavel,
+   * porque e a saida do operador de volta para a loja.
+   */
+  it('nas telas de operacao mostra so a marca', () => {
+    rota.atual = '/admin/pedidos'
+    render(<Cabecalho />)
+
+    const destinos = screen.getAllByRole('link').map((a) => a.getAttribute('href'))
+    expect(destinos).toContain('/')
+    expect(destinos).not.toContain('/#comprar')
+    expect(destinos).not.toContain('/entrar')
+    expect(screen.queryByRole('button', { name: /menu/i })).toBeNull()
+    rota.atual = '/'
+  })
+
+  // §4: a gaveta existe no DOM fechada (para o conteudo estar no HTML servido)
+  // e `inert` e quem tira os sete links do caminho do Tab. Sem ele, o teclado
+  // passeia por links invisiveis antes de chegar ao conteudo.
+  it('a gaveta comeca fechada e fora do alcance do teclado', () => {
+    render(<Cabecalho />)
+
+    expect(screen.getByTestId('gaveta')).toHaveAttribute('inert')
+    expect(screen.getByRole('button', { name: /abrir o menu/i }))
+      .toHaveAttribute('aria-expanded', 'false')
   })
 })
 

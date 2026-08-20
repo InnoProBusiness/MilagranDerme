@@ -105,49 +105,93 @@ async function renderizarHome(searchParams: { cupom?: string | string[] } = {}) 
 }
 
 describe('Home da loja de lancamento', () => {
-  it('abre com a manchete e o subtitulo de §6', async () => {
+  /**
+   * A MANCHETE MUDA DE TEMPO VERBAL, e as duas versoes sao copy aprovada: §6
+   * escreve "CHEGOU" e §7 oferece "ESTA CHEGANDO" como alternativa. Publicar
+   * "chegou" antes de 25/08 seria afirmar um fato que ainda nao aconteceu na
+   * mesma pagina que avisa, logo abaixo, que os pedidos so saem no lancamento.
+   */
+  it('antes do lançamento abre com a manchete no futuro (§7)', async () => {
     await renderizarHome()
 
     expect(screen.getByRole('heading', {
       level: 1,
-      name: 'A MILAGRAN ESTÁ OFICIALMENTE NO MERCADO.',
+      name: 'UMA NOVA FORMA DE CUIDAR DA PELE ESTÁ CHEGANDO.',
     })).toBeInTheDocument()
-    expect(screen.getByText('Uma nova experiência em limpeza de pele chegou.'))
-      .toBeInTheDocument()
+    expect(screen.getByText(/15 anos de história deram origem/)).toBeInTheDocument()
   })
 
-  // §18 e uma ORDEM, nao uma lista de assuntos: preco antes de produto responde
-  // o que ninguem perguntou ainda. Travar a sequencia dos <h2> e a forma barata
-  // de o requisito sobreviver ao proximo redesenho.
-  it('conta a jornada de §18 na ordem: o que e, kit, preco, pagar, receber, comprar', async () => {
+  it('depois do lançamento a manchete passa para o presente (§6)', async () => {
+    vi.setSystemTime(DEPOIS_DO_LANCAMENTO)
+    await renderizarHome()
+
+    expect(screen.getByRole('heading', {
+      level: 1,
+      name: 'A NOVA EXPERIÊNCIA EM LIMPEZA DE PELE CHEGOU.',
+    })).toBeInTheDocument()
+    expect(screen.getByText(/Conheça a Milagran, uma nova proposta/)).toBeInTheDocument()
+  })
+
+  /**
+   * §36 E UMA ORDEM, nao uma lista de assuntos — e a ordem mudou em
+   * 20/08/2026.
+   *
+   * A sequencia antiga (§18 do documento de 16/08) respondia perguntas: o que
+   * e -> kit -> preco -> pagar -> receber -> comprar. A nova constroi desejo
+   * antes de responder: marca -> historia -> pertencimento -> produto ->
+   * procedimento -> prova -> data -> escassez -> compra -> representantes.
+   * Sao dois funis diferentes, e embaralhar o novo devolve a pagina ao
+   * anterior sem ninguem perceber.
+   */
+  it('conta a jornada de §36 na ordem, da identidade ate a compra', async () => {
     await renderizarHome()
 
     const titulos = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(titulos).toEqual([
-      'O que é a Milagran',
-      'O que vem no kit',
-      'Quanto custa',
-      'Como pagar',
-      'Como receber',
-      'Comprar o kit',
+      'Não é apenas uma limpeza de pele.',
+      '15 anos de história. Um propósito que agora ganha vida.',
+      'Uma nova oportunidade para quem vive da beleza.',
+      'Conheça o Kit Milagran.',
+      'Como funciona.',
+      'Não é só sobre o produto. É sobre a experiência.',
+      '25 de agosto. O dia em que a Milagran chega ao mercado.',
+      'Apenas 50 kits disponíveis no evento.',
+      'Uma nova experiência começa agora.',
+      'Quer levar a Milagran com você?',
     ])
   })
 
-  it('DINHEIRO: mostra o preco do kit formatado em reais', async () => {
+  /**
+   * §8: O PRECO NAO APARECE ANTES DO CHECKOUT.
+   *
+   * Ate 20/08/2026 esta home mostrava o valor DUAS vezes — no hero e numa
+   * secao inteira "Quanto custa". A regra nova e curiosidade -> desejo ->
+   * percepcao de valor -> decisao -> checkout, e o numero so entra quando a
+   * compradora ja esta avancando para pagar.
+   *
+   * O QUE ESTE TESTE NAO PROIBE: o preco DENTRO do checkout embutido. Aquele
+   * bloco E o checkout de §20 — e o unico lugar da pagina autorizado a
+   * imprimir o valor. Por isso a assercao nao e "nao existe R$ 249,00 na
+   * pagina", que seria falsa e forcaria alguem a afrouxa-la; e "todo R$ 249,00
+   * que existir esta dentro de #comprar".
+   */
+  it('DINHEIRO: o preço não aparece fora do checkout (§8)', async () => {
     await renderizarHome()
 
-    expect(screen.getByTestId('preco')).toHaveTextContent('R$ 249,00')
-    // §9: o valor unitario tem linha propria na jornada, com rotulo, para quem
-    // vai comprar mais de um conseguir conferir a conta.
-    //
-    // `getAllByTestId`, e nao `getByTestId`: desde que o checkout passou a ser
-    // montado na propria home, "Valor unitário" aparece DUAS vezes — na secao
-    // de preco e dentro do passo 1 do checkout. As duas sao legitimas e leem o
-    // mesmo `kit.precoCentavos` pela mesma funcao de formatacao, entao o que
-    // importa e que NENHUMA delas divirja.
+    // O bloco de preco do hero e a secao "Quanto custa" deixaram de existir.
+    expect(screen.queryByTestId('preco')).toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Quanto custa' })).toBeNull()
+
+    const compra = document.querySelector('#comprar') as HTMLElement
+    expect(compra).not.toBeNull()
+
+    // Todo valor impresso mora dentro da secao de compra.
     const unitarios = screen.getAllByTestId('valor-unitario')
     expect(unitarios.length).toBeGreaterThan(0)
-    for (const linha of unitarios) expect(linha).toHaveTextContent('R$ 249,00')
+    for (const linha of unitarios) {
+      expect(linha).toHaveTextContent('R$ 249,00')
+      expect(compra.contains(linha)).toBe(true)
+    }
   })
 
   // A home nao conhece o CEP de ninguem, entao o unico valor de frete que ela
@@ -159,15 +203,32 @@ describe('Home da loja de lancamento', () => {
     expect(document.body).not.toHaveTextContent('R$ 0,00')
   })
 
-  // A frase do cartao online mudou em 19/08/2026, com a retirada no local:
-  // "Recebe pelos Correios" deixou de descrever a compra online inteira. Este
-  // cartao ENUMERA as formas de receber o kit, e um titulo que promete
-  // transportadora manda para o frete quem mora em Goiania e nao precisa dele.
-  it('traz os dois caminhos de §7/§8 com as frases do documento', async () => {
+  // §17, palavra por palavra: o que a compradora presente no evento leva na
+  // hora. As tres palavras sao uma frase so — se virarem lista, o leitor de
+  // tela anuncia "lista de 3 itens" para o que e uma sentenca.
+  it('traz o lema do evento de §17', async () => {
     await renderizarHome()
 
-    expect(screen.getByText('Comprou → Pagou → Levou na hora.')).toBeInTheDocument()
-    expect(screen.getByText('Comprou → Pagou → Recebe em casa ou retira aqui.')).toBeInTheDocument()
+    const lema = screen.getByTestId('lema-presencial')
+    expect(lema).toHaveTextContent('Comprou.')
+    expect(lema).toHaveTextContent('Pagou.')
+    expect(lema).toHaveTextContent('Levou.')
+  })
+
+  /**
+   * §17: depois dos 50 presenciais a compra CONTINUA, pelos Correios. A frase
+   * muda de tempo verbal conforme o lote — prometer "continuará disponível"
+   * depois de esgotado deixaria a compradora achando que ainda ha kit no
+   * balcao.
+   */
+  it('explica o que acontece depois que os kits do evento acabam', async () => {
+    await renderizarHome()
+    expect(document.body).toHaveTextContent(/continuará disponível pelo site/)
+
+    vi.mocked(saldoDoEstoque).mockResolvedValue(saldoPresencial(0))
+    document.body.innerHTML = ''
+    await renderizarHome()
+    expect(document.body).toHaveTextContent(/continua disponível pelo site/)
   })
 
   /**
@@ -184,16 +245,53 @@ describe('Home da loja de lancamento', () => {
     expect(texto).toMatch(new RegExp(`retirada no local.*${PRAZO_RETIRADA_DIAS} dias`, 'i'))
   })
 
-  // Busca DENTRO da secao "Como pagar": PIX e cartao sao citados tambem nos
-  // dois cartoes de entrega e na chamada final, e uma consulta a pagina inteira
-  // acharia varios nos. De quebra, `getByRole('region', {name})` so acha a
-  // secao se o <h2> continuar sendo o nome acessivel dela.
-  it('anuncia as duas formas de pagamento de §7', async () => {
+  // §20: as duas formas de pagamento continuam anunciadas — agora dentro da
+  // secao de compra, e nao numa secao propria. `getByRole('region', {name})`
+  // so acha a secao se o <h2> continuar sendo o nome acessivel dela.
+  it('anuncia as duas formas de pagamento de §20', async () => {
     await renderizarHome()
 
-    const secao = within(screen.getByRole('region', { name: 'Como pagar' }))
-    expect(secao.getByText(/Cartão de crédito/)).toBeInTheDocument()
-    expect(secao.getByText(/PIX/)).toBeInTheDocument()
+    // Case-insensitive de proposito: a chamada da secao escreve "cartão de
+    // crédito" no meio da frase e os chips do checkout escrevem "Cartão de
+    // crédito" capitalizado. As duas dizem a mesma coisa, e travar a caixa
+    // aqui quebraria o teste na primeira vez que alguem reescrevesse a frase.
+    const secao = screen.getByRole('region', { name: 'Uma nova experiência começa agora.' })
+    expect(secao.textContent).toMatch(/cartão de crédito/i)
+    expect(secao.textContent).toMatch(/pix/i)
+  })
+
+  /**
+   * §14 pede para EVITAR afirmacao medica ou resultado nao documentado, e a
+   * secao do procedimento e o lugar mais facil de escorregar para "trata",
+   * "elimina", "regenera". Este teste trava a contencao: se alguem enriquecer
+   * a copy dos quatro passos com promessa clinica, ele fica vermelho.
+   */
+  it('§14: a descrição do procedimento não faz afirmação médica', async () => {
+    await renderizarHome()
+
+    const secao = screen.getByRole('region', { name: 'Como funciona.' })
+    const texto = secao.textContent ?? ''
+    for (const proibida of [/\btrata\b/i, /\bcura\b/i, /\belimina\b/i, /\bregenera\b/i, /\bacne\b/i]) {
+      expect(texto).not.toMatch(proibida)
+    }
+    // E os quatro passos de §14 continuam la, na ordem.
+    expect(secao.textContent).toMatch(/Preparação[\s\S]*Aplicação[\s\S]*Extração[\s\S]*Finalização/)
+  })
+
+  /**
+   * §23: a funcionalidade de representante CONTINUA, mas deixou de ser a CTA
+   * principal. As duas metades importam: sumir com o convite quebraria o
+   * recrutamento; promove-lo a botao solido roubaria a atencao da compra, que
+   * e o objetivo do lancamento (§39).
+   */
+  it('§23: mantém o convite de representante, e discreto', async () => {
+    await renderizarHome()
+
+    const link = screen.getByRole('link', { name: /quero representar a milagran/i })
+    expect(link).toHaveAttribute('href', '/seja-representante.html')
+    // Fantasma, nunca solido: um botao dourado aqui competiria com o checkout.
+    expect(link.className).toContain('btn--ghost')
+    expect(link.className).not.toContain('btn--solid')
   })
 
   it('mostra o contador ao vivo com o saldo lido no servidor', async () => {
@@ -215,14 +313,43 @@ describe('Home da loja de lancamento', () => {
       .toHaveTextContent('Últimos 3 kits disponíveis para compra presencial.')
   })
 
-  describe('CTA (§6, §5/§11)', () => {
-    it('e "GARANTIR MEU KIT" enquanto ha kit para levar na hora', async () => {
+  describe('CTA (§6, §9, §19)', () => {
+    /**
+     * §6 e §9: o hero tem DUAS CTAs com pesos diferentes, e a principal NAO e
+     * a de compra.
+     *
+     * §39 manda a pagina nao entregar tudo no primeiro bloco. Quem chega sem
+     * conhecer a marca precisa de um convite a conhecer; o botao de comprar
+     * fica ao lado, fantasma, para quem ja decidiu. Inverter os dois devolve
+     * a pagina ao funil antigo.
+     */
+    it('o hero convida a conhecer, com a compra ao lado', async () => {
       await renderizarHome()
 
-      const cta = screen.getByTestId('cta-principal')
+      const principal = screen.getByTestId('cta-principal')
+      expect(principal).toHaveTextContent('Quero conhecer a Milagran')
+      expect(principal).toHaveAttribute('href', '#a-milagran')
+      expect(principal.className).toContain('btn--solid')
+
+      const secundaria = screen.getByTestId('cta-secundaria')
+      expect(secundaria).toHaveTextContent('Garantir meu kit')
+      // ANCORA, e nao /comprar: a compra acontece nesta pagina, no fim dela.
+      expect(secundaria).toHaveAttribute('href', '#comprar')
+    })
+
+    /**
+     * §19: a troca de rotulo desceu do hero para junto do CONTADOR.
+     *
+     * Ate 20/08/2026 ela vivia no botao do topo. O botao do topo e lido por
+     * quem ainda nao sabe que existe um lote presencial, e "COMPRAR ONLINE"
+     * ali responderia uma pergunta que ninguem fez. Ao lado do numero que a
+     * justifica, a mesma palavra passa a fazer sentido.
+     */
+    it('a CTA da escassez é "GARANTIR MEU KIT" enquanto há kit no evento', async () => {
+      await renderizarHome()
+
+      const cta = screen.getByTestId('cta-escassez')
       expect(cta).toHaveTextContent('GARANTIR MEU KIT')
-      // ANCORA, e nao mais /comprar: a compra acontece nesta pagina, no fim
-      // dela. O botao do hero desce ate o checkout em vez de trocar de tela.
       expect(cta).toHaveAttribute('href', '#comprar')
     })
 
@@ -230,12 +357,29 @@ describe('Home da loja de lancamento', () => {
       vi.mocked(saldoDoEstoque).mockResolvedValue(saldoPresencial(0))
       await renderizarHome()
 
-      expect(screen.getByTestId('cta-principal')).toHaveTextContent('COMPRAR ONLINE')
-      // O destino NAO muda com o esgotamento: o canal online nao tem teto
-      // (§4), entao os dois rotulos levam a uma compra que existe.
-      expect(screen.getByTestId('cta-principal')).toHaveAttribute('href', '#comprar')
+      expect(screen.getByTestId('cta-escassez')).toHaveTextContent('COMPRAR ONLINE')
+      // O destino NAO muda com o esgotamento: o canal online nao tem teto,
+      // entao os dois rotulos levam a uma compra que existe.
+      expect(screen.getByTestId('cta-escassez')).toHaveAttribute('href', '#comprar')
       expect(screen.getByTestId('contador-estoque'))
         .toHaveTextContent('Os 50 kits disponíveis para compra presencial foram esgotados.')
+      // O hero NAO muda: ele continua convidando a conhecer a marca.
+      expect(screen.getByTestId('cta-principal')).toHaveTextContent('Quero conhecer a Milagran')
+    })
+
+    /**
+     * §32: a barra fixa do celular carrega a MESMA palavra da CTA de escassez.
+     * Duas superficies falando do mesmo lote com rotulos diferentes e a
+     * divergencia que src/lib/escassez.ts existe para impedir.
+     */
+    it('a barra fixa do celular acompanha o rótulo da escassez', async () => {
+      await renderizarHome()
+      expect(screen.getByTestId('barra-compra-mobile')).toHaveTextContent('GARANTIR MEU KIT')
+
+      vi.mocked(saldoDoEstoque).mockResolvedValue(saldoPresencial(0))
+      document.body.innerHTML = ''
+      await renderizarHome()
+      expect(screen.getByTestId('barra-compra-mobile')).toHaveTextContent('COMPRAR ONLINE')
     })
 
     /**
@@ -273,17 +417,20 @@ describe('Home da loja de lancamento', () => {
       vi.mocked(saldoDoEstoque).mockResolvedValue(saldoPresencial(-3))
       await renderizarHome()
 
-      expect(screen.getByTestId('cta-principal')).toHaveTextContent('COMPRAR ONLINE')
+      expect(screen.getByTestId('cta-escassez')).toHaveTextContent('COMPRAR ONLINE')
       expect(document.body).not.toHaveTextContent('-3')
     })
   })
 
-  describe('tempo verbal (§3)', () => {
+  describe('tempo verbal (§21)', () => {
+    // §21, palavra por palavra: "GARANTA SEU KIT ANTES DO LANÇAMENTO", com o
+    // prazo dito claramente. A frase do prazo NAO e reescrita aqui — e a
+    // constante AVISO_PRE_VENDA, a mesma que o checkout mostra.
     it('antes de 25/08 fala no futuro e usa a constante AVISO_PRE_VENDA', async () => {
       await renderizarHome()
 
       const prazo = screen.getByTestId('prazo-online')
-      expect(prazo).toHaveTextContent('No dia 25 de agosto os pedidos serão liberados')
+      expect(prazo).toHaveTextContent('Garanta seu kit antes do lançamento')
       expect(prazo).toHaveTextContent(AVISO_PRE_VENDA)
     })
 
@@ -307,8 +454,13 @@ describe('Home da loja de lancamento', () => {
       // ...e diz a verdade sobre o que nao ha.
       expect(screen.getByTestId('sem-kit')).toHaveTextContent(/Nenhum kit está disponível/)
       expect(screen.queryByTestId('preco')).toBeNull()
+      // NENHUMA CTA: as duas do hero sao ancoras para secoes que este estado
+      // nao renderiza. Botao que rola para lugar nenhum e pior que botao
+      // nenhum — a visitante conclui que o site quebrou em vez de ler o aviso.
       expect(screen.queryByTestId('cta-principal')).toBeNull()
-      expect(screen.queryByTestId('cta-final')).toBeNull()
+      expect(screen.queryByTestId('cta-secundaria')).toBeNull()
+      expect(screen.queryByTestId('cta-escassez')).toBeNull()
+      expect(screen.queryByTestId('barra-compra-mobile')).toBeNull()
       // Sem kit nao ha o que perguntar ao estoque.
       expect(saldoDoEstoque).not.toHaveBeenCalled()
     })
@@ -320,8 +472,11 @@ describe('Home da loja de lancamento', () => {
       await renderizarHome()
 
       expect(screen.queryByTestId('contador-estoque')).toBeNull()
-      expect(screen.getByTestId('cta-principal')).toHaveTextContent('GARANTIR MEU KIT')
+      expect(screen.getByTestId('cta-escassez')).toHaveTextContent('GARANTIR MEU KIT')
       expect(document.body).not.toHaveTextContent('foram esgotados')
+      // Sem lote, o titulo nao inventa um numero de kits.
+      expect(screen.getByRole('heading', { name: 'Kits disponíveis no evento.' }))
+        .toBeInTheDocument()
     })
   })
 
@@ -361,6 +516,43 @@ describe('Home da loja de lancamento', () => {
       await renderizarHome()
 
       expect(screen.getByTestId('anvisa')).toHaveTextContent('25351.000123/2026-01')
+    })
+  })
+
+  /**
+   * AS FOTOS OFICIAIS AINDA NAO CHEGARAM (§5, §13, §15 do briefing de
+   * 20/08/2026), e a pagina precisa ser publicavel assim mesmo — o lancamento
+   * e em 25/08.
+   *
+   * O QUE ESTE BLOCO TRAVA nao e "a foto esta faltando", que e um estado
+   * temporario: e que a AUSENCIA nao produz imagem quebrada nem promessa vazia.
+   * Quando os arquivos entrarem em src/lib/fotos.ts, o primeiro teste passa a
+   * encontrar <img> e o segundo continua valendo igual.
+   */
+  describe('fotos oficiais (§5, §13, §15)', () => {
+    it('sem foto, o espaço vira ornamento — nunca uma imagem quebrada', async () => {
+      await renderizarHome()
+
+      // Nenhum <img> apontando para arquivo que nao existe.
+      const imagens = document.querySelectorAll('img')
+      for (const img of imagens) {
+        expect(img.getAttribute('src')).toBeTruthy()
+      }
+      // O lugar da foto do hero esta reservado e marcado como decorativo.
+      const molduras = screen.getAllByTestId('foto-ausente')
+      expect(molduras.length).toBeGreaterThan(0)
+      for (const m of molduras) expect(m).toHaveAttribute('aria-hidden', 'true')
+    })
+
+    it('sem fotos dos testes, a seção de experiência não mostra galeria vazia', async () => {
+      await renderizarHome()
+
+      // A secao existe e o texto de §15 esta la...
+      expect(screen.getByRole('heading', {
+        name: 'Não é só sobre o produto. É sobre a experiência.',
+      })).toBeInTheDocument()
+      // ...e nao ha uma fileira de molduras vazias anunciando o que falta.
+      expect(screen.queryByTestId('galeria-experiencia')).toBeNull()
     })
   })
 

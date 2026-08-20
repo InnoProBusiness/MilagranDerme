@@ -1,9 +1,11 @@
 import type { Metadata } from 'next'
 import { ContadorEstoque } from '@/components/contador-estoque'
+import { BarraCompraMobile } from '@/components/barra-compra-mobile'
+import { FotoDaMarca } from '@/components/foto-da-marca'
 import { avisoDeEscassez } from '@/lib/escassez'
-import { formatarBRL } from '@/lib/money'
 import { AVISO_PRE_VENDA, lancamentoJaOcorreu } from '@/lib/tempo'
 import { textoAnvisa, situacaoPendente } from '@/lib/anvisa'
+import { FOTO_HERO, FOTOS_DOS_PRODUTOS, FOTOS_DA_EXPERIENCIA } from '@/lib/fotos'
 import { saldoDoEstoque } from '@/repositories/estoque'
 import { listarKitsAtivos } from '@/repositories/produtos'
 import { CheckoutWizard } from '@/components/checkout-wizard'
@@ -11,30 +13,43 @@ import { cupomDaUrl } from '@/lib/cupom-da-url'
 import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
 
 /**
- * A LOJA DE LANCAMENTO — "/" (§6, §7, §8 e §18 do documento do cliente de
- * 16/08/2026).
+ * A LOJA DE LANCAMENTO — "/".
  *
- * Ate 16/08/2026 este endereco era um rewrite para a landing page de
- * recrutamento (next.config.ts conta a historia por extenso). A prioridade
- * inverteu: quem chega pelo QR Code do evento veio COMPRAR, e representante
- * virou um link discreto no rodape (§14).
+ * REESCRITA EM 20/08/2026 sobre o briefing de alteracao da landing page. A
+ * versao anterior seguia §18 do documento de 16/08 (o que e -> kit -> preco ->
+ * pagar -> receber -> comprar); esta segue §36 do briefing novo, que e uma
+ * ordem DIFERENTE e com um objetivo diferente.
  *
- * A ORDEM DAS SECOES E O REQUISITO §18, nao gosto: o que e -> o que vem no kit
- * -> quanto custa -> como pagar -> como receber -> comprar. E a ordem em que a
- * duvida aparece na cabeca de quem nunca ouviu falar da marca; embaralhar isso
- * (preco antes de produto, entrega antes de preco) faz a pagina responder o
- * que ninguem perguntou ainda. O <h2> de cada secao esta nessa ordem e ha
- * teste travando a sequencia.
+ * O QUE MUDOU DE INTENCAO, e nao so de aparencia:
  *
- * EXCECAO CONSCIENTE A ESSA ORDEM: preco e CTA aparecem TAMBEM no hero, antes
- * de tudo. A pagina tem dois publicos ao mesmo tempo — quem descobriu a marca
- * agora e le de cima a baixo, e quem escaneou o QR Code no evento com o cartao
- * na mao. O segundo nao pode ter que rolar seis secoes para achar o botao. O
- * numero e o mesmo objeto (`kit.precoCentavos`) formatado pela mesma funcao
- * nas duas aparicoes, entao nao existe divergencia possivel entre elas.
+ *   A pagina antiga respondia perguntas na ordem em que elas aparecem para
+ *   quem ja decidiu olhar o produto. A nova constroi desejo antes de
+ *   responder: identidade -> historia -> pertencimento -> produto ->
+ *   procedimento -> prova -> data -> escassez -> compra (§38). Sao dois
+ *   funis, nao duas paletas.
  *
- * SERVER COMPONENT. O unico pedaco com 'use client' e o contador de estoque,
- * que precisa de temporizador (src/components/contador-estoque.tsx).
+ * A DECISAO MAIS CARA E A DO PRECO (§8). O valor NAO aparece nesta pagina em
+ * lugar nenhum — nem no hero, nem em secao propria. Ate 20/08/2026 ele
+ * aparecia duas vezes, e havia uma secao inteira "Quanto custa". A regra nova
+ * e: curiosidade -> desejo -> percepcao de valor -> decisao -> checkout, e o
+ * numero entra quando a compradora ja esta avancando. Por decisao do cliente
+ * (20/08), ele reaparece na VITRINE (/comprar) e no checkout — nao so no
+ * checkout. Quem procurar o preco o encontra a um clique; quem esta
+ * conhecendo a marca nao tromba com ele.
+ *
+ * O QUE NAO PODE SAIR DAQUI, por mais que o redesenho ande:
+ *
+ *   - O AVISO DA ANVISA (secao 06). E divulgacao regulatoria, nao decoracao:
+ *     a frase vem de src/lib/anvisa.ts e declara o enquadramento na Lei
+ *     15.154/2025. Some daqui e a loja passa a vender cosmetico sem dizer sob
+ *     que regime.
+ *   - O AVISO DE PRE-VENDA (§21). Enquanto 25/08 nao chega, quem compra
+ *     precisa saber que o pedido sai depois. A frase e a constante
+ *     AVISO_PRE_VENDA, compartilhada com o checkout.
+ *   - O CHECKOUT EMBUTIDO. A compra acontece nesta pagina, na secao 11.
+ *
+ * SERVER COMPONENT. Os unicos pedacos com 'use client' sao o contador de
+ * estoque, a barra de compra do celular e o checkout.
  *
  * SEM A CLASSE `.reveal` EM LUGAR NENHUM, e isso e armadilha real: `.reveal`
  * comeca com `opacity:0` em globals.css e so aparece quando `public/script.js`
@@ -45,86 +60,154 @@ import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
 
 // `force-dynamic` porque a pagina le ESTOQUE AO VIVO. Sem isso o Next serviria
 // o saldo congelado no `next build` — um lote de 50 kits eternamente intacto
-// na home enquanto o balcao vende. Vale tambem para preco e catalogo, pelo
-// mesmo motivo ja registrado em src/app/comprar/page.tsx.
+// na home enquanto o balcao vende.
 export const dynamic = 'force-dynamic'
 
 /**
  * Canonical POR PAGINA, nunca no layout raiz (src/app/layout.tsx explica por
- * que). Esta e a unica rota que pode reivindicar "/" — e o defeito que este
- * commit desfaz e justamente a LP de recrutamento declarando-se home da marca.
+ * que). Esta e a unica rota que pode reivindicar "/".
  */
 export const metadata: Metadata = {
   alternates: { canonical: '/' },
 }
 
+/**
+ * A MANCHETE TEM DUAS VERSOES, E A ESCOLHA E DE TEMPO VERBAL — nao de teste
+ * A/B.
+ *
+ * §6 escreve "A NOVA EXPERIENCIA EM LIMPEZA DE PELE CHEGOU." e §7 oferece
+ * "UMA NOVA FORMA DE CUIDAR DA PELE ESTA CHEGANDO." como alternativa. As duas
+ * sao copy aprovada, e a segunda esta no FUTURO.
+ *
+ * Publicar "CHEGOU" antes de 25/08 seria a loja afirmando um fato que ainda
+ * nao aconteceu, na mesma pagina que logo abaixo avisa que os pedidos so serao
+ * liberados no dia do lancamento (§21). Entao a alternativa de §7 vira a
+ * versao ATE 25/08 e a de §6 assume no dia — a pagina fala no futuro enquanto
+ * o lancamento e futuro, e no passado quando ele passa. E a mesma disciplina
+ * que `lancamentoJaOcorreu` ja impunha ao resto da tela.
+ *
+ * PARA RODAR O A/B DE §7 DE VERDADE: as duas variantes precisam ser sorteadas
+ * no MESMO tempo verbal, e o sorteio nao pode acontecer aqui dentro — esta e
+ * uma pagina de servidor sem cookie de variante, e sortear a cada render
+ * mostraria manchetes diferentes a cada F5 para a mesma pessoa, o que nao
+ * mede nada.
+ */
+const MANCHETE_LANCADA = {
+  destaque: 'A NOVA EXPERIÊNCIA',
+  resto: 'EM LIMPEZA DE PELE CHEGOU.',
+}
+const MANCHETE_PRE_VENDA = {
+  destaque: 'UMA NOVA FORMA',
+  resto: 'DE CUIDAR DA PELE ESTÁ CHEGANDO.',
+}
+
 /** §6, palavra por palavra. */
-const MANCHETE_DESTAQUE = 'A MILAGRAN'
-const MANCHETE_RESTO = 'ESTÁ OFICIALMENTE NO MERCADO.'
-const SUBTITULO = 'Uma nova experiência em limpeza de pele chegou.'
+const SUBTITULO_LANCADA =
+  'Conheça a Milagran, uma nova proposta de cuidado com a pele criada para '
+  + 'transformar a experiência da limpeza de pele e abrir novas possibilidades '
+  + 'para profissionais da beleza.'
+
+/** §7, palavra por palavra. */
+const SUBTITULO_PRE_VENDA =
+  '15 anos de história deram origem a uma experiência que agora chega '
+  + 'oficialmente ao mercado.'
 
 /**
- * §6 e §5/§11: a CTA e "GARANTIR MEU KIT" enquanto ha kit para levar na hora e
- * vira "COMPRAR ONLINE" quando o lote presencial acaba.
+ * §17 e §19: a CTA da escassez e "GARANTIR MEU KIT" enquanto ha kit para levar
+ * na hora, e vira "COMPRAR ONLINE" quando o lote presencial acaba.
  *
- * O DESTINO E O MESMO NOS DOIS CASOS, e isso e o que torna a troca segura: o
- * que muda e a promessa da palavra, nao para onde o botao leva. O canal online
- * nunca esgota (pre-venda sem teto, §4), entao nao existe estado em que o
- * botao aponte para uma compra impossivel.
+ * A TROCA MUDOU DE LUGAR NESTA REESCRITA. Ate 20/08/2026 ela vivia no botao do
+ * hero; §19 a coloca junto do contador, que e onde o numero que a justifica
+ * esta. O hero passou a ter copy fixa (§6/§9), e por um bom motivo: o botao do
+ * topo e lido por quem ainda nao sabe que existe um lote presencial, e
+ * "COMPRAR ONLINE" ali responderia uma pergunta que ninguem fez ainda.
  *
- * O DESTINO E UMA ANCORA NESTA MESMA PAGINA, e nao mais /comprar.
- *
- * A referencia e a LP de recrutamento (public/seja-representante.html): la a
- * ultima secao NAO tem um botao que leva a outra tela — tem o formulario de
- * candidatura inteiro, ali dentro. Quem chega ao fim da pagina age no lugar
- * onde ja esta. A loja tinha o padrao oposto: seis secoes de argumento e, no
- * fim, um botao que jogava o visitante para outra URL, onde a compra so
- * comecava.
- *
- * `scroll-behavior: smooth` ja esta em globals.css, entao a ancora desliza
- * ate o checkout em vez de saltar.
- *
- * /comprar e /checkout continuam existindo e funcionando: sao o alvo do link
- * do representante (/r/<slug>), de campanha com URL propria e de quem
- * salvou o endereco. Esta mudanca troca o caminho PADRAO da home, nao remove
- * caminho nenhum.
+ * O DESTINO E O MESMO NOS DOIS CASOS — o que muda e a promessa da palavra, nao
+ * para onde o botao leva. O canal online nunca esgota (pre-venda sem teto),
+ * entao nao existe estado em que o botao aponte para uma compra impossivel.
  */
 const CTA_COM_PRESENCIAL = 'GARANTIR MEU KIT'
 const CTA_SO_ONLINE = 'COMPRAR ONLINE'
 const DESTINO_COMPRA = '#comprar'
 
 /**
- * O conteudo do kit vinha de public/seja-representante.html (as quatro
- * .kit-card daquela pagina). A DESCRICAO DOS PRODUTOS FOI MANTIDA porque ela
- * descreve o procedimento e vale para qualquer pessoa; o ENQUADRAMENTO DE
- * RECRUTAMENTO ficou de fora — "a demonstracao que mais converte no seu
- * balcao", "aplicavel em saloes, barbearias, studios e spas", "para o seu
- * negocio". Aqui quem le e o consumidor final comprando um kit para si, nao o
- * profissional avaliando revenda.
+ * §13: os quatro produtos.
+ *
+ * A ORDEM AQUI E A DO PROCEDIMENTO, e ela diverge de propósito da numeracao
+ * escrita em §13 (que lista o hidratante em segundo). A secao seguinte, "Como
+ * funciona" (§14), mostra o procedimento em quatro passos — preparacao,
+ * aplicacao, extracao, finalizacao — e o hidratante e a FINALIZACAO. Numera-lo
+ * como 02 poria as duas secoes se contradizendo a um palmo uma da outra, com o
+ * kit dizendo que o hidratante vem antes da extracao.
+ *
+ * A chave `foto` casa cada produto com o manifesto de src/lib/fotos.ts. O tipo
+ * e fechado sobre as quatro chaves, entao errar o nome aqui quebra o build em
+ * vez de servir um card sem imagem.
  */
 const PRODUTOS_DO_KIT = [
   {
     numero: '01',
-    nome: 'Sabonete líquido',
+    foto: 'sabonete',
+    nome: 'Sabonete facial',
     texto: 'Higieniza a pele e prepara o rosto para a etapa de extração.',
   },
   {
     numero: '02',
+    foto: 'mascara',
     nome: 'Máscara extratora',
     texto: 'A massa artesanal que faz a extração indolor de cravos e impurezas.',
   },
   {
     numero: '03',
+    foto: 'papel',
     nome: 'Papel removedor',
     texto: 'Aplicado sobre a máscara, potencializa a remoção das impurezas ao secar.',
   },
   {
     numero: '04',
-    nome: 'Hidratante',
+    foto: 'hidratante',
+    nome: 'Hidratante facial',
     texto: 'Finaliza o procedimento devolvendo o viço natural da pele.',
   },
-]
+] as const
 
+/**
+ * §14: os quatro passos do procedimento.
+ *
+ * A COPY E DELIBERADAMENTE SECA. §14 manda "evitar afirmacoes medicas ou
+ * resultados que nao estejam oficialmente comprovados/documentados pela
+ * marca", e um bloco que descreve etapas e o lugar mais facil de escorregar
+ * para "elimina", "trata", "regenera". Cada linha abaixo diz o que ACONTECE,
+ * nao o que o corpo responde.
+ */
+const PASSOS = [
+  { numero: 'Passo 01', nome: 'Preparação', texto: 'Preparação da pele para o procedimento.' },
+  { numero: 'Passo 02', nome: 'Aplicação', texto: 'Aplicação dos produtos que compõem o protocolo.' },
+  { numero: 'Passo 03', nome: 'Extração', texto: 'Realização da etapa de extração.' },
+  { numero: 'Passo 04', nome: 'Finalização', texto: 'Finalização do cuidado com a pele.' },
+] as const
+
+/** §12: para quem a oportunidade e. */
+const PARA_QUEM = [
+  { nome: 'Clínicas de estética', texto: 'Amplie seu portfólio de serviços.' },
+  { nome: 'Salões de beleza', texto: 'Ofereça uma nova experiência aos seus clientes.' },
+  { nome: 'Barbearias', texto: 'Inclua cuidados com a pele ao seu atendimento.' },
+  { nome: 'Nail designers', texto: 'Crie uma nova possibilidade de serviço.' },
+  { nome: 'Lash designers', texto: 'Diversifique sua atuação.' },
+  {
+    nome: 'Profissionais da beleza',
+    texto: 'Transforme conhecimento e atendimento em novas oportunidades.',
+  },
+] as const
+
+/**
+ * §10: os atributos do produto.
+ *
+ * Copy herdada da LP de recrutamento e ja aprovada pelo cliente. NAO foi
+ * ampliada nesta reescrita, e a contencao e proposital: §14 pede para nao
+ * afirmar resultado nao documentado, e acrescentar promessa nova aqui seria
+ * criar exatamente o que aquela regra existe para evitar.
+ */
 const BENEFICIOS = [
   'Extração de cravos',
   'Desobstrução dos poros',
@@ -144,12 +227,7 @@ const DIFERENCIAIS = [
 type Props = {
   /**
    * `?cupom=CODIGO` dos links de campanha. A home e o destino natural desses
-   * links — e nela que o checkout esta embutido (secao "06 — A compra"),
-   * entao mandar a pessoa direto para /checkout puxaria o argumento de venda
-   * embaixo dela.
-   *
-   * Ler searchParams NAO muda o custo de renderizacao aqui: esta pagina ja e
-   * `force-dynamic` por causa do estoque ao vivo.
+   * links — e nela que o checkout esta embutido (secao 11).
    */
   searchParams: Promise<{ cupom?: string | string[] }>
 }
@@ -163,32 +241,32 @@ export default async function PaginaInicial({ searchParams }: Props) {
    * argumento le o relogio a cada chamada, e uma renderizacao que perguntasse
    * duas vezes poderia receber respostas diferentes se a virada de 25/08
    * acontecesse no meio dela — a mesma tela falando no futuro em cima e no
-   * presente embaixo. O proprio src/lib/tempo.ts documenta o parametro para
-   * este uso.
+   * presente embaixo.
    */
   const agora = new Date()
   const lancado = lancamentoJaOcorreu(agora)
 
   const kits = await listarKitsAtivos()
-  // O kit do lancamento e o PRIMEIRO ATIVO. A ordem de listarKitsAtivos e
-  // deterministica de proposito (ordem, depois slug), entao "o primeiro" e
-  // sempre o mesmo entre dois acessos — mesma regra que GET /api/estoque usa
-  // para o contador, o que mantem os dois falando do mesmo kit.
   const kit = kits[0] ?? null
 
   /**
-   * ESTADO VAZIO HONESTO (DIVIDA DELIBERADA do projeto, nao um caso de borda
-   * esquecido): catalogo vazio nao pode virar pagina quebrada nem pagina com
-   * preco inventado. Aqui ele encerra a jornada de §18 logo depois do hero, em
-   * vez de mostrar as seis secoes: todas elas desembocam num botao de compra
-   * que nao teria o que comprar, e mandar o visitante para /comprar so o
-   * levaria ao estado vazio da vitrine — dois passos para descobrir a mesma
-   * coisa. O que a marca e continua dito; o que nao existe nao e prometido.
+   * ESTADO VAZIO HONESTO (divida deliberada do projeto): catalogo vazio nao
+   * pode virar pagina quebrada nem pagina com promessa inventada. Ele encerra
+   * a jornada logo depois do hero — todas as secoes desembocam num checkout
+   * que nao teria o que vender.
    */
   if (!kit) {
     return (
       <>
-        <Hero lancado={lancado} />
+        {/*
+          SEM AS CTAs AQUI, e isso e correcao de um defeito real e nao economia
+          de pixels: as duas CTAs do hero apontam para ancoras (`#a-milagran` e
+          `#comprar`) que so existem quando a pagina completa e renderizada. No
+          estado vazio elas nao existem, e um botao que rola para lugar nenhum e
+          pior do que botao nenhum — a visitante clica, nada acontece, e ela
+          conclui que o site esta quebrado em vez de ler o aviso logo abaixo.
+        */}
+        <Hero lancado={lancado} comCompra={false} />
         <section className="section">
           <p className="aviso" data-testid="sem-kit">
             <span className="aviso__titulo">Compra indisponível</span>
@@ -204,47 +282,37 @@ export default async function PaginaInicial({ searchParams }: Props) {
   /**
    * O saldo presencial do lancamento. `null` quando o kit nao tem linha de
    * estoque presencial — kit que simplesmente nao entra no evento. Nao e
-   * "esgotado": sem lote, nao ha contagem regressiva a exibir, e tratar
-   * ausencia de cadastro como zero faria a home anunciar que um lote que nunca
-   * existiu acabou. Mesmo contrato de GET /api/estoque e da vitrine.
+   * "esgotado": sem lote, nao ha contagem regressiva a exibir.
    */
   const presencial = await saldoDoEstoque(kit.id, 'presencial')
 
   /**
    * O aviso le o saldo CRU (que pode ser negativo, ver `ajustarEstoque`) e o
-   * contador recebe o saldo CLAMPADO — exatamente a divisao de
-   * src/app/api/estoque/route.ts, e pelo mesmo motivo: negativo e zero caem os
-   * dois em 'esgotado', entao o clamp nao muda uma palavra da frase, e "-3
-   * kits" nao e verdade nenhuma sobre a caixa do evento.
+   * contador recebe o saldo CLAMPADO — a mesma divisao de
+   * src/app/api/estoque/route.ts: negativo e zero caem os dois em 'esgotado',
+   * e "-3 kits" nao e verdade nenhuma sobre a caixa do evento.
    */
   const aviso = presencial ? avisoDeEscassez(presencial.disponivel, presencial.total) : null
   const esgotado = aviso?.nivel === 'esgotado'
 
   /**
-   * DIVIDA DELIBERADA, e a troca esta escrita aqui para nao ser descoberta no
-   * dia do evento: o ROTULO da CTA e decidido neste render de servidor, e o
-   * NUMERO do contador continua vivo depois (polling de 15s). Uma aba deixada
-   * aberta enquanto o lote acaba passa a mostrar o contador dizendo "foram
-   * esgotados" ao lado de um botao ainda escrito "GARANTIR MEU KIT".
+   * DIVIDA DELIBERADA, herdada e ainda nao paga: o ROTULO da CTA de escassez e
+   * decidido neste render de servidor, e o NUMERO do contador continua vivo
+   * depois (polling de 15s). Uma aba deixada aberta enquanto o lote acaba passa
+   * a mostrar o contador dizendo "esgotados" ao lado de um botao ainda escrito
+   * "GARANTIR MEU KIT".
    *
-   * POR QUE ISSO E ACEITAVEL HOJE: os dois rotulos levam ao MESMO lugar
-   * (/comprar) e a compra online nunca esgota, entao a divergencia nao produz
-   * botao para lugar nenhum — o que se perde e a palavra certa, com a frase
-   * correta a dois centimetros dela. E POR QUE NAO FOI RESOLVIDO AGORA: fazer
-   * o rotulo acompanhar o polling exigiria a home inteira virar client
-   * component, ou o contador ganhar callback e deixar de servir ao painel
-   * (§17) como bloco fechado. Nenhuma das duas se paga por uma palavra.
+   * POR QUE CONTINUA ACEITAVEL: os dois rotulos levam ao MESMO lugar e a compra
+   * online nunca esgota, entao a divergencia nao produz botao para lugar
+   * nenhum — perde-se a palavra certa, com a frase correta a dois centimetros.
    *
-   * COMO PAGAR: quando houver um segundo consumidor do saldo vivo nesta tela,
-   * extrair um componente cliente que embrulhe contador + CTA e mover esta
-   * decisao para dentro dele — e atualizar este comentario contando que a
-   * divergencia acabou.
+   * COMO PAGAR: envolver contador + CTA num unico client component e mover
+   * esta decisao para dentro dele.
    */
   const rotuloCta = esgotado ? CTA_SO_ONLINE : CTA_COM_PRESENCIAL
 
-  // Uma vez, aqui, e nao inline em cada uso: a MESMA situacao alimenta o
-  // texto e a decisao de moldura do bloco ANVISA. Dois objetos montados em
-  // linhas diferentes poderiam divergir num refactor sem o compilador acusar.
+  // Uma vez, aqui, e nao inline em cada uso: a MESMA situacao alimenta o texto
+  // e a decisao de moldura do bloco ANVISA.
   const situacaoAnvisaDoKit = {
     registro: kit.anvisaRegistro,
     dispensado: kit.anvisaDispensado,
@@ -252,64 +320,29 @@ export default async function PaginaInicial({ searchParams }: Props) {
 
   return (
     <>
-      <Hero lancado={lancado}>
-        <div className="preco-lancamento">
-          <span className="preco-lancamento__valor" data-testid="preco">
-            {formatarBRL(kit.precoCentavos)}
-          </span>
-          {/* §9: o valor unitario tem linha propria e nunca some. Quem compra
-              dois kits precisa conseguir conferir a conta. */}
-          <span className="preco-lancamento__unitario">
-            Valor unitário do kit completo
-          </span>
-          <p className="preco-lancamento__nota">
-            Sem frete na compra presencial nem na retirada no local. Na compra
-            online com envio, o frete é calculado
-            no checkout a partir do seu CEP.
-          </p>
-        </div>
+      {/* ---------------- §36/02: HERO + FOTO DO PRODUTO ---------------- */}
+      <Hero lancado={lancado} />
 
-        {/*
-          O CONTADOR SO EXISTE QUANDO HA LOTE. Sem linha de estoque presencial
-          nao ha numero honesto a mostrar, e um "0" ali seria pior que silencio.
-        */}
-        {presencial && (
-          <ContadorEstoque
-            inicial={{
-              disponivel: Math.max(0, presencial.disponivel),
-              total: presencial.total,
-            }}
-            kitSlug={kit.slug}
-          />
-        )}
-
-        <div className="hero__cta">
-          <a className="btn btn--solid" href={DESTINO_COMPRA} data-testid="cta-principal">
-            {rotuloCta}
-          </a>
-        </div>
-      </Hero>
-
-      {/* ---------------- §18, passo 1: O QUE E ---------------- */}
-      <section className="section section--panel" id="o-que-e" aria-labelledby="o-que-e-titulo">
+      {/* ---------------- §36/03: O QUE E A MILAGRAN (§10) ---------------- */}
+      <section className="section section--panel" id="a-milagran" aria-labelledby="a-milagran-titulo">
         <div className="section__head">
-          <span className="kicker">01 — O produto</span>
-          <h2 id="o-que-e-titulo">O que é a Milagran</h2>
+          <span className="kicker">01 — A marca</span>
+          <h2 id="a-milagran-titulo">Não é apenas uma limpeza de pele.</h2>
           <p className="section__lede">
-            Uma limpeza de pele artesanal, indolor e com resultado visível em 30
-            minutos. O kit reúne as quatro etapas do procedimento — higienizar,
-            extrair, remover e hidratar — para você fazer sem sair de casa.
+            A Milagran nasceu de uma ideia construída ao longo de 15 anos: criar uma
+            nova experiência de cuidado com a pele e, ao mesmo tempo, possibilitar que
+            profissionais da beleza tenham acesso a uma nova oportunidade de serviço e
+            geração de renda.
           </p>
+          <p className="section__lede">Agora, essa história chega ao mercado.</p>
         </div>
 
         <div className="two-col">
           {/*
             <h4> e nao <h3> depois de um <h2>: o rotulo pequeno em caixa alta do
-            design system mora em `.two-col__block h4` (globals.css, bloco
-            herdado da landing page). Trocar por <h3> deixaria os dois rotulos
-            sem estilo nenhum; duplicar a regra de estilo criaria um segundo
-            dono do mesmo visual. O nivel pulado e a troca consciente — nao ha
-            conteudo escondido por ela, so uma etiqueta de lista.
+            design system mora em `.two-col__block h4` (globals.css). Trocar por
+            <h3> deixaria os dois rotulos sem estilo nenhum. O nivel pulado e a
+            troca consciente — nao ha conteudo escondido por ela.
           */}
           <div className="two-col__block">
             <h4>Benefícios</h4>
@@ -324,13 +357,65 @@ export default async function PaginaInicial({ searchParams }: Props) {
             </ul>
           </div>
         </div>
+
+        <div className="section__acao">
+          <a className="btn btn--ghost" href="#historia">Conhecer essa história</a>
+        </div>
       </section>
 
-      {/* ---------------- §18, passo 2: O QUE VEM NO KIT ---------------- */}
-      <section className="section" id="kit" aria-labelledby="kit-titulo">
+      {/* ---------------- §36/04: 15 ANOS DE HISTORIA (§11) ---------------- */}
+      <section className="section" id="historia" aria-labelledby="historia-titulo">
         <div className="section__head">
-          <span className="kicker">02 — O kit</span>
-          <h2 id="kit-titulo">O que vem no kit</h2>
+          <span className="kicker">02 — A história</span>
+          <h2 id="historia-titulo">
+            15 anos de história. Um propósito que agora ganha vida.
+          </h2>
+        </div>
+
+        <div className="prosa">
+          <p><strong>A Milagran não nasceu ontem.</strong></p>
+          <p>
+            Foram 15 anos entre ideias, desenvolvimento, aperfeiçoamentos e o sonho de
+            transformar uma experiência de cuidado com a pele em algo que pudesse
+            chegar a muito mais pessoas.
+          </p>
+          <p>Agora, esse sonho se transforma em realidade.</p>
+          <p>
+            {lancado
+              ? 'Em 25 de agosto, a Milagran foi oficialmente apresentada ao mercado.'
+              : 'No dia 25 de agosto, a Milagran será oficialmente apresentada ao mercado.'}
+          </p>
+          <p>
+            E existe um propósito por trás desse lançamento: criar uma nova
+            possibilidade para profissionais da beleza oferecerem um serviço, atenderem
+            seus clientes e construírem uma nova fonte de renda através do próprio
+            trabalho.
+          </p>
+        </div>
+      </section>
+
+      {/* ---------------- §36/05: PARA QUEM E (§12) ---------------- */}
+      <section className="section section--panel" id="para-quem" aria-labelledby="para-quem-titulo">
+        <div className="section__head">
+          <span className="kicker">03 — A oportunidade</span>
+          <h2 id="para-quem-titulo">Uma nova oportunidade para quem vive da beleza.</h2>
+        </div>
+
+        <div className="publico-grid">
+          {PARA_QUEM.map((p) => (
+            <article className="publico-card" key={p.nome}>
+              <h3>{p.nome}</h3>
+              <p>{p.texto}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      {/* ---------------- §36/06: O KIT (§13) ---------------- */}
+      <section className="section" id="o-kit" aria-labelledby="o-kit-titulo">
+        <div className="section__head">
+          <span className="kicker">04 — O kit</span>
+          <h2 id="o-kit-titulo">Conheça o Kit Milagran.</h2>
           <p className="section__lede">
             {kit.descricao} Quatro produtos, na ordem de uso do procedimento.
           </p>
@@ -339,6 +424,12 @@ export default async function PaginaInicial({ searchParams }: Props) {
         <div className="kit-grid">
           {PRODUTOS_DO_KIT.map((p) => (
             <article className="kit-card" key={p.numero}>
+              {/*
+                A foto oficial de cada produto (§13). Enquanto os arquivos nao
+                chegam, `FotoDaMarca` desenha a moldura ornamental no lugar —
+                ver src/lib/fotos.ts para o porque e para como preencher.
+              */}
+              <FotoDaMarca className="kit-card__foto" foto={FOTOS_DOS_PRODUTOS[p.foto]} />
               <span className="kit-card__num">{p.numero}</span>
               <h3>{p.nome}</h3>
               <p>{p.texto}</p>
@@ -348,26 +439,18 @@ export default async function PaginaInicial({ searchParams }: Props) {
 
         {/*
           A frase vem de src/lib/anvisa.ts — FONTE UNICA com a vitrine de
-          /comprar. Ate 18/08/2026 as duas telas escreviam a propria versao a
-          mao, e quando o cliente declarou o enquadramento na Lei 15.154/2025
-          (producao artesanal, dispensada de registro previo) a copy teria que
-          mudar em dois lugares sem nada apontando o segundo. Mesmo remedio do
-          frete (src/components/linha-frete.tsx), mesma licao.
+          /comprar. E DIVULGACAO REGULATORIA, nao um bloco de layout: ela
+          declara o enquadramento na Lei 15.154/2025 (producao artesanal,
+          dispensada de registro previo). Sobreviveu ao redesenho de 20/08/2026
+          de proposito, e nao por descuido de quem mexeu no arquivo.
 
-          A moldura de ATENCAO agora e condicional: ela pertence ao estado
-          pendente ("em breve"), que e pendencia de verdade. Dispensa legal e
-          registro emitido sao situacoes RESOLVIDAS — vesti-las de alerta
-          faria o comprador ler problema onde nao ha.
-
-          Bloco `.aviso` (mapeado em globals.css para "qualquer tela") em vez
-          de `.vitrine__anvisa`: aquela classe pertence ao componente da
-          vitrine, e a convencao de blocos deste projeto e o que impede o CSS
-          de virar um emaranhado de excecoes.
+          A moldura de ATENCAO e condicional: ela pertence ao estado pendente
+          ("em breve"), que e pendencia de verdade. Dispensa legal e registro
+          emitido sao situacoes RESOLVIDAS — vesti-las de alerta faria a
+          compradora ler problema onde nao ha.
         */}
         <p
-          className={situacaoPendente(situacaoAnvisaDoKit)
-            ? 'aviso aviso--atencao'
-            : 'aviso'}
+          className={situacaoPendente(situacaoAnvisaDoKit) ? 'aviso aviso--atencao' : 'aviso'}
           data-testid="anvisa"
         >
           <span className="aviso__titulo">ANVISA</span>
@@ -375,217 +458,184 @@ export default async function PaginaInicial({ searchParams }: Props) {
         </p>
       </section>
 
-      {/* ---------------- §18, passo 3: QUANTO CUSTA ---------------- */}
-      <section className="section section--panel" id="preco" aria-labelledby="preco-titulo">
+      {/* ---------------- §36/07: COMO FUNCIONA (§14) ---------------- */}
+      <section className="section section--panel" id="como-funciona" aria-labelledby="como-funciona-titulo">
         <div className="section__head">
-          <span className="kicker">03 — O valor</span>
-          <h2 id="preco-titulo">Quanto custa</h2>
+          <span className="kicker">05 — O procedimento</span>
+          <h2 id="como-funciona-titulo">Como funciona.</h2>
           <p className="section__lede">
-            Preço único de lançamento, igual no evento e na loja online.
+            Quatro etapas, do preparo à finalização.
           </p>
         </div>
 
-        <ul className="check-list">
-          <li data-testid="valor-unitario">
-            Valor unitário do kit: {formatarBRL(kit.precoCentavos)}
-          </li>
-          <li>Os quatro produtos do procedimento, sem venda separada.</li>
-          <li>No evento presencial não há frete: você leva o kit na hora.</li>
-          {/*
-            NENHUM VALOR DE FRETE APARECE NESTA PAGINA, e a ausencia e
-            deliberada. A home nao conhece o CEP do visitante, e o unico numero
-            que ela poderia imprimir sem cotar seria "R$ 0,00" — a promessa de
-            frete gratis que src/components/linha-frete.tsx existe para impedir.
-            Quem mostra valor de frete e o checkout, depois da cotacao (§13).
-          */}
-          <li>
-            Na compra online, o frete é calculado no checkout a partir do seu
-            CEP — ou zero, escolhendo retirada no local.
-          </li>
-        </ul>
+        {/*
+          <ol> e nao <div>: sao passos ORDENADOS, e a ordem e a informacao. Um
+          leitor de tela anuncia "lista de 4 itens" e o numero de cada um sem
+          depender do rotulo visual.
+        */}
+        <ol className="passos">
+          {PASSOS.map((p) => (
+            <li className="passo" key={p.numero}>
+              <span className="passo__num">{p.numero}</span>
+              <h3>{p.nome}</h3>
+              <p>{p.texto}</p>
+            </li>
+          ))}
+        </ol>
       </section>
 
-      {/* ---------------- §18, passo 4: COMO PAGAR ---------------- */}
-      <section className="section" id="pagamento" aria-labelledby="pagamento-titulo">
+      {/* ---------------- §36/08: EXPERIENCIA REAL (§15) ---------------- */}
+      <section className="section" id="experiencia" aria-labelledby="experiencia-titulo">
         <div className="section__head">
-          <span className="kicker">04 — O pagamento</span>
-          <h2 id="pagamento-titulo">Como pagar</h2>
+          <span className="kicker">06 — A experiência</span>
+          <h2 id="experiencia-titulo">Não é só sobre o produto. É sobre a experiência.</h2>
           <p className="section__lede">
-            As duas formas valem nos dois caminhos — no balcão do evento e na
-            compra online.
+            A Milagran foi testada na prática antes de chegar ao mercado. Profissionais
+            e modelos já tiveram contato com essa nova experiência.
           </p>
         </div>
 
         {/*
-          Os emojis sao §7 e ficam `aria-hidden`: 💳 tem nome acessivel proprio
-          ("cartao de credito"), e sem esconde-lo o leitor de tela anunciaria
-          "cartao de credito cartao de credito".
-
-          A NOTA DO CARTAO NAO PROMETE "SEM JUROS". Doze parcelas e fato do
-          sistema (o Brick do Mercado Pago e criado com maxInstallments: 12 em
-          src/components/pagamento.tsx); juros sao do emissor e ninguem os
-          conferiu. O valor real de cada parcela aparece no checkout, vindo do
-          provedor — prometer aqui o que nao foi verificado e a mesma familia de
-          erro que imprimir frete zero.
+          A GALERIA SO EXISTE QUANDO HA FOTO. Lista vazia e o estado de hoje —
+          as imagens dos testes ainda nao foram entregues (src/lib/fotos.ts).
+          Uma fileira de molduras vazias aqui nao acrescentaria nada ao texto
+          acima e anunciaria um vazio que ninguem precisa ver.
         */}
-        <ul className="pagamentos-aceitos">
-          <li className="pagamento-chip">
-            <span aria-hidden="true">💳</span> Cartão de crédito
-            <span className="pagamento-chip__nota">
-              Em até 12x — o valor das parcelas aparece no checkout
-            </span>
-          </li>
-          <li className="pagamento-chip">
-            <span aria-hidden="true">⚡</span> PIX
-            <span className="pagamento-chip__nota">
-              QR Code e copia e cola na hora da compra
-            </span>
-          </li>
-        </ul>
+        {FOTOS_DA_EXPERIENCIA.length > 0 && (
+          <div className="galeria" data-testid="galeria-experiencia">
+            {FOTOS_DA_EXPERIENCIA.map((f) => (
+              <FotoDaMarca key={f.src ?? f.alt} className="galeria__item" foto={f} />
+            ))}
+          </div>
+        )}
+
+        <div className="section__acao">
+          <a className="btn btn--ghost" href={DESTINO_COMPRA}>Quero experimentar</a>
+        </div>
       </section>
 
-      {/* ---------------- §18, passo 5: COMO RECEBER ---------------- */}
-      <section className="section section--panel" id="entrega" aria-labelledby="entrega-titulo">
+      {/* ---------------- §36/09: LANCAMENTO 25/08 (§16) ---------------- */}
+      <section className="section section--marco" id="lancamento" aria-labelledby="lancamento-titulo">
         <div className="section__head">
-          <span className="kicker">05 — A entrega</span>
-          <h2 id="entrega-titulo">Como receber</h2>
+          <span className="kicker">Lançamento oficial</span>
+          <h2 id="lancamento-titulo">
+            {lancado
+              ? '25 de agosto. O dia em que a Milagran chegou ao mercado.'
+              : '25 de agosto. O dia em que a Milagran chega ao mercado.'}
+          </h2>
           <p className="section__lede">
-            Dois caminhos para o mesmo kit. O de baixo depende de estoque; o de
-            cima, não.
+            Depois de 15 anos de história, chegou o momento de apresentar a Milagran ao
+            mundo. Um lançamento criado para celebrar um novo começo, novas conexões e
+            uma nova experiência em cuidado com a pele.
+          </p>
+        </div>
+
+        <div className="section__acao">
+          <a className="btn btn--solid" href="#kits-presenciais">Quero participar</a>
+        </div>
+      </section>
+
+      {/* ---------------- §36/10: 50 KITS PRESENCIAIS (§17, §19) ---------------- */}
+      <section className="section" id="kits-presenciais" aria-labelledby="kits-presenciais-titulo">
+        <div className="section__head">
+          <span className="kicker">07 — No evento</span>
+          <h2 id="kits-presenciais-titulo">
+            {presencial && presencial.total > 0
+              ? `Apenas ${presencial.total} kits disponíveis no evento.`
+              : 'Kits disponíveis no evento.'}
+          </h2>
+          <p className="section__lede">
+            Quem estiver presente no lançamento terá uma oportunidade especial: os kits
+            separados para o evento podem ser comprados e levados na hora.
           </p>
         </div>
 
         {/*
-          §7 e §8 lado a lado, com o MESMO peso visual. O modificador
-          `--destaque` marca qual dos dois esta disponivel agora, nunca qual a
-          loja prefere vender: enquanto ha kit no evento, presencial e o
-          caminho de quem esta la; quando o lote acaba, o destaque passa para o
-          online, que e o unico que continua de pe (pre-venda sem teto, §4).
-          Sem linha de estoque presencial (o kit nao entra no evento) nenhum
-          dos dois e destacado — a pagina nao sabe o suficiente para opinar.
+          §17 pede as tres palavras em destaque. <p> com spans, e nao tres <li>:
+          e uma frase so — "comprou, pagou, levou" — partida para ganhar ritmo
+          visual, e transforma-la em lista faria o leitor de tela anunciar "lista
+          de 3 itens" para o que e uma sentenca.
         */}
-        <div className="entrega-opcoes">
-          <article
-            className={
-              'entrega-card'
-              + (presencial && !esgotado ? ' entrega-card--destaque' : '')
-              + (esgotado ? ' entrega-card--indisponivel' : '')
-            }
-          >
-            <h3 className="entrega-card__titulo">Presencial, no evento</h3>
-            <p className="entrega-card__prazo">Comprou → Pagou → Levou na hora.</p>
-            <p>
-              {lancado
-                ? 'Compra feita na hora, com a equipe Milagran: você paga e sai com o kit na mão.'
-                : 'No dia 25 de agosto, no evento de lançamento: você compra, paga e sai com o kit na mão.'}
-            </p>
-            <ul className="entrega-card__lista">
-              <li>Sem frete e sem espera.</li>
-              <li>Pagamento por PIX ou cartão, no balcão.</li>
-              {/* A terceira linha so existe quando ha lote: sem cadastro de
-                  estoque presencial a pagina nao sabe quantos kits foram
-                  separados, e nao ha numero a chutar. */}
-              {esgotado && <li>Os kits separados para o evento acabaram.</li>}
-              {presencial && !esgotado && presencial.total > 0 && (
-                <li>Enquanto durarem os {presencial.total} kits separados para o evento.</li>
-              )}
-            </ul>
-          </article>
+        <p className="lema" data-testid="lema-presencial">
+          <span>Comprou.</span> <span>Pagou.</span> <span>Levou.</span>
+        </p>
 
-          <article className={'entrega-card' + (esgotado ? ' entrega-card--destaque' : '')}>
-            {/*
-              O TITULO DEIXOU DE DIZER "pelos Correios" EM 19/08/2026. Este
-              cartao ENUMERA as formas de receber o kit, e desde a retirada no
-              local os Correios sao uma delas, nao a unica — um titulo que
-              afirma transportadora manda para o checkout quem mora em Goiania e
-              nao precisa pagar frete nenhum. Mesma disciplina de LinhaFrete: a
-              home nao pode prometer uma coisa e o checkout oferecer outra.
-            */}
-            <h3 className="entrega-card__titulo">Online, pelo site</h3>
-            <p className="entrega-card__prazo">Comprou → Pagou → Recebe em casa ou retira aqui.</p>
-            <p>
-              Compra pelo site, de qualquer cidade. O frete e o prazo aparecem no
-              checkout, calculados a partir do seu CEP — ou zero, se você preferir
-              retirar em {ENDERECO_RETIRADA.cidade}/{ENDERECO_RETIRADA.estado}.
-            </p>
-            <ul className="entrega-card__lista">
-              <li>Sem limite de unidades: a loja online não esgota.</li>
-              <li>Pagamento por PIX ou cartão de crédito.</li>
-              <li>Código de rastreio assim que o pedido é postado.</li>
-              {/*
-                "PARA BUSCAR", e nao "em até 7 dias" solto. Esta lista e de
-                promessas de RECEBIMENTO — a linha de cima fala de rastreio —, e
-                um prazo sem sujeito no meio dela se le como prazo de entrega. O
-                numero significa o contrario: e quanto tempo a compradora tem
-                para aparecer. Mesmo cuidado de TEXTO_PRAZO_RETIRADA.
-              */}
-              <li>
-                Ou retirada no local em {ENDERECO_RETIRADA.cidade}, sem frete —
-                você tem {PRAZO_RETIRADA_DIAS} dias para buscar.
-              </li>
-            </ul>
-          </article>
+        {/*
+          O CONTADOR SO EXISTE QUANDO HA LOTE (§19). Sem linha de estoque
+          presencial nao ha numero honesto a mostrar, e um "0" ali seria pior
+          que silencio. Ele faz polling de 15s: e ele, e nao este render, que
+          conta a verdade do saldo depois que a pagina abre.
+        */}
+        {presencial && (
+          <ContadorEstoque
+            inicial={{
+              disponivel: Math.max(0, presencial.disponivel),
+              total: presencial.total,
+            }}
+            kitSlug={kit.slug}
+          />
+        )}
+
+        <p className="section__nota">
+          {esgotado
+            ? 'Os kits presenciais acabaram. A compra continua disponível pelo site, e o pedido é enviado pelos Correios.'
+            : 'Depois que os kits presenciais forem vendidos, a compra continuará disponível pelo site, e o pedido será enviado pelos Correios.'}
+          {' '}
+          Há também retirada no local em {ENDERECO_RETIRADA.cidade}/{ENDERECO_RETIRADA.estado},
+          sem frete — você tem {PRAZO_RETIRADA_DIAS} dias para buscar.
+        </p>
+
+        <div className="section__acao">
+          <a className="btn btn--solid" href={DESTINO_COMPRA} data-testid="cta-escassez">
+            {rotuloCta}
+          </a>
+        </div>
+      </section>
+
+      {/* ---------------- §36/11: CTA DE COMPRA (§37) ---------------- */}
+      {/*
+        A COMPRA ACONTECE AQUI, na propria pagina — o checkout inteiro, e nao um
+        botao para outra tela. Quem leu as dez secoes de argumento age no lugar
+        onde ja esta; mandar para outra URL neste ponto e pedir que a visitante
+        recomece a decisao numa tela que nunca viu.
+
+        E TAMBEM O UNICO LUGAR DA HOME ONDE O PRECO APARECE — dentro do
+        CheckoutWizard, que e o passo de compra de §20. Ver o cabecalho deste
+        arquivo sobre §8.
+      */}
+      <section className="section section--panel" id="comprar" aria-labelledby="comprar-titulo">
+        <div className="section__head">
+          <span className="kicker">08 — A compra</span>
+          <h2 id="comprar-titulo">Uma nova experiência começa agora.</h2>
+          <p className="section__lede">
+            {lancado
+              ? 'A Milagran chegou ao mercado depois de 15 anos de história. Escolha a quantidade e finalize aqui mesmo, com PIX ou cartão de crédito.'
+              : 'Depois de 15 anos de história, a Milagran finalmente chega ao mercado. Escolha a quantidade e garanta o seu kit aqui mesmo, com PIX ou cartão de crédito.'}
+          </p>
         </div>
 
         {/*
-          §3. A frase da pre-venda NAO e reescrita aqui: ela e a constante
+          §21. A frase da pre-venda NAO e reescrita aqui: ela e a constante
           AVISO_PRE_VENDA de src/lib/tempo.ts, a mesma que o checkout mostra.
           Duas telas escrevendo a propria versao do prazo e como duas
           superficies prometerem fretes diferentes para a mesma compra.
-
-          `lancamentoJaOcorreu` decide o TEMPO VERBAL da pagina: antes de 25/08
-          a loja fala no futuro (os pedidos ainda serao liberados) e depois ela
-          fala no presente. Depois do lancamento a frase de pre-venda sai de
-          cena inteira — mante-la seria a loja continuar avisando sobre uma
-          espera que nao existe mais.
         */}
         {lancado ? (
           <p className="aviso-prevenda" data-testid="prazo-online">
             <strong>Pedidos liberados.</strong> O lançamento oficial da Milagran
-            aconteceu em 25 de agosto de 2026 e os pedidos online já são enviados
-            pelos Correios, com prazo calculado no checkout a partir do seu CEP —
-            ou retirados no local, sem frete.
+            aconteceu em 25 de agosto de 2026 e os pedidos online já são enviados,
+            com prazo calculado no checkout a partir do seu CEP — ou retirados no
+            local, sem frete.
           </p>
         ) : (
           <p className="aviso-prevenda" data-testid="prazo-online">
-            <strong>Pré-venda.</strong> No dia 25 de agosto os pedidos serão
-            liberados. {AVISO_PRE_VENDA}
+            <strong>Garanta seu kit antes do lançamento.</strong> {AVISO_PRE_VENDA}
           </p>
         )}
-      </section>
-
-      {/* ---------------- §18, passo 6: COMPRAR ---------------- */}
-      {/*
-        A COMPRA ACONTECE AQUI, na propria pagina — o checkout inteiro, e nao
-        um botao para outra tela.
-
-        E o mesmo padrao da LP de recrutamento (public/seja-representante.html),
-        cuja ultima secao traz o formulario de candidatura embutido em vez de
-        um link. Quem leu os seis blocos de argumento age no lugar onde ja
-        esta; mandar para outra URL nesse ponto e pedir para o visitante
-        recomecar a decisao numa tela que ele nunca viu.
-
-        `CheckoutWizard` e client component e a home e server component — o
-        Next monta os dois sem ceremonia. Ele ja e autocontido: carrega o
-        proprio estado, cota o frete e cria o pedido. Nao existe uma segunda
-        implementacao de checkout nesta pagina.
-      */}
-      <section className="section" id="comprar" aria-labelledby="comprar-titulo">
-        <div className="section__head">
-          <span className="kicker">06 — A compra</span>
-          <h2 id="comprar-titulo">Comprar o kit</h2>
-          <p className="section__lede">
-            {esgotado
-              ? 'Os kits do evento acabaram, mas a loja online continua aberta e não tem limite de unidades. Pague com PIX ou cartão de crédito.'
-              : 'Escolha a quantidade e finalize aqui mesmo. O pagamento é por PIX ou cartão de crédito.'}
-          </p>
-        </div>
 
         {/*
           `kit` e nao-nulo aqui por construcao: o catalogo vazio ja encerrou a
-          pagina no retorno antecipado la em cima, com o estado vazio honesto.
-          Repetir a checagem seria codigo morto — e, pior, sugeriria um segundo
-          estado vazio que nunca renderiza.
+          pagina no retorno antecipado la em cima.
         */}
         <CheckoutWizard
           kit={kit}
@@ -594,43 +644,125 @@ export default async function PaginaInicial({ searchParams }: Props) {
           lancado={lancado}
         />
       </section>
+
+      {/* ---------------- §36/12: REPRESENTANTES (§23) ---------------- */}
+      {/*
+        §23 e explicito: a funcionalidade CONTINUA e nao pode ser removida, mas
+        DEIXA DE SER a CTA principal da pagina. Por isso esta secao e a
+        penultima, nao tem formulario embutido (ao contrario do checkout logo
+        acima) e o botao e fantasma: um botao dourado aqui competiria com a
+        compra, que e o objetivo primario do lancamento (§39).
+
+        <a> CRU, e nao next/link: /seja-representante.html e arquivo estatico de
+        public/, fora do App Router. Um <Link> tentaria navegacao client-side
+        para uma rota que o roteador nao conhece. E a mesma URL que
+        deploy/milagran-ci-deploy.sh usa para aprovar ou reverter o deploy
+        inteiro — ela precisa continuar respondendo 200.
+      */}
+      <section className="section" id="representantes" aria-labelledby="representantes-titulo">
+        <div className="section__head">
+          <span className="kicker">09 — Represente a marca</span>
+          <h2 id="representantes-titulo">Quer levar a Milagran com você?</h2>
+          <p className="section__lede">
+            Além de comprar o kit, é possível representar a marca e trabalhar com a
+            Milagran. As oportunidades de representação e distribuição continuam
+            abertas.
+          </p>
+        </div>
+
+        <div className="section__acao">
+          <a className="btn btn--ghost" href="/seja-representante.html">
+            Quero representar a Milagran
+          </a>
+        </div>
+      </section>
+
+      {/*
+        §32. Fica por ultimo no DOM de proposito: e um elemento `position:fixed`
+        e, sendo o ultimo, o Tab so chega nele depois de todo o conteudo, em vez
+        de despeja-lo no meio da leitura. Ela se recolhe sozinha quando a secao
+        do checkout aparece — ver o componente.
+      */}
+      <BarraCompraMobile href={DESTINO_COMPRA} alvo="comprar" rotulo={rotuloCta} />
     </>
   )
 }
 
 /**
- * O topo da pagina, compartilhado pelo caminho normal e pelo estado vazio —
- * sem catalogo, o visitante continua vendo de quem e a pagina em vez de uma
- * tela em branco.
+ * O TOPO DA PAGINA (§5, §6, §30) — compartilhado pelo caminho normal e pelo
+ * estado vazio, para que sem catalogo o visitante continue vendo de quem e a
+ * pagina em vez de uma tela em branco.
  *
- * `children` e o miolo que so existe quando ha kit: preco, contador e CTA.
+ * O PRODUTO E PROTAGONISTA, e essa e a mudanca estrutural de §5: o hero deixou
+ * de ser uma coluna de texto centralizada e virou DUAS colunas — texto a
+ * esquerda, foto do Kit a direita, grande. No celular vira uma coluna so, com
+ * a foto logo abaixo da manchete (§31).
+ *
+ * SEM PRECO E SEM CONTADOR AQUI (§8, §39). Os dois viviam neste bloco ate
+ * 20/08/2026. O preco saiu da pagina inteira; o contador desceu para a secao
+ * de escassez (§17), que e onde §19 o coloca e onde a frase que o explica
+ * esta.
  */
-function Hero({ lancado, children }: { lancado: boolean; children?: React.ReactNode }) {
+function Hero({
+  lancado,
+  /**
+   * As CTAs sao ancoras para secoes desta mesma pagina. Sem catalogo, essas
+   * secoes nao existem — e o hero precisa saber disso para nao publicar botao
+   * que nao leva a lugar nenhum.
+   */
+  comCompra = true,
+}: {
+  lancado: boolean
+  comCompra?: boolean
+}) {
+  const manchete = lancado ? MANCHETE_LANCADA : MANCHETE_PRE_VENDA
+  const subtitulo = lancado ? SUBTITULO_LANCADA : SUBTITULO_PRE_VENDA
+
   return (
     <section className="hero hero--loja">
-      <p className="eyebrow">
-        {lancado
-          ? 'Lançamento oficial realizado em 25 de agosto de 2026'
-          : 'Pré-venda · lançamento oficial em 25 de agosto de 2026'}
-      </p>
+      <div className="hero__texto">
+        <p className="eyebrow">
+          {lancado
+            ? 'Lançamento oficial · 25 de agosto de 2026'
+            : 'Lançamento oficial · 25 de agosto'}
+        </p>
 
-      {/*
-        A manchete de §6 e uma frase so, quebrada em duas tipografias: o nome
-        no traco de display da marca e o resto no italico. O {' '} entre os dois
-        <span> e SEMANTICO, nao formatacao — o nome acessivel do titulo
-        concatena os nos de texto sem separador, e sem ele o leitor de tela (e
-        o `getByRole('heading', { name })` do teste) ouviria "A
-        MILAGRANESTÁ OFICIALMENTE NO MERCADO.". Mesma armadilha ja documentada
-        em src/components/cabecalho.tsx.
-      */}
-      <h1 className="hero__title">
-        <span className="serif-display">{MANCHETE_DESTAQUE}</span>{' '}
-        <span className="script">{MANCHETE_RESTO}</span>
-      </h1>
+        {/*
+          A manchete e uma frase so, quebrada em duas tipografias: a abertura no
+          traco de display da marca e o resto no italico. O {' '} entre os dois
+          <span> e SEMANTICO, nao formatacao — o nome acessivel do titulo
+          concatena os nos de texto sem separador, e sem ele o leitor de tela (e
+          o `getByRole('heading', { name })` do teste) ouviria as duas metades
+          coladas numa palavra.
+        */}
+        <h1 className="hero__title">
+          <span className="serif-display">{manchete.destaque}</span>{' '}
+          <span className="script">{manchete.resto}</span>
+        </h1>
 
-      <p className="hero__subtitle">{SUBTITULO}</p>
+        <p className="hero__subtitle">{subtitulo}</p>
 
-      {children}
+        {/*
+          §6 e §9: duas CTAs com pesos diferentes. A primeira leva a conhecer a
+          marca (a secao logo abaixo) e a segunda vai direto para a compra.
+          A ordem visual e a de §30 — conhecer primeiro, comprar depois — porque
+          §39 manda a pagina NAO entregar tudo no primeiro bloco.
+        */}
+        {comCompra && (
+          <div className="hero__cta">
+            <a className="btn btn--solid" href="#a-milagran" data-testid="cta-principal">
+              Quero conhecer a Milagran
+            </a>
+            <a className="btn btn--ghost" href={DESTINO_COMPRA} data-testid="cta-secundaria">
+              Garantir meu kit
+            </a>
+          </div>
+        )}
+      </div>
+
+      <div className="hero__produto">
+        <FotoDaMarca className="hero__foto" foto={FOTO_HERO} prioridade />
+      </div>
     </section>
   )
 }

@@ -1,18 +1,52 @@
+/*
+  A PALETA E §27 DO BRIEFING DE 20/08/2026, valor por valor.
+
+  Os tokens nao mudaram de NOME — so de valor. E o que permite trocar a
+  identidade inteira da loja (checkout, painel, balcao, vitrine) sem tocar em
+  nenhuma das ~1800 linhas abaixo: quem consome `--gold` continua consumindo
+  `--gold`. Renomear qualquer um destes obrigaria a varrer o arquivo inteiro e
+  e como o CSS de um projeto vira um emaranhado de excecoes.
+
+  --champagne ENTROU AGORA (§27 lista champagne como cor propria). Ele e o
+  dourado de baixo contraste dos ornamentos e das bordas mais discretas — onde
+  --gold gritaria e --ink-muted sumiria.
+
+  --ink-muted NAO vem de §27, que nao define um cinza de corpo. Ele continua
+  sendo o texto secundario e foi so reafinado contra o preto novo (#050505, mais
+  escuro que o anterior): o valor antigo perdia contraste no fundo mais fundo.
+*/
 :root{
-  --bg: #0b0a08;
-  --bg-panel: #131110;
-  --ink: #f4ecdd;
-  --ink-muted: #b9ac93;
-  --gold: #c9a24d;
-  --gold-light: #e9cd8d;
+  --bg: #050505;
+  --bg-panel: #0c0a08;
+  --ink: #f5f1e8;
+  --ink-muted: #b5a892;
+  --gold: #c99a3d;
+  --gold-light: #e8c46a;
+  --champagne: #d8b77a;
   --gold-deep: #8a6a2f;
-  --line: rgba(201,162,77,0.25);
+  --line: rgba(201,154,61,0.25);
   --success: #7fbf7f;
   --error: #e07a6b;
   --serif: 'Playfair Display', 'Cormorant Garamond', serif;
   --script: 'Cormorant Garamond', serif;
-  --sans: 'Jost', sans-serif;
+  --sans: 'Manrope', 'Montserrat', sans-serif;
   --maxw: 1180px;
+  /*
+    A altura da barra de compra fixa do celular (§32). Ela vira
+    `padding-bottom` do body na media query do mobile: sem isso a barra cobre
+    para sempre as ultimas linhas do rodape, incluindo o link da politica de
+    privacidade — que e compromisso de LGPD e nao pode ficar debaixo de um
+    botao. Um numero so, consumido nos dois lugares, para eles nao divergirem.
+  */
+  --barra-compra-altura: 68px;
+  /*
+    A CALHA LATERAL — a distancia entre a borda da tela e o texto, em toda a
+    loja. Ela existe como token porque e usada em DOIS niveis diferentes: como
+    padding da secao comum e como recuo da coluna do painel, que sangra de
+    ponta a ponta. Enquanto o valor estava escrito nos dois lugares, os dois
+    desenhavam colunas diferentes e as secoes alternadas ziguezagueavam.
+  */
+  --calha: clamp(20px,5vw,40px);
 }
 
 *{box-sizing:border-box;}
@@ -205,7 +239,7 @@ main{position:relative;z-index:1;}
 .section{
   max-width:var(--maxw);
   margin:0 auto;
-  padding:120px clamp(20px,5vw,40px) 90px;
+  padding:120px var(--calha) 90px;
 }
 .section--panel{
   max-width:none;
@@ -213,7 +247,35 @@ main{position:relative;z-index:1;}
   border-top:1px solid var(--line);
   border-bottom:1px solid var(--line);
 }
-.section--panel > *{max-width:var(--maxw);margin-left:auto;margin-right:auto;}
+/*
+  A COLUNA DE CONTEUDO E A MESMA NAS DUAS VARIANTES DE SECAO — e nao era.
+  Corrigido em 20/08/2026, quando a home passou a alternar `.section` e
+  `.section--panel` a cada bloco (§36) e o desencontro virou um ziguezague
+  visivel a cada rolagem.
+
+  A CONTA, a 1440px de tela:
+    .section         caixa de 1180 centrada, + 40 de padding  -> texto em 170
+    .section--panel  largura total, + 40 de padding, filhos de 1180 centrados
+                     dentro do que sobra                      -> texto em 130
+
+  Os 40px de diferenca nasciam de o padding ser aplicado em niveis diferentes
+  nos dois casos. Aqui o padding do painel desce para os FILHOS, que e onde ele
+  ja mora na variante sem painel — e as duas passam a desenhar a mesma coluna.
+  O fundo e as bordas do painel continuam sangrando de ponta a ponta, que e a
+  razao de ele existir.
+*/
+.section--panel > *{
+  /*
+    A LARGURA UTIL, e nao a largura da caixa. A secao comum tem 1180 de caixa
+    MENOS a calha dos dois lados; o painel sangra de ponta a ponta, entao para
+    desenhar a MESMA coluna ele precisa descontar a calha aqui. Sem o desconto
+    a coluna do painel ficava 80px mais larga que a da secao ao lado, e o texto
+    das duas comecava em pontos diferentes a cada bloco.
+  */
+  max-width:calc(var(--maxw) - 2 * var(--calha));
+  margin-left:auto;
+  margin-right:auto;
+}
 
 .eyebrow{
   font-size:12px;
@@ -230,7 +292,23 @@ main{position:relative;z-index:1;}
   color:var(--gold-deep);
   margin-bottom:12px;
 }
+/*
+  O CABECALHO DA SECAO E ALINHADO A ESQUERDA, e precisa CONTINUAR alinhado
+  dentro de um painel.
+
+  A armadilha: `.section--panel > *` da a todo filho direto `margin-inline:auto`.
+  Como `.section__head` tem 720px proprios, aquele `auto` o CENTRAVA — o titulo
+  de uma secao em painel comecava ~230px a direita do conteudo logo abaixo
+  dele, na mesma secao. Com a home alternando painel e nao-painel a cada bloco,
+  ficava um titulo indo e voltando a cada rolagem.
+
+  A saida e a caixa crescer e o TEXTO ficar preso: o cabecalho passa a ocupar a
+  mesma largura dos irmaos (entao o `auto` nao tem folga para deslocar nada) e
+  sao os filhos dele que carregam o limite de leitura de 720px.
+*/
 .section__head{max-width:720px;margin-bottom:50px;}
+.section--panel > .section__head{max-width:calc(var(--maxw) - 2 * var(--calha));}
+.section--panel > .section__head > *{max-width:720px;}
 .section__head h2{font-size:clamp(28px,4vw,42px);}
 .section__lede{
   margin-top:16px;
@@ -240,15 +318,29 @@ main{position:relative;z-index:1;}
 }
 
 /* HERO */
+/*
+  O HERO DE §5 E §30: TEXTO + PRODUTO, e nao uma coluna de texto centralizada.
+
+  MOBILE FIRST (§34): uma coluna, na ordem de §31 — rotulo, manchete, foto
+  grande do kit, CTAs. O `order` no bloco de 1024px e o que reorganiza isso em
+  duas colunas no desktop sem duplicar markup.
+
+  O `margin-top` NEGATIVO nao e gambiarra: o cabecalho e `position:sticky`, ou
+  seja, ele OCUPA altura no fluxo mesmo transparente. Sem puxar o hero para
+  baixo dele, sobraria uma faixa vazia entre o topo da janela e o gradiente —
+  que e exatamente a "faixa preta separando header e hero" que §2 proibe. O
+  `padding-top` devolve o espaco por dentro, para que o texto nao passe por
+  baixo da marca.
+*/
 .hero{
-  min-height:100vh;
+  position:relative;
   display:flex;
   flex-direction:column;
   align-items:center;
-  justify-content:center;
   text-align:center;
-  padding:140px 20px 60px;
-  position:relative;
+  gap:clamp(28px,5vw,48px);
+  margin-top:calc(-1 * (52px + 28px));
+  padding:calc(52px + 28px + clamp(28px,7vw,64px)) 20px clamp(40px,7vw,72px);
 }
 .hero__ornament{position:absolute;top:12%;left:50%;transform:translateX(-50%);width:70px;opacity:.6;}
 .sprig{width:100%;fill:none;stroke:var(--gold);stroke-width:1.4;stroke-linecap:round;}
@@ -848,8 +940,12 @@ main{position:relative;z-index:1;}
 
    MAPA DE BLOCO -> TELA (para quem for escrever os componentes):
      .pular-conteudo .conteudo .cabecalho .rodape  chrome de todas as rotas
-     .hero--loja .preco-lancamento .pagamentos-aceitos .entrega-opcoes
-       .aviso-prevenda  ................. src/app/page.tsx (§6, §7, §8, §18)
+     .hero--loja .hero__texto .hero__produto .prosa .publico-grid .passos
+       .galeria .lema .section__acao .section__nota .section--marco
+       .aviso-prevenda  ................. src/app/page.tsx (briefing de 20/08)
+     .gaveta .barra-compra ............. menu sanfona (§4) e CTA fixa (§32)
+     .foto ............................. foto oficial ou moldura de espera
+     .pagamentos-aceitos ............... checkout e balcao (nao mais a home)
      .escassez ......................... vitrine + contador-estoque (§5, §11)
      .frete-opcoes ..................... checkout, passo 3 (§13)
      .linha-tempo ...................... /pedido/[token] (§12)
@@ -948,6 +1044,23 @@ main{position:relative;z-index:1;}
   e a tela inteira. Sticky mantem o cabecalho ao alcance sem tirar altura util
   de ninguem.
 */
+/*
+  §2 E A REGRA MAIS DURA DO BRIEFING, e ela vive nestas linhas.
+
+  O QUE ELA PROIBE: logo num bloco preto proprio, diferente do fundo da secao;
+  faixa preta pesada separando o cabecalho do hero; header com cara de site
+  generico.
+
+  COMO ISSO E CUMPRIDO: o cabecalho nasce SEM FUNDO NENHUM sobre o hero da home
+  (`.cabecalho--sobreposto`, ligada pelo componente enquanto a rolagem esta no
+  topo). A marca fica sobre o mesmo gradiente do hero, sem costura. O vidro
+  escurecido e a borda so entram DEPOIS que a pessoa rola — quando ja nao ha
+  hero atras para ser cortado por eles.
+
+  A transicao e sobre `background`, `border-color` e `backdrop-filter` de
+  proposito, e nao sobre `all`: `all` animaria tambem a mudanca de layout do
+  menu nos breakpoints, e o cabecalho "escorregaria" ao redimensionar.
+*/
 .cabecalho{
   position:sticky;
   top:0;
@@ -955,19 +1068,48 @@ main{position:relative;z-index:1;}
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap:16px;
-  padding:12px clamp(16px,4vw,40px);
-  background:rgba(11,10,8,0.88);
-  backdrop-filter:blur(10px);
+  gap:clamp(12px,3vw,32px);
+  padding:14px clamp(16px,4vw,48px);
+  background:rgba(5,5,5,0.86);
+  backdrop-filter:blur(14px);
   border-bottom:1px solid var(--line);
+  transition:background .4s ease, border-color .4s ease, backdrop-filter .4s ease;
 }
-.cabecalho__marca{display:flex;align-items:center;gap:12px;}
-.cabecalho__logo{width:44px;height:44px;}
+/*
+  Sobre o hero, o cabecalho perde a barra — mas NAO fica completamente
+  transparente: fica um veu que escurece de cima para baixo e some antes do
+  fim.
+
+  POR QUE NAO `transparent` PURO, que foi a primeira tentativa: a home pode
+  abrir JA ROLADA (link com ancora, ou o navegador restaurando a posicao), e
+  ate a hidratacao acontecer o cabecalho e servido no estado "topo". Sem veu,
+  aquele instante desenha a marca e o menu por cima de um paragrafo, e as duas
+  coisas ficam ilegiveis.
+
+  E ISSO NAO VIOLA §2, viola o contrario: §2 proibe um BLOCO preto atras da
+  logo e uma faixa pesada cortando o hero. Um gradiente que nasce em 70% e
+  morre em transparente nao tem borda, nao tem recorte e nao separa nada — e a
+  forma classica de manter legibilidade sem desenhar uma barra.
+*/
+.cabecalho--sobreposto{
+  background:linear-gradient(180deg, rgba(5,5,5,0.72) 0%, rgba(5,5,5,0.35) 55%, transparent 100%);
+  border-bottom-color:transparent;
+  backdrop-filter:none;
+}
+
+.cabecalho__marca{display:flex;align-items:center;gap:14px;}
+/*
+  §2 recusa "logo pequena demais". 52px no celular, 60px do tablet para cima —
+  o arquivo em public/ tem 160px de lado, entao ha resolucao de sobra para isto
+  sem borrar. Acima de ~80px o PNG comeca a amolecer e o caminho passa a ser um
+  arquivo novo, nao esticar este.
+*/
+.cabecalho__logo{width:52px;height:52px;}
 .cabecalho__nome{
   display:block;
   font-family:var(--serif);
-  font-size:14px;
-  letter-spacing:3px;
+  font-size:15px;
+  letter-spacing:3.5px;
   text-transform:uppercase;
   color:var(--gold-light);
   line-height:1.2;
@@ -976,21 +1118,121 @@ main{position:relative;z-index:1;}
   display:block;
   font-family:var(--script);
   font-style:italic;
-  font-size:12px;
+  font-size:12.5px;
   letter-spacing:2px;
-  color:var(--gold);
+  color:var(--champagne);
   line-height:1.2;
 }
-.cabecalho__acoes{display:flex;align-items:center;gap:clamp(10px,2vw,20px);}
+
+/* O menu inline do desktop (§3). Escondido no mobile, onde o hamburger manda. */
+.cabecalho__menu{display:none;}
+.cabecalho__menu ul{display:flex;align-items:center;gap:clamp(16px,2.2vw,30px);}
+
+.cabecalho__acoes{display:flex;align-items:center;gap:clamp(10px,1.6vw,18px);}
 .cabecalho__link{
   font-size:12px;
   letter-spacing:2px;
   text-transform:uppercase;
   color:var(--ink-muted);
   transition:color .3s ease;
+  white-space:nowrap;
 }
 .cabecalho__link:hover{color:var(--gold-light);}
-.cabecalho .btn{padding:11px 22px;}
+/* ACESSAR e COMPRAR so aparecem na barra a partir do tablet: no celular eles
+   vivem dentro da gaveta (§4), e a barra fica com marca + hamburger (§4). */
+.cabecalho__link--acessar{display:none;}
+.cabecalho__comprar{display:none;}
+.cabecalho .btn{padding:11px 24px;font-size:12px;}
+
+/* ---------- O HAMBURGER (§3, §4) ---------- */
+.cabecalho__sanfona{
+  width:44px;height:44px;
+  display:grid;place-items:center;
+  background:transparent;
+  border:1px solid var(--line);
+  border-radius:2px;
+  cursor:pointer;
+  padding:0;
+  transition:border-color .3s ease;
+}
+.cabecalho__sanfona:hover{border-color:var(--gold);}
+/*
+  As tres barras sao UM elemento e dois pseudo-elementos. Emoji mudaria de
+  forma em cada sistema e fonte de icone seria mais um arquivo antes do
+  primeiro pixel (§33).
+*/
+.cabecalho__sanfona-barras,
+.cabecalho__sanfona-barras::before,
+.cabecalho__sanfona-barras::after{
+  display:block;
+  width:20px;height:1.5px;
+  background:var(--gold-light);
+  transition:transform .3s ease, opacity .3s ease;
+}
+.cabecalho__sanfona-barras{position:relative;}
+.cabecalho__sanfona-barras::before,
+.cabecalho__sanfona-barras::after{
+  content:'';
+  position:absolute;left:0;
+}
+.cabecalho__sanfona-barras::before{top:-6px;}
+.cabecalho__sanfona-barras::after{top:6px;}
+/* Aberto, as tres viram um X. O seletor sobe do botao pelo aria-expanded, que
+   ja e a fonte da verdade para o leitor de tela — sem classe duplicada. */
+.cabecalho__sanfona[aria-expanded='true'] .cabecalho__sanfona-barras{background:transparent;}
+.cabecalho__sanfona[aria-expanded='true'] .cabecalho__sanfona-barras::before{transform:translateY(6px) rotate(45deg);}
+.cabecalho__sanfona[aria-expanded='true'] .cabecalho__sanfona-barras::after{transform:translateY(-6px) rotate(-45deg);}
+
+/* ---------- A GAVETA (§4) ---------- */
+/*
+  Ela existe no DOM nos dois estados e e escondida por opacidade + deslocamento,
+  nao por `display:none`: assim a animacao tem de onde partir, e o conteudo ja
+  esta no HTML servido. `visibility` entra junto para que, fechada, ela nao
+  receba clique — opacidade zero sozinha continua clicavel e roubaria o toque de
+  quem tentasse acertar o conteudo atras.
+
+  O atributo `inert` no elemento (posto pelo componente) e quem tira o foco e o
+  leitor de tela; estas linhas cuidam so do que se ve.
+*/
+.gaveta{
+  position:fixed;
+  top:0;right:0;
+  width:min(360px,86vw);
+  height:100dvh;
+  z-index:70;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:36px;
+  padding:88px 32px 40px;
+  background:var(--bg-panel);
+  border-left:1px solid var(--line);
+  transform:translateX(100%);
+  opacity:0;
+  visibility:hidden;
+  transition:transform .35s ease, opacity .35s ease, visibility .35s;
+}
+.gaveta--aberta{transform:translateX(0);opacity:1;visibility:visible;}
+.gaveta__lista{display:flex;flex-direction:column;gap:4px;}
+.gaveta__lista a{
+  display:block;
+  padding:12px 0;
+  font-family:var(--serif);
+  font-size:20px;
+  color:var(--ink);
+  border-bottom:1px solid rgba(201,154,61,0.12);
+  transition:color .3s ease,padding-left .3s ease;
+}
+.gaveta__lista a:hover{color:var(--gold-light);padding-left:8px;}
+.gaveta__acoes{display:flex;flex-direction:column;gap:12px;}
+.gaveta__acoes .btn{width:100%;text-align:center;}
+.gaveta__veu{
+  position:fixed;
+  inset:0;
+  z-index:65;
+  background:rgba(5,5,5,0.72);
+  backdrop-filter:blur(2px);
+}
 
 /* ---------- CHROME: RODAPE ---------- */
 .rodape{
@@ -1070,41 +1312,55 @@ main{position:relative;z-index:1;}
   onde a primeira tela e so promessa. Na loja o preco e a CTA precisam caber
   na primeira dobra: quem chega pelo QR Code do evento veio comprar.
 */
-.hero--loja{
-  min-height:auto;
-  padding:56px 20px 24px;
-}
 .hero--loja .hero__title{margin-bottom:18px;}
 
-.preco-lancamento{
+/* ---------- HERO: AS DUAS COLUNAS (§5, §30, §31) ---------- */
+/*
+  A MANCHETE NOVA E MUITO MAIS LONGA QUE A ANTIGA, e o tamanho herdado nao
+  serve mais.
+
+  `.serif-display` foi dimensionada (clamp ate 110px, letter-spacing 10px) para
+  "A MILAGRAN" — duas palavras curtas, centralizadas, ocupando a largura
+  inteira da tela. §6 e §7 trocaram aquilo por "A NOVA EXPERIENCIA" / "UMA NOVA
+  FORMA", que sao tres palavras, agora dentro de METADE da largura porque o
+  hero virou duas colunas (§30). No tamanho antigo ela quebra em tres linhas de
+  ~110px e empurra subtitulo e botoes para fora da primeira dobra — que e
+  exatamente onde §39 quer a compra.
+
+  A reducao e do bloco `--loja` e nao da classe base, porque `.serif-display` e
+  traco herdado da LP e pode voltar a ser usada por uma manchete curta.
+*/
+.hero--loja .serif-display{
+  font-size:clamp(38px,7.5vw,64px);
+  letter-spacing:5px;
+}
+.hero--loja .script{
+  font-size:clamp(17px,2.6vw,24px);
+  margin-top:10px;
+}
+/* Os dois botoes cabem lado a lado na coluna de texto — no tamanho herdado
+   eles somavam mais que a largura dela e empilhavam. */
+.hero--loja .hero__cta .btn{padding:14px 26px;}
+.hero__texto{
+  width:100%;
+  max-width:620px;
   display:flex;
   flex-direction:column;
   align-items:center;
-  gap:6px;
-  margin:26px 0 22px;
 }
-.preco-lancamento__valor{
-  font-family:var(--serif);
-  font-size:clamp(40px,8vw,68px);
-  line-height:1;
-  background:linear-gradient(180deg, var(--gold-light), var(--gold));
-  -webkit-background-clip:text;background-clip:text;color:transparent;
+.hero__produto{
+  width:100%;
+  max-width:min(440px,82vw);
 }
-/* §9: o valor unitario tem linha propria e nunca some quando a quantidade e 1
-   — e a unica forma de o comprador conferir a conta de 2, 3 ou 10 kits. */
-.preco-lancamento__unitario{
-  font-size:14px;
-  color:var(--ink-muted);
-}
-.preco-lancamento__parcela{
-  font-size:14.5px;
-  color:var(--ink);
-}
-.preco-lancamento__nota{
-  font-size:12.5px;
-  color:var(--ink-muted);
-  max-width:420px;
-  text-align:center;
+/*
+  A foto do kit em destaque. A moldura fina dourada e o glow discreto sao os
+  ornamentos de §29 — presentes, e nao exagerados: uma linha de 1px e um brilho
+  de baixa opacidade, nao um cartao com sombra dura.
+*/
+.hero__foto{
+  width:100%;
+  height:auto;
+  border-radius:2px;
 }
 
 .pagamentos-aceitos{
@@ -1131,51 +1387,6 @@ main{position:relative;z-index:1;}
   color:var(--ink-muted);
 }
 
-/* §7: os DOIS caminhos de entrega lado a lado, com o mesmo peso visual —
-   levar na hora no evento e receber em casa. --destaque existe para a tela
-   marcar qual dos dois esta disponivel agora (o presencial deixa de estar
-   quando o estoque zera), nunca para vender um dos dois por padrao. */
-.entrega-opcoes{
-  display:grid;
-  grid-template-columns:1fr 1fr;
-  gap:22px;
-}
-.entrega-card{
-  border:1px solid var(--line);
-  background:var(--bg-panel);
-  padding:30px 26px;
-  border-radius:var(--raio);
-}
-.entrega-card--destaque{
-  border-color:var(--gold);
-  background:linear-gradient(160deg, rgba(201,162,77,0.10), transparent), var(--bg-panel);
-}
-.entrega-card--indisponivel{opacity:.55;}
-.entrega-card__titulo{font-size:19px;color:var(--gold-light);margin:0 0 8px;}
-.entrega-card__prazo{
-  font-size:12px;
-  letter-spacing:2px;
-  text-transform:uppercase;
-  color:var(--gold);
-  margin:0 0 14px;
-}
-.entrega-card p{color:var(--ink-muted);font-size:14.5px;margin:0 0 10px;}
-.entrega-card__lista li{
-  position:relative;
-  padding-left:20px;
-  margin-bottom:8px;
-  font-size:14px;
-  color:var(--ink-muted);
-}
-.entrega-card__lista li::before{
-  content:"—";
-  position:absolute;left:0;top:0;
-  color:var(--gold-deep);
-}
-
-/* §3: o pedido online so e enviado depois do lancamento oficial. E promessa de
-   prazo, entao aparece na home E no checkout com a mesma cara — barra lateral
-   dourada, nunca escondida num rodape de letra miuda. */
 .aviso-prevenda{
   border:1px solid var(--line);
   border-left:3px solid var(--gold);
@@ -1800,4 +2011,337 @@ main{position:relative;z-index:1;}
   padding:0 18px;
   font-size:13px;
   white-space:nowrap;
+}
+
+/* =========================================================================
+   BRIEFING DE 20/08/2026 — os blocos novos da landing page.
+
+   Tudo abaixo e MOBILE FIRST (§34): o estado sem media query e o do celular, e
+   as consultas `min-width` acrescentam. O contrario — desenhar no desktop e
+   consertar no celular com `max-width` — e o que produz a pagina que "funciona
+   mas fica estranha" no telefone, que e onde a compradora do evento vai estar.
+   ========================================================================= */
+
+/* ---------- FOTO OFICIAL, OU A MOLDURA QUE ESPERA POR ELA ---------- */
+/*
+  Ver src/components/foto-da-marca.tsx: enquanto os arquivos de §5/§13/§15 nao
+  chegam, o mesmo espaco recebe um ornamento da marca em vez de uma imagem
+  quebrada. As duas versoes tem que PARECER INTENCIONAIS — e por isso a moldura
+  usa os mesmos elementos graficos de §29 (linha fina dourada, gradiente muito
+  suave, monograma) e nao um cinza de "imagem faltando".
+*/
+.foto{
+  display:block;
+  width:100%;
+  height:auto;
+  border:1px solid var(--line);
+  border-radius:2px;
+}
+.foto--ausente{
+  display:grid;
+  place-items:center;
+  background:
+    radial-gradient(circle at 50% 35%, rgba(201,154,61,0.10), transparent 62%),
+    linear-gradient(160deg, #0e0c0a, #070605);
+  box-shadow:inset 0 0 0 1px rgba(216,183,122,0.10);
+}
+.foto__monograma{
+  font-family:var(--serif);
+  font-size:clamp(40px,9vw,72px);
+  letter-spacing:6px;
+  color:transparent;
+  background:linear-gradient(180deg, var(--gold-light), var(--gold-deep));
+  -webkit-background-clip:text;
+  background-clip:text;
+  opacity:.55;
+}
+
+/* ---------- AUXILIARES DE SECAO ---------- */
+/* A CTA no fim de um bloco (§10, §15, §16, §17, §23). */
+/*
+  A PAGINA E ALINHADA A ESQUERDA, e a CTA de fim de bloco acompanha.
+
+  Ela nascia centrada e ficava sozinha no meio, embaixo de um titulo, um texto
+  e uma lista todos encostados na margem esquerda — o olho descia reto e tinha
+  que voltar ao centro para achar o botao. A UNICA excecao e o bloco da data
+  (§16), que e centrado de proposito e inteiro: la o centro e a composicao, e
+  nao um elemento fora de esquadro.
+*/
+.section__acao{
+  display:flex;
+  gap:16px;
+  flex-wrap:wrap;
+  justify-content:flex-start;
+  margin-top:clamp(28px,5vw,44px);
+}
+.section--marco .section__acao{justify-content:center;}
+/* A letra miuda honesta embaixo de um bloco — frete, prazo, condicao. */
+.section__nota{
+  max-width:680px;
+  margin:26px 0 0;
+  color:var(--ink-muted);
+  font-size:14.5px;
+  line-height:1.75;
+}
+.section--marco .section__nota{margin-left:auto;margin-right:auto;text-align:center;}
+/*
+  §16 pede um bloco "visualmente forte" para a data do lancamento. Ele ganha o
+  brilho dourado central e um filete em cima e embaixo — o unico bloco da
+  pagina com esse tratamento, porque um marco que se repete deixa de ser marco.
+*/
+.section--marco{
+  position:relative;
+  text-align:center;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(201,154,61,0.14), transparent 68%),
+    var(--bg);
+  border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);
+  /*
+    SANGRA DE PONTA A PONTA, como o painel — e pela mesma mecanica: a largura
+    maxima sai da secao e vai para os filhos, e o padding desce junto.
+
+    Sem isto o brilho e os dois filetes paravam nos 1180px da coluna de leitura,
+    e o bloco da data ficava uma CAIXA flutuando no meio da pagina em vez de uma
+    faixa. §16 pede um bloco "visualmente forte": faixa de borda a borda e o que
+    marca um capitulo; caixa centrada e o que marca um aviso.
+  */
+  max-width:none;
+}
+.section--marco > *{
+  max-width:calc(var(--maxw) - 2 * var(--calha));
+  margin-left:auto;
+  margin-right:auto;
+}
+.section--marco .section__head{max-width:820px;}
+
+/* ---------- PROSA (§11) ---------- */
+/* Coluna de leitura estreita de proposito: linha longa demais em fundo escuro
+   e onde o olho perde a proxima linha. */
+/*
+  ALINHADA A ESQUERDA, junto do titulo da secao — e nao centrada.
+
+  Com `margin:0 auto` o bloco de prosa ficava ~150px a direita do proprio <h2>,
+  na mesma secao: o olho sobe do texto para o titulo e nao encontra a margem
+  onde a deixou. A largura maxima continua porque linha longa demais em fundo
+  escuro e onde o olho perde a proxima; o que muda e de que lado sobra o
+  espaco.
+*/
+.prosa{
+  max-width:660px;
+  margin:0;
+  color:var(--ink-muted);
+  font-size:16.5px;
+  line-height:1.85;
+}
+.prosa p{margin:0 0 18px;}
+.prosa p:last-child{margin-bottom:0;}
+.prosa strong{color:var(--ink);font-weight:600;}
+
+/* ---------- PARA QUEM E (§12) ---------- */
+.publico-grid{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:18px;
+}
+.publico-card{
+  border:1px solid var(--line);
+  border-radius:2px;
+  padding:24px 22px;
+  background:linear-gradient(160deg, rgba(201,154,61,0.05), transparent 70%);
+  transition:border-color .3s ease, transform .3s ease;
+}
+.publico-card:hover{border-color:var(--gold);transform:translateY(-2px);}
+.publico-card h3{
+  font-size:17px;
+  color:var(--gold-light);
+  margin:0 0 8px;
+}
+.publico-card p{margin:0;color:var(--ink-muted);font-size:14.5px;}
+
+/* ---------- O KIT: a foto entrou no card (§13) ---------- */
+.kit-card__foto{
+  aspect-ratio:1 / 1;
+  object-fit:cover;
+  margin-bottom:18px;
+}
+
+/* ---------- COMO FUNCIONA (§14) ---------- */
+.passos{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:18px;
+  counter-reset:passo;
+}
+.passo{
+  position:relative;
+  border-left:1px solid var(--line);
+  padding:4px 0 4px 22px;
+}
+.passo__num{
+  display:block;
+  font-size:11px;
+  letter-spacing:3px;
+  text-transform:uppercase;
+  color:var(--champagne);
+  margin-bottom:6px;
+}
+.passo h3{font-size:19px;color:var(--ink);margin:0 0 6px;}
+.passo p{margin:0;color:var(--ink-muted);font-size:14.5px;}
+
+/* ---------- EXPERIENCIA REAL (§15) ---------- */
+.galeria{
+  display:grid;
+  grid-template-columns:repeat(2,1fr);
+  gap:14px;
+}
+.galeria__item{aspect-ratio:4 / 5;object-fit:cover;}
+
+/* ---------- O LEMA DO EVENTO (§17) ---------- */
+/*
+  "Comprou. Pagou. Levou." — uma frase so, partida para ganhar ritmo. Cada
+  span tem o filete dourado embaixo; o `flex-wrap` deixa as tres palavras
+  empilharem no celular sem quebrar no meio de uma delas.
+*/
+.lema{
+  display:flex;
+  flex-wrap:wrap;
+  justify-content:flex-start;
+  gap:clamp(14px,4vw,34px);
+  margin:clamp(28px,5vw,40px) 0;
+  font-family:var(--serif);
+  font-size:clamp(22px,5vw,34px);
+  color:var(--gold-light);
+}
+.lema span{position:relative;padding-bottom:10px;}
+.lema span::after{
+  content:'';
+  position:absolute;
+  left:0;right:0;bottom:0;
+  height:1px;
+  background:linear-gradient(90deg, transparent, var(--gold), transparent);
+}
+
+/* ---------- BARRA DE COMPRA FIXA DO CELULAR (§32) ---------- */
+/*
+  So existe abaixo de 768px — ver a media query no fim deste arquivo. No
+  desktop o botao COMPRAR do cabecalho ja fica permanentemente visivel, e uma
+  segunda barra fixa seria a mesma acao ocupando tela duas vezes.
+*/
+.barra-compra{
+  position:fixed;
+  left:0;right:0;bottom:0;
+  z-index:55;
+  display:none;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  padding:12px 16px;
+  min-height:var(--barra-compra-altura);
+  background:rgba(5,5,5,0.94);
+  backdrop-filter:blur(12px);
+  border-top:1px solid var(--line);
+  transition:transform .3s ease, opacity .3s ease;
+}
+.barra-compra--escondida{
+  transform:translateY(110%);
+  opacity:0;
+}
+.barra-compra__produto{
+  font-size:12px;
+  letter-spacing:2.5px;
+  text-transform:uppercase;
+  color:var(--champagne);
+}
+.barra-compra__botao{
+  padding:13px 22px;
+  font-size:12px;
+  white-space:nowrap;
+}
+
+/* =========================================================================
+   RESPONSIVIDADE (§34): 320+ e o padrao acima; 768+, 1024+ e 1440+ abaixo.
+   ========================================================================= */
+
+/* ---------- 768px+ : tablet ---------- */
+@media (min-width: 768px){
+  /* Os dois botoes saem da gaveta e sobem para a barra (§3). O hamburger fica:
+     ele passa a servir o menu COMPLETO de §25, que nao cabe inline. */
+  .cabecalho__link--acessar{display:inline-block;}
+  .cabecalho__comprar{display:inline-flex;}
+  .cabecalho__logo{width:60px;height:60px;}
+
+  .publico-grid{grid-template-columns:repeat(2,1fr);}
+  .passos{grid-template-columns:repeat(2,1fr);}
+  .galeria{grid-template-columns:repeat(3,1fr);}
+}
+
+/* ---------- abaixo de 768px : so o celular ---------- */
+@media (max-width: 767.98px){
+  .barra-compra{display:flex;}
+  /*
+    A altura da barra devolvida ao documento. Sem isto ela cobre para sempre as
+    ultimas linhas do rodape, incluindo o link da politica de privacidade — que
+    e compromisso de LGPD (ver DEPLOY.md) e nao pode ficar debaixo de um botao.
+  */
+  body{padding-bottom:var(--barra-compra-altura);}
+}
+
+/* ---------- 1024px+ : desktop, o hero vira duas colunas (§30) ---------- */
+@media (min-width: 1024px){
+  .cabecalho__menu{display:block;}
+
+  .hero{
+    display:grid;
+    grid-template-columns:1.12fr .88fr;
+    align-items:center;
+    gap:clamp(40px,5vw,80px);
+    max-width:var(--maxw);
+    margin-left:auto;
+    margin-right:auto;
+    text-align:left;
+    padding-left:clamp(20px,4vw,40px);
+    padding-right:clamp(20px,4vw,40px);
+  }
+  .hero__texto{align-items:flex-start;max-width:none;}
+  .hero__produto{max-width:none;justify-self:end;}
+  .hero__cta{justify-content:flex-start;}
+  /* O subtitulo e a manchete deixam de ser centralizados junto com o bloco. */
+  .hero .script,
+  .hero__subtitle{margin-left:0;margin-right:0;}
+
+  .publico-grid{grid-template-columns:repeat(3,1fr);}
+  .passos{grid-template-columns:repeat(4,1fr);}
+}
+
+/* ---------- 1440px+ : telas largas ---------- */
+@media (min-width: 1440px){
+  /*
+    A coluna de leitura NAO acompanha a largura da tela. Passar de ~1180px faz
+    a linha de texto ficar longa demais para o olho voltar sem se perder; o que
+    ganha espaco e o respiro lateral, nao o paragrafo.
+  */
+  .hero{gap:96px;}
+  /* Muda o TOKEN, e nao o padding da secao: assim painel e secao comum
+     continuam desenhando a mesma coluna na tela larga. */
+  :root{--calha:clamp(24px,5vw,60px);}
+}
+
+/* ---------- MOVIMENTO REDUZIDO ---------- */
+/*
+  Quem pediu menos movimento no sistema recebe menos movimento — inclusive na
+  gaveta e na barra fixa, que sao os dois elementos novos que deslizam.
+  `transition:none` e nao `animation:none`: as duas sao transicoes de estado, e
+  desligar so a animacao deixaria o deslize de pe.
+*/
+@media (prefers-reduced-motion: reduce){
+  .gaveta,
+  .barra-compra,
+  .cabecalho,
+  .publico-card,
+  .cabecalho__sanfona-barras,
+  .cabecalho__sanfona-barras::before,
+  .cabecalho__sanfona-barras::after{
+    transition:none;
+  }
 }

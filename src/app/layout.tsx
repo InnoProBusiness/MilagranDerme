@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next'
-import { Playfair_Display, Cormorant_Garamond, Jost } from 'next/font/google'
+import { Playfair_Display, Cormorant_Garamond, Manrope } from 'next/font/google'
 import './globals.css'
 import { Cabecalho } from '@/components/cabecalho'
 import { Rodape } from '@/components/rodape'
@@ -42,7 +42,22 @@ const fonteScript = Cormorant_Garamond({
   variable: '--fonte-script',
 })
 
-const fonteSans = Jost({
+/**
+ * A SANS DO CORPO TROCOU DE JOST PARA MANROPE EM 20/08/2026, por §28 do
+ * briefing ("Manrope / Montserrat" para textos).
+ *
+ * NAO E TROCA DE GOSTO: Jost e uma geometrica de contraste baixo e altura-x
+ * pequena, desenhada para titulo curto; ela deixa paragrafo longo em fundo
+ * escuro mais dificil de ler, e a pagina nova tem blocos de prosa (§11, §15)
+ * que a antiga nao tinha. Manrope tem altura-x maior e termina melhor em
+ * corpo pequeno — que e onde ela vai passar 90% do tempo.
+ *
+ * A LP ESTATICA DE RECRUTAMENTO (public/seja-representante.html) continua em
+ * Jost: ela tem CSS proprio (public/styles.css) e nao compartilha este layout.
+ * As duas divergirem e o mesmo acordo ja registrado em DEPLOY.md sobre
+ * globals.css e styles.css.
+ */
+const fonteSans = Manrope({
   subsets: ['latin'],
   display: 'swap',
   variable: '--fonte-sans',
@@ -117,12 +132,12 @@ export const metadata: Metadata = {
  * `colorScheme: 'dark'` nao e decoracao: o tema da marca e escuro e UNICO
  * (nao ha prefers-color-scheme em globals.css). Sem esta declaracao, o
  * navegador desenha campo de formulario, barra de rolagem e menu de <select>
- * no esquema claro por cima de um fundo #0b0a08 — texto escuro em campo
+ * no esquema claro por cima de um fundo #050505 — texto escuro em campo
  * branco no meio da loja escura.
  */
 export const viewport: Viewport = {
   colorScheme: 'dark',
-  themeColor: '#0b0a08',
+  themeColor: '#050505',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
