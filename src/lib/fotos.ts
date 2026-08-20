@@ -5,9 +5,14 @@
  * POR QUE ISTO EXISTE. O briefing de 20/08/2026 pede a foto do Kit como
  * PROTAGONISTA do hero (§5, §30), as quatro fotos reais dos produtos (§13) e o
  * registro fotografico dos testes (§15), e proibe banco de imagens generico
- * quando houver foto oficial (§13). As fotos NAO foram entregues junto do
- * briefing: `public/assets/` tem favicons, um logo de 160px e a og-image, e
- * mais nada.
+ * quando houver foto oficial (§13). Nenhuma delas veio junto do briefing: elas
+ * chegam depois, uma de cada vez, e a pagina precisa ser publicavel a cada
+ * ponto desse caminho.
+ *
+ * ESTADO EM 20/08/2026:
+ *   §5/§30  a foto do hero ......... ENTREGUE
+ *   §13     os quatro produtos ..... pendentes
+ *   §15     o registro dos testes .. pendente
  *
  * A SAIDA NAO FOI INVENTAR IMAGEM NEM TRAVAR A PAGINA. Cada foto e opcional
  * por construcao: com `src` preenchido a secao mostra a foto; com `src` nulo
@@ -30,6 +35,15 @@
  * imagem standalone do Dockerfile (a mesma decisao ja registrada em
  * src/components/cabecalho.tsx). As imagens sao servidas de `public/` como
  * estao, entao elas precisam chegar JA COMPRIMIDAS.
+ *
+ * COMO A DO HERO FOI PREPARADA, para as proximas seguirem o mesmo caminho: o
+ * arquivo original tinha 1,9 MB em PNG. Foi reduzido para 1100px de largura —
+ * o dobro da coluna em que ele aparece no desktop (~490px), o que cobre tela
+ * de densidade 2x — e salvo em WebP com qualidade 84, chegando a 121 KB. As
+ * qualidades 78/84/90 foram comparadas: 84 e onde a curva para de valer a pena,
+ * e os gradientes escuros da foto (onde WebP costuma criar bandas) foram
+ * conferidos ampliados antes de publicar. Os originais ficam em `design/`, para
+ * que um recorte novo saia da foto e nao de um JPEG ja comprimido.
  *
  * TAMANHO. A foto do hero e a unica com `preload` (§33): ela e o maior
  * elemento acima da dobra e define o LCP. Mire abaixo de 250 KB nela; as
@@ -54,10 +68,18 @@ export type Foto = {
  * para a manchete de §6 respirar.
  */
 export const FOTO_HERO: Foto = {
-  src: null,
-  alt: 'O Kit Milagran completo, com os quatro produtos do procedimento',
-  largura: 900,
-  altura: 1100,
+  src: '/assets/kit/kit-milagran-hero.webp',
+  /*
+    O `alt` DESCREVE O QUE A FOTO MOSTRA, e nao o que gostariamos que ela
+    mostrasse: sao a caixa e TRES frascos. O papel removedor, que e o quarto
+    item do kit, nao aparece nesta imagem — prometer os quatro aqui seria a
+    unica pessoa que depende do `alt` recebendo uma descricao que nao bate com
+    a foto ao lado do texto.
+  */
+  alt: 'A caixa preta do Kit Milagran, com o nome em dourado, ao lado dos frascos '
+    + 'do sabonete líquido, do hidratante e do pote da máscara, sobre uma bandeja espelhada',
+  largura: 1100,
+  altura: 1375,
 }
 
 /**
