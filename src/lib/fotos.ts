@@ -11,7 +11,7 @@
  *
  * ESTADO EM 20/08/2026:
  *   §5/§30  a foto do hero ......... ENTREGUE
- *   §13     os quatro produtos ..... pendentes
+ *   §13     os quatro produtos ..... 2 de 4 (sabonete e mascara)
  *   §15     o registro dos testes .. pendente
  *
  * A SAIDA NAO FOI INVENTAR IMAGEM NEM TRAVAR A PAGINA. Cada foto e opcional
@@ -92,30 +92,46 @@ export const FOTO_HERO: Foto = {
  */
 export type ProdutoDoKit = 'sabonete' | 'mascara' | 'papel' | 'hidratante'
 
+/*
+  AS QUATRO SAO SERVIDAS EM 3:4, e nao no quadrado que este manifesto pedia
+  ate 20/08/2026.
+
+  As fotos oficiais vem em 2:3 (1024x1536), com o produto centrado e fundo
+  escuro em volta. Recortar aquilo num quadrado centrado corta a VALVULA do
+  sabonete, que fica na parte alta do quadro — o card mostraria um frasco
+  decapitado. Em 3:4 o corte come so fundo, nas duas fotos ja entregues.
+
+  `object-fit: cover` continua em .kit-card__foto de proposito, mesmo com os
+  arquivos ja publicados na proporcao certa: faltam duas fotos, e se elas
+  chegarem em outro enquadramento a grade continua uniforme em vez de ganhar um
+  card mais alto que os outros.
+*/
 export const FOTOS_DOS_PRODUTOS: Record<ProdutoDoKit, Foto> = {
   sabonete: {
-    src: null,
-    alt: 'Frasco do sabonete líquido facial Milagran',
-    largura: 600,
-    altura: 600,
+    src: '/assets/kit/sabonete.webp',
+    alt: 'Frasco âmbar do sabonete líquido facial Milagran, com válvula pump dourada',
+    largura: 760,
+    altura: 1013,
   },
   mascara: {
-    src: null,
-    alt: 'Pote da máscara extratora Milagran',
-    largura: 600,
-    altura: 600,
+    src: '/assets/kit/mascara.webp',
+    alt: 'Pote âmbar da máscara extratora Milagran, com tampa preta',
+    largura: 760,
+    altura: 1013,
   },
+  // As duas que faltam. Ate elas chegarem, os cards mostram a moldura
+  // ornamental e o texto do produto continua de pe — ver FotoDaMarca.
   papel: {
     src: null,
     alt: 'Papel removedor Milagran',
-    largura: 600,
-    altura: 600,
+    largura: 760,
+    altura: 1013,
   },
   hidratante: {
     src: null,
     alt: 'Frasco do hidratante facial Milagran',
-    largura: 600,
-    altura: 600,
+    largura: 760,
+    altura: 1013,
   },
 }
 

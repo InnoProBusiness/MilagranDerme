@@ -2158,8 +2158,15 @@ main{position:relative;z-index:1;}
 .publico-card p{margin:0;color:var(--ink-muted);font-size:14.5px;}
 
 /* ---------- O KIT: a foto entrou no card (§13) ---------- */
+/*
+  3:4, e nao o quadrado original. As fotos oficiais dos produtos vem em 2:3 com
+  o produto centrado: um recorte quadrado corta a valvula do sabonete, que fica
+  na parte alta do quadro. Ver o comentario de FOTOS_DOS_PRODUTOS em
+  src/lib/fotos.ts — os arquivos ja sao publicados nesta proporcao, e o `cover`
+  fica para o caso de uma foto futura chegar com outro enquadramento.
+*/
 .kit-card__foto{
-  aspect-ratio:1 / 1;
+  aspect-ratio:3 / 4;
   object-fit:cover;
   margin-bottom:18px;
 }
