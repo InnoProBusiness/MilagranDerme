@@ -193,38 +193,42 @@ export function Cabecalho() {
       </a>
 
       {/*
+        A MARCA E A LOGO, E SO A LOGO — o texto ao lado saiu em 20/08/2026.
+        Duas razoes, e a segunda e a que decide:
+
+        1. A logo NOVA ja e o wordmark: o selo circular tem "MILAGRAN" escrito
+           dentro. Repetir a palavra em tipografia ao lado dele nao e reforco,
+           e a mesma palavra duas vezes a dois centimetros.
+        2. O par ao lado era "Milagran" + "Derme", e "Derme" saiu da
+           identidade. Sobrava um lockup com metade do conteudo.
+
+        O TAMANHO NAO E ESTETICA, E LEGIBILIDADE. Medido renderizando a arte:
+        abaixo de ~80px o "MILAGRAN" dentro do circulo vira borrao. No celular
+        ela fica em 72px — ali o selo dourado funciona como marca reconhecivel
+        mesmo sem a palavra ser lida, e um cabecalho de 110px comeria a
+        primeira dobra. Do tablet para cima ela vai a 88px, onde a palavra le.
+        Ver globals.css, `.cabecalho__logo`.
+
+        `alt` PREENCHIDO agora, e isso e obrigatorio: antes o nome acessivel do
+        link vinha do texto ao lado (por isso `alt=""` — com os dois, o leitor
+        de tela anunciaria "Milagran Milagran"). Sem o texto, a imagem e o
+        unico conteudo do link; com `alt=""` ele viraria um link sem nome
+        nenhum, que o leitor de tela anuncia como a URL crua.
+
         <img> cru, nao next/image, e a decisao vale para todo o projeto: a
         otimizacao de imagem do Next exige `sharp` em producao, que nao e
         dependencia deste repositorio e nao entra na imagem standalone
-        (Dockerfile).
-
-        A LOGO CRESCEU (44px -> 52px, e 60px no desktop): §2 recusa
-        explicitamente "logo pequena demais". O arquivo em public/ tem 160px de
-        lado, entao ha resolucao de sobra para isso sem borrar — mas NAO ha para
-        crescer muito mais. Se §2 exigir uma marca maior que 80px, o caminho e
-        um arquivo novo em resolucao maior, nao esticar este.
-
-        alt="" porque o nome da marca ja e o texto visivel do proprio link:
-        com alt preenchido, o leitor de tela anunciaria "Milagran Derme
-        Milagran Derme".
+        (Dockerfile). O arquivo servido tem 256px de lado — o dobro do maior uso
+        (88px), para nao borrar em tela de alta densidade.
       */}
       <a className="cabecalho__marca" href="/" onClick={fechar}>
         <img
           className="cabecalho__logo"
-          src="/assets/logo-160.png"
-          alt=""
-          width={60}
-          height={60}
+          src="/assets/logo-milagran-256.png"
+          alt="Milagran"
+          width={88}
+          height={88}
         />
-        {/*
-          O {' '} entre os dois spans e semantico, nao formatacao: sem ele o
-          nome acessivel do link vira "MilagranDerme" numa palavra so (o
-          calculo do nome concatena os nos de texto sem separador).
-        */}
-        <span>
-          <span className="cabecalho__nome">Milagran</span>{' '}
-          <span className="cabecalho__sub">Derme</span>
-        </span>
       </a>
 
       {/*

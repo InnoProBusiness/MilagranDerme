@@ -67,10 +67,16 @@ h1,h2,h3,h4{font-family:var(--serif);font-weight:600;margin:0;color:var(--ink);}
   padding:22px clamp(20px,5vw,60px);
 }
 .brand-mark{display:flex;align-items:center;gap:10px;}
+/*
+  A MARCA NOVA E UM SELO COM O NOME DENTRO, e abaixo de ~80px a palavra vira
+  borrao — medido renderizando a arte. 72px e o mesmo tamanho do cabecalho da
+  loja (src/app/globals.css, .cabecalho__logo): as duas paginas mostram a mesma
+  marca, e mostra-la em tamanhos diferentes e como publicar dois logos.
+*/
 .brand-logo{
   display:block;
-  width:52px;
-  height:52px;
+  width:72px;
+  height:72px;
 }
 .brand-ring{
   width:56px;height:56px;

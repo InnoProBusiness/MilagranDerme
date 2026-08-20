@@ -1,6 +1,6 @@
 # Milagran — plataforma
 
-Loja propria da Milagran Derme com atribuicao de venda por representante:
+Loja propria da Milagran com atribuicao de venda por representante:
 quem chega por `/r/<slug>` tem essa origem gravada de forma imutavel no
 pedido, e e ela que decide quem recebe comissao. Aplicacao Next.js 16 (App
 Router) em deploy unico, Postgres acessado por Kysely, migrations em SQL

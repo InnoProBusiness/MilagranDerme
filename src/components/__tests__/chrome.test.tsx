@@ -30,9 +30,28 @@ import { Rodape } from '@/components/rodape'
  *    barato perto do sintoma de ele mudar (rollback silencioso a cada deploy).
  */
 describe('Cabecalho', () => {
+  /**
+   * A MARCA E A LOGO, e a logo e o unico conteudo do link desde 20/08/2026 (o
+   * par de texto "Milagran / Derme" ao lado dela saiu junto com o termo).
+   *
+   * Por isso a busca e por NOME ACESSIVEL: ele agora vem inteiro do `alt` da
+   * imagem. Se alguem devolver `alt=""` ali — o que era correto enquanto havia
+   * texto ao lado —, este teste fica vermelho, e e a unica coisa que separa a
+   * marca de virar um link que o leitor de tela anuncia como a URL crua.
+   */
   it('leva ao topo da loja pela marca', () => {
     render(<Cabecalho />)
-    expect(screen.getByRole('link', { name: /milagran derme/i })).toHaveAttribute('href', '/')
+    expect(screen.getByRole('link', { name: /^milagran$/i })).toHaveAttribute('href', '/')
+  })
+
+  // O termo saiu da identidade em 20/08/2026: nao pode voltar por um alt, um
+  // titulo ou um rotulo esquecido.
+  it('nao usa mais o termo "Derme" em lugar nenhum do chrome', () => {
+    const { container } = render(<><Cabecalho /><Rodape /></>)
+    expect(container.textContent ?? '').not.toMatch(/derme/i)
+    for (const img of container.querySelectorAll('img')) {
+      expect(img.getAttribute('alt') ?? '').not.toMatch(/derme/i)
+    }
   })
 
   it('abre com o atalho de pular para o conteudo, apontando para o alvo do layout', () => {

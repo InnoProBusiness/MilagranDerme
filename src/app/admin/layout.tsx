@@ -43,7 +43,7 @@ export default async function LayoutAdmin({ children }: { children: React.ReactN
     <div className="admin">
       <div className="admin__topo">
         <div>
-          <p className="admin__lede">Milagran Derme · Painel administrativo</p>
+          <p className="admin__lede">Milagran · Painel administrativo</p>
           {/*
             Nome e e-mail de quem esta logado ficam visiveis o tempo todo de
             proposito: o painel e aberto em maquina compartilhada, e a primeira

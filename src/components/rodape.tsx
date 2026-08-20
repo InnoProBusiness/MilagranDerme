@@ -25,7 +25,7 @@ export function Rodape() {
     <footer className="rodape">
       <div className="rodape__grid">
         <div className="rodape__coluna">
-          <span className="rodape__marca">Milagran Derme</span>
+          <span className="rodape__marca">Milagran</span>
           <p>Kit de limpeza de pele instantânea. Lançamento oficial em 25 de agosto de 2026.</p>
           <p>CNPJ {CNPJ}</p>
         </div>
@@ -92,7 +92,13 @@ export function Rodape() {
       </div>
 
       <div className="rodape__legal">
-        <span>Milagran Derme · CNPJ {CNPJ} · © {ano}</span>
+        {/*
+          A LINHA LEGAL IDENTIFICA A EMPRESA, e nao a marca. Por isso ela e a
+          unica do rodape que nao virou so "Milagran" em 20/08/2026: o que
+          identifica a pessoa juridica aqui e o CNPJ, e ele fica. O nome
+          comercial ao lado dele acompanha a marca.
+        */}
+        <span>Milagran · CNPJ {CNPJ} · © {ano}</span>
         {/*
           /privacidade.html e compromisso de LGPD: a URL esta linkada no
           consentimento do formulario de candidatura e no rodape da LP. Nao

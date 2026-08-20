@@ -76,7 +76,7 @@ const fonteSans = Manrope({
  */
 const SITE = 'https://milagranoficial.com.br'
 
-const TITULO = 'Milagran Derme — Kit de limpeza de pele instantânea'
+const TITULO = 'Milagran — Kit de limpeza de pele instantânea'
 const DESCRICAO =
   'O Kit Milagran de limpeza de pele instantânea. Lançamento oficial em 25 de agosto de 2026: leve o seu no evento ou receba em casa.'
 
@@ -86,7 +86,7 @@ export const metadata: Metadata = {
     default: TITULO,
     // Cada tela acrescenta o proprio titulo ("Checkout", "Pedido nº 1042") e
     // a marca vem de graca no fim.
-    template: '%s · Milagran Derme',
+    template: '%s · Milagran',
   },
   description: DESCRICAO,
   // SEM `alternates.canonical` AQUI, de proposito: canonical declarado no
@@ -97,24 +97,26 @@ export const metadata: Metadata = {
   // por pagina.
   openGraph: {
     type: 'website',
-    siteName: 'Milagran Derme',
+    siteName: 'Milagran',
     locale: 'pt_BR',
     url: SITE,
     title: TITULO,
     description: DESCRICAO,
-    // Quadrada, 1200x1200 — o mesmo arquivo que a LP ja publica.
+    // Quadrada, 1200x1200. REFEITA EM 20/08/2026 a partir da marca nova: a
+    // anterior era a arte antiga com "derme" escrito DENTRO do selo, e era ela
+    // que aparecia toda vez que alguem colava o link num grupo de WhatsApp.
     images: [{
-      url: '/assets/og-image.jpg',
+      url: '/assets/og-image.png',
       width: 1200,
       height: 1200,
-      alt: 'Kit Milagran Derme',
+      alt: 'Milagran',
     }],
   },
   twitter: {
     card: 'summary_large_image',
     title: TITULO,
     description: DESCRICAO,
-    images: ['/assets/og-image.jpg'],
+    images: ['/assets/og-image.png'],
   },
   // Os arquivos ja existem em public/assets/ desde a LP; o App Router nao os
   // enxergava porque nao havia `icons` em lugar nenhum.
