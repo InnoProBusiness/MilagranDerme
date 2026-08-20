@@ -530,18 +530,44 @@ describe('Home da loja de lancamento', () => {
    * encontrar <img> e o segundo continua valendo igual.
    */
   describe('fotos oficiais (§5, §13, §15)', () => {
-    it('sem foto, o espaço vira ornamento — nunca uma imagem quebrada', async () => {
+    /**
+     * ESTE TESTE MUDOU DE PERGUNTA quando as fotos chegaram, em 20/08/2026.
+     *
+     * Enquanto nao havia nenhuma, ele provava que a AUSENCIA nao virava imagem
+     * quebrada — e contava molduras ornamentais. Com o hero e os quatro
+     * produtos entregues, nao sobrou nenhuma moldura nesta pagina, e insistir
+     * em contar molduras aqui so daria duas saidas ruins: afrouxar a assercao
+     * ate ela nao provar nada, ou reintroduzir um buraco na pagina para o teste
+     * ter o que medir.
+     *
+     * A garantia da ausencia nao sumiu: ela mudou de endereco, para
+     * src/components/__tests__/foto-da-marca.test.tsx, onde e exercitada
+     * diretamente e continua valendo mesmo com a loja inteira fotografada.
+     * Aqui ficou a pergunta que so a PAGINA responde: as fotos declaradas
+     * chegam mesmo a tela, com texto alternativo.
+     */
+    it('cada foto declarada vira uma <img> real, com alt', async () => {
       await renderizarHome()
 
-      // Nenhum <img> apontando para arquivo que nao existe.
-      const imagens = document.querySelectorAll('img')
+      const imagens = [...document.querySelectorAll('img')]
+      expect(imagens.length).toBeGreaterThanOrEqual(5) // hero + os quatro produtos
+
       for (const img of imagens) {
+        // Nenhum <img> apontando para lugar nenhum.
         expect(img.getAttribute('src')).toBeTruthy()
+        // E nenhuma foto muda em silencio para quem nao a ve. `alt=""` aqui
+        // seria legitimo so para imagem DECORATIVA, e nenhuma destas e.
+        expect(img.getAttribute('alt')).toBeTruthy()
       }
-      // O lugar da foto do hero esta reservado e marcado como decorativo.
-      const molduras = screen.getAllByTestId('foto-ausente')
-      expect(molduras.length).toBeGreaterThan(0)
-      for (const m of molduras) expect(m).toHaveAttribute('aria-hidden', 'true')
+
+      // O hero carrega adiantado; o resto espera a rolagem (§33).
+      const heroImg = document.querySelector('.hero__foto') as HTMLImageElement
+      expect(heroImg).not.toBeNull()
+      expect(heroImg.getAttribute('loading')).toBe('eager')
+      expect(heroImg.getAttribute('fetchpriority')).toBe('high')
+      for (const card of document.querySelectorAll('.kit-card__foto')) {
+        expect(card.getAttribute('loading')).toBe('lazy')
+      }
     })
 
     it('sem fotos dos testes, a seção de experiência não mostra galeria vazia', async () => {

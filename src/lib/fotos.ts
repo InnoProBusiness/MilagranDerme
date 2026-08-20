@@ -11,8 +11,14 @@
  *
  * ESTADO EM 20/08/2026:
  *   §5/§30  a foto do hero ......... ENTREGUE
- *   §13     os quatro produtos ..... 2 de 4 (sabonete e mascara)
- *   §15     o registro dos testes .. pendente
+ *   §13     os quatro produtos ..... ENTREGUES
+ *   §15     o registro dos testes .. pendente (e depende de autorizacao de
+ *                                     uso de imagem — ver FOTOS_DA_EXPERIENCIA)
+ *
+ * O MECANISMO DE AUSENCIA CONTINUA VALENDO mesmo com quase tudo entregue, e
+ * nao vira codigo morto: §15 ainda esta vazio, e uma foto pode ser retirada a
+ * qualquer momento (autorizacao revogada, arte substituida). `FotoDaMarca` tem
+ * teste proprio para esse caminho.
  *
  * A SAIDA NAO FOI INVENTAR IMAGEM NEM TRAVAR A PAGINA. Cada foto e opcional
  * por construcao: com `src` preenchido a secao mostra a foto; com `src` nulo
@@ -35,6 +41,10 @@
  * imagem standalone do Dockerfile (a mesma decisao ja registrada em
  * src/components/cabecalho.tsx). As imagens sao servidas de `public/` como
  * estao, entao elas precisam chegar JA COMPRIMIDAS.
+ *
+ * AS QUATRO DOS PRODUTOS seguiram o mesmo caminho do hero, com o recorte 3:4
+ * descrito em FOTOS_DOS_PRODUTOS: 760px de largura, WebP 84. Os originais
+ * somavam 6,5 MB e as publicadas somam 127 KB.
  *
  * COMO A DO HERO FOI PREPARADA, para as proximas seguirem o mesmo caminho: o
  * arquivo original tinha 1,9 MB em PNG. Foi reduzido para 1100px de largura —
@@ -119,17 +129,18 @@ export const FOTOS_DOS_PRODUTOS: Record<ProdutoDoKit, Foto> = {
     largura: 760,
     altura: 1013,
   },
-  // As duas que faltam. Ate elas chegarem, os cards mostram a moldura
-  // ornamental e o texto do produto continua de pe — ver FotoDaMarca.
   papel: {
-    src: null,
-    alt: 'Papel removedor Milagran',
+    src: '/assets/kit/papel.webp',
+    // O UNICO QUE NAO E FRASCO: e a caixa. Descrever "papel removedor" sem
+    // dizer que a foto mostra a EMBALAGEM deixaria quem depende do alt
+    // esperando as folhas.
+    alt: 'Caixa preta do papel removedor Milagran, com 100 unidades',
     largura: 760,
     altura: 1013,
   },
   hidratante: {
-    src: null,
-    alt: 'Frasco do hidratante facial Milagran',
+    src: '/assets/kit/hidratante.webp',
+    alt: 'Frasco âmbar do hidratante facial Milagran, com válvula pump dourada',
     largura: 760,
     altura: 1013,
   },
