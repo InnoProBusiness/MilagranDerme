@@ -241,16 +241,27 @@ export async function buscarPagamentoMP(id: string): Promise<RespostaPagamentoMP
 // isto em um comando.
 //
 // POR QUE O PIX NAO MUDOU DE PORTA, entao. `/v1/payments` e o unico caminho com
-// ENTREGA DE WEBHOOK COMPROVADA nesta conta: em 20/08/2026 duas notificacoes
-// reais chegaram, passaram na assinatura HMAC e foram relidas pela API. O
-// topico `order` NUNCA foi visto chegando. Trocar de porta seria trocar um
-// risco resolvido por um nao medido.
+// ENTREGA DE WEBHOOK COMPROVADA nesta conta: em 20/08/2026 tres notificacoes
+// reais chegaram, passaram na assinatura HMAC e foram relidas pela API.
+//
+// E O TOPICO `order` NAO CHEGA — isto foi MEDIDO, nao suposto. Com este codigo
+// ja em producao (que aceita o topico e gravaria a linha em `webhook_eventos`),
+// uma order real foi criada em 20/08/2026 e NENHUMA notificacao apareceu, nem
+// depois de dois minutos e meio; a notificacao de `payment` da mesma rodada
+// chegou em menos de um segundo. O evento `order` nao esta marcado no painel.
+//
+// LEIA ISSO COMO O QUE E: se a migracao tivesse sido feita, cada Pix teria sido
+// criado e NUNCA confirmado. A compradora pagaria, o dinheiro entraria, e o
+// pedido ficaria em 'aguardando_pagamento' para sempre — sem erro em log
+// nenhum.
 //
 // O QUE FAZER ANTES DE LIGAR ISTO, se o bloqueio voltar:
 //   1. Marcar o evento `order` no painel do Mercado Pago (Suas integracoes ->
-//      a aplicacao -> Webhooks). Sem isso NENHUMA notificacao de Pix chega, e
-//      nao ha erro em lugar nenhum — so pedidos parados em
-//      'aguardando_pagamento'.
+//      a aplicacao -> Webhooks). MEDIDO EM 20/08/2026: hoje ele NAO esta
+//      marcado, e sem ele NENHUMA notificacao de Pix chega. Este passo nao e
+//      burocracia — e a diferenca entre vender e so parecer que vende.
+//      Depois de marcar, confirme criando uma order e olhando
+//      `SELECT * FROM webhook_eventos WHERE tipo = 'order'`.
 //   2. Trocar `criarPagamentoMP` por `criarOrderPixMP` no ramo do Pix de
 //      src/app/api/pagamentos/route.ts E de src/app/api/vendas-presenciais/route.ts,
 //      trocando `mapearStatusMP` por `mapearStatusOrder` junto, nos dois.

@@ -314,12 +314,33 @@ Para chegar nessa linha a notificação teve que: chegar na URL certa, **passar 
 Com o bloqueio removido, migrar deixou de ser conserto e passou a ser risco. O Pix continua
 saindo por `criarPagamentoMP` (`/v1/payments`), no checkout e no balcão.
 
-**Por quê:** o tópico `payment` tem entrega comprovada nesta conta; o tópico `order` **nunca foi
-visto chegando**. Adotar a Orders a cinco dias do lançamento trocaria um risco conhecido e
-resolvido por um não medido — e a forma de falhar é a pior possível: a cobrança acontece, o
-dinheiro entra, e o pedido nunca vira `pago`.
+**Por quê:** o tópico `payment` tem entrega comprovada nesta conta; o tópico `order` **não chega**.
+Adotar a Orders a cinco dias do lançamento trocaria um risco conhecido e resolvido por um não
+medido — e a forma de falhar é a pior possível: a cobrança acontece, o dinheiro entra, e o pedido
+nunca vira `pago`.
 
 Bônus da decisão: cartão e Pix voltam a falar **um vocabulário só**, e o cartão vende de novo.
+
+#### E a decisão foi confirmada por medição, depois do deploy
+
+Com o código novo já em produção — que **aceita** o tópico `order` e gravaria a linha em
+`webhook_eventos` — uma order real foi criada em 20/08/2026 às 13:08. Resultado:
+
+```
+SELECT count(*) FROM webhook_eventos WHERE tipo = 'order';   -->  0
+```
+
+Nada, nem depois de dois minutos e meio. A notificação de `payment` da **mesma rodada** chegou em
+menos de um segundo:
+
+```
+ payment | 173845163753 | 2026-08-20 13:08:22.973268-03
+```
+
+**O evento `order` não está marcado no painel do Mercado Pago.** Se a migração tivesse sido feita,
+cada Pix teria sido criado e nunca confirmado: a compradora pagaria, o dinheiro entraria, e o
+pedido ficaria em `aguardando_pagamento` para sempre — sem um erro em log sequer. Era exatamente o
+risco que a §4.4 apontou como "o maior desta migração", e ele era real.
 
 ### 8.4 O que ficou no repositório, desligado
 
@@ -377,9 +398,10 @@ evita que ligar a saída de emergência vire dois deploys encadeados com pagamen
 
 Nesta ordem. Pular o passo 1 é o erro caro.
 
-1. **Marcar o evento `order`** no painel: *Suas integrações → a aplicação → Webhooks*. Sem isso
-   **nenhuma** notificação de Pix chega, e não há erro em lugar nenhum — só pedidos parados em
-   `aguardando_pagamento`.
+1. **Marcar o evento `order`** no painel: *Suas integrações → a aplicação → Webhooks*. **Medido em
+   20/08/2026: hoje ele NÃO está marcado.** Sem isso **nenhuma** notificação de Pix chega, e não há
+   erro em lugar nenhum — só pedidos parados em `aguardando_pagamento`. Depois de marcar, confirme
+   criando uma order e conferindo `SELECT * FROM webhook_eventos WHERE tipo = 'order'`.
 2. Trocar `criarPagamentoMP` por `criarOrderPixMP` no ramo do Pix, **e `mapearStatusMP` por
    `mapearStatusOrder` junto**, nos **dois** arquivos: `src/app/api/pagamentos/route.ts` e
    `src/app/api/vendas-presenciais/route.ts`.
