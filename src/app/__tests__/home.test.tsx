@@ -25,15 +25,15 @@ vi.mock('@/repositories/produtos', () => ({ listarKitsAtivos: vi.fn() }))
 vi.mock('@/repositories/estoque', () => ({ saldoDoEstoque: vi.fn() }))
 
 /**
- * A home passou a montar o CHECKOUT INTEIRO na secao "06 — A compra" (o mesmo
- * padrao da LP de recrutamento, que traz o formulario embutido em vez de um
- * link). `CheckoutWizard` e Client Component e chama `useRouter`, que fora do
- * App Router lanca "invariant expected app router to be mounted".
+ * O mock sobrou do tempo em que a home montava o CheckoutWizard inteiro (ele e
+ * Client Component e chama `useRouter`, que fora do App Router lanca
+ * "invariant expected app router to be mounted"). O checkout mudou para
+ * /checkout em 20/08/2026 e a home nao o monta mais.
  *
- * O mock e o mesmo de src/components/__tests__/checkout-wizard.test.tsx — e la
- * que o comportamento do checkout e testado de verdade, com fetch falso e as
- * quatro etapas. Aqui interessa apenas que ele ESTA na pagina, no lugar certo
- * da jornada de §18.
+ * CONTINUA AQUI DE PROPOSITO: `BarraCompraMobile` tambem e Client Component, e
+ * qualquer pedaco cliente que esta pagina venha a montar cai na mesma
+ * armadilha. Tirar o mock troca uma linha inofensiva por uma falha de teste
+ * confusa no dia em que isso acontecer.
  */
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
@@ -162,36 +162,31 @@ describe('Home da loja de lancamento', () => {
   })
 
   /**
-   * §8: O PRECO NAO APARECE ANTES DO CHECKOUT.
+   * §8: O PRECO NAO APARECE ANTES DO CHECKOUT — e agora sem excecao nenhuma.
    *
-   * Ate 20/08/2026 esta home mostrava o valor DUAS vezes — no hero e numa
-   * secao inteira "Quanto custa". A regra nova e curiosidade -> desejo ->
-   * percepcao de valor -> decisao -> checkout, e o numero so entra quando a
-   * compradora ja esta avancando para pagar.
+   * Ate 20/08/2026 esta home mostrava o valor DUAS vezes (hero e uma secao
+   * "Quanto custa"). Aquilo saiu, mas o checkout continuava embutido no fim da
+   * pagina, e ele imprime preco por dever de oficio: §8 valia com uma
+   * ressalva, e este teste tinha que dizer "todo R$ que existir esta dentro de
+   * #comprar".
    *
-   * O QUE ESTE TESTE NAO PROIBE: o preco DENTRO do checkout embutido. Aquele
-   * bloco E o checkout de §20 — e o unico lugar da pagina autorizado a
-   * imprimir o valor. Por isso a assercao nao e "nao existe R$ 249,00 na
-   * pagina", que seria falsa e forcaria alguem a afrouxa-la; e "todo R$ 249,00
-   * que existir esta dentro de #comprar".
+   * Com o formulario em tela propria, a ressalva acabou. A assercao pode
+   * finalmente ser a mais forte possivel — NENHUM "R$" no corpo da pagina —, e
+   * e ela que pega a regressao mais provavel: alguem reembutir o checkout aqui
+   * "so para encurtar o funil".
    */
-  it('DINHEIRO: o preço não aparece fora do checkout (§8)', async () => {
+  it('DINHEIRO: a home não imprime preço em lugar nenhum (§8)', async () => {
     await renderizarHome()
 
-    // O bloco de preco do hero e a secao "Quanto custa" deixaram de existir.
+    // O bloco de preco do hero e a secao "Quanto custa" sairam em 20/08/2026...
     expect(screen.queryByTestId('preco')).toBeNull()
     expect(screen.queryByRole('heading', { name: 'Quanto custa' })).toBeNull()
-
-    const compra = document.querySelector('#comprar') as HTMLElement
-    expect(compra).not.toBeNull()
-
-    // Todo valor impresso mora dentro da secao de compra.
-    const unitarios = screen.getAllByTestId('valor-unitario')
-    expect(unitarios.length).toBeGreaterThan(0)
-    for (const linha of unitarios) {
-      expect(linha).toHaveTextContent('R$ 249,00')
-      expect(compra.contains(linha)).toBe(true)
-    }
+    // ...e o checkout embutido, que era a ULTIMA excecao, mudou de tela no
+    // mesmo dia. Sem ele, §8 deixou de ter excecao: nenhum caminho desta
+    // pagina imprime um valor em reais.
+    expect(screen.queryByTestId('valor-unitario')).toBeNull()
+    expect(screen.queryByTestId('subtotal')).toBeNull()
+    expect(document.body.textContent ?? '').not.toMatch(/R\$/)
   })
 
   // A home nao conhece o CEP de ninguem, entao o unico valor de frete que ela
@@ -333,8 +328,9 @@ describe('Home da loja de lancamento', () => {
 
       const secundaria = screen.getByTestId('cta-secundaria')
       expect(secundaria).toHaveTextContent('Garantir meu kit')
-      // ANCORA, e nao /comprar: a compra acontece nesta pagina, no fim dela.
-      expect(secundaria).toHaveAttribute('href', '#comprar')
+      // §9: "leva diretamente para a compra" — e desde 20/08/2026 a compra e
+      // uma tela, nao uma ancora nesta pagina.
+      expect(secundaria.getAttribute('href')).toMatch(/^\/checkout\?/)
     })
 
     /**
@@ -350,7 +346,7 @@ describe('Home da loja de lancamento', () => {
 
       const cta = screen.getByTestId('cta-escassez')
       expect(cta).toHaveTextContent('GARANTIR MEU KIT')
-      expect(cta).toHaveAttribute('href', '#comprar')
+      expect(cta.getAttribute('href')).toMatch(/^\/checkout\?/)
     })
 
     it('vira "COMPRAR ONLINE" quando o presencial esgota', async () => {
@@ -360,11 +356,52 @@ describe('Home da loja de lancamento', () => {
       expect(screen.getByTestId('cta-escassez')).toHaveTextContent('COMPRAR ONLINE')
       // O destino NAO muda com o esgotamento: o canal online nao tem teto,
       // entao os dois rotulos levam a uma compra que existe.
-      expect(screen.getByTestId('cta-escassez')).toHaveAttribute('href', '#comprar')
+      expect(screen.getByTestId('cta-escassez').getAttribute('href')).toMatch(/^\/checkout\?/)
       expect(screen.getByTestId('contador-estoque'))
         .toHaveTextContent('Os 50 kits disponíveis para compra presencial foram esgotados.')
       // O hero NAO muda: ele continua convidando a conhecer a marca.
       expect(screen.getByTestId('cta-principal')).toHaveTextContent('Quero conhecer a Milagran')
+    })
+
+    /**
+     * DINHEIRO: O CUPOM DE CAMPANHA TEM QUE ATRAVESSAR A TROCA DE TELA.
+     *
+     * Um link de anuncio chega como `/?cupom=CODIGO`. Enquanto o checkout era
+     * embutido, a home passava o codigo direto para o formulario ao lado e
+     * ninguem precisava pensar nisso. Com o formulario em /checkout, o codigo
+     * so chega la se cada botao daqui o carregar na URL.
+     *
+     * ESTA E A FALHA MAIS CARA QUE A MUDANCA PODE CAUSAR, e a mais silenciosa:
+     * nada quebra, nenhum erro aparece, e a compradora que veio pelo anuncio
+     * chega na tela de pagamento com o campo de cupom vazio, precisando digitar
+     * um codigo que ela nunca decorou. Descobre-se pela reclamacao de que "o
+     * desconto sumiu", semanas depois.
+     *
+     * TODOS os caminhos de compra sao conferidos, e nao um: basta um deles
+     * esquecer o parametro para o vazamento existir.
+     */
+    it('DINHEIRO: o cupom da campanha viaja em todos os caminhos de compra', async () => {
+      await renderizarHome({ cupom: 'lancamento' })
+
+      const caminhos = [
+        screen.getByTestId('cta-secundaria'),
+        screen.getByTestId('cta-escassez'),
+        screen.getByTestId('cta-final'),
+        screen.getByTestId('barra-compra-mobile').querySelector('a')!,
+      ]
+
+      for (const alvo of caminhos) {
+        // Em caixa alta: e assim que cupomDaUrl normaliza, e e o unico formato
+        // que o CHECK do banco aceita.
+        expect(alvo.getAttribute('href')).toContain('cupom=LANCAMENTO')
+      }
+    })
+
+    // Sem cupom, o parametro nao entra: uma URL com `&cupom=` vazio nao quebra
+    // nada, mas suja o link que a compradora ve e copia.
+    it('sem cupom na URL, o link de compra nao carrega o parametro', async () => {
+      await renderizarHome()
+      expect(screen.getByTestId('cta-final').getAttribute('href')).not.toContain('cupom')
     })
 
     /**
@@ -383,32 +420,36 @@ describe('Home da loja de lancamento', () => {
     })
 
     /**
-     * O FIM DA PAGINA NAO E MAIS UM BOTAO, E O CHECKOUT.
+     * O FIM DA PAGINA VOLTOU A SER UM BOTAO — e desta vez de propósito.
      *
-     * Ate 17/08/2026 a secao "06 — A compra" trazia um segundo botao
-     * (`cta-final`) que levava para /comprar. Ele deixou de existir: quem leu
-     * os seis blocos de argumento agora escolhe a quantidade e finaliza ali
-     * mesmo, como a LP de recrutamento faz com o formulario de candidatura.
+     * A historia importa porque este teste ja afirmou o CONTRARIO. Entre
+     * 17/08 e 20/08/2026 a secao "A compra" trazia o checkout inteiro
+     * embutido, e este teste existia para impedir que alguem o trocasse por um
+     * link. Em 20/08 o cliente pediu o fluxo em tela propria, e as razoes
+     * estao escritas na secao (src/app/page.tsx): §8 passa a valer sem
+     * excecao, a home volta a ter um <h1> so, e o formulario ganha uma tela
+     * sem menu, sem barra fixa e sem dez blocos de argumento em volta.
      *
-     * Este teste trava o padrao. Se alguem trocar o checkout embutido por um
-     * link de novo, ele fica vermelho.
+     * O QUE ELE TRAVA AGORA: que a entrega para /checkout continue existindo e
+     * carregando o kit. Um botao que perca o `?kit=` manda a compradora para o
+     * primeiro kit do catalogo, que hoje e o mesmo — e no dia em que houver
+     * dois, vira a venda do produto errado.
      */
-    it('a secao de compra traz o checkout embutido, nao um link para outra tela', async () => {
+    it('a secao de compra entrega para o checkout em tela propria', async () => {
       await renderizarHome()
 
-      const secao = document.querySelector('#comprar')
+      const secao = document.querySelector('#comprar') as HTMLElement
       expect(secao).not.toBeNull()
 
-      // O passo 1 do checkout: seletor de quantidade e subtotal, dentro da
-      // propria secao.
-      const dentro = within(secao as HTMLElement)
-      expect(dentro.getByTestId('quantidade')).toBeInTheDocument()
-      expect(dentro.getByRole('button', { name: /aumentar quantidade/i })).toBeInTheDocument()
-      expect(dentro.getByRole('button', { name: /^continuar$/i })).toBeInTheDocument()
+      // O formulario NAO esta mais aqui.
+      const dentro = within(secao)
+      expect(dentro.queryByTestId('quantidade')).toBeNull()
+      expect(dentro.queryByRole('button', { name: /aumentar quantidade/i })).toBeNull()
 
-      // E nenhum link de saida sobrou ali.
-      expect(dentro.queryByTestId('cta-final')).toBeNull()
-      expect(secao!.querySelector('a[href="/comprar"]')).toBeNull()
+      // O que ha e a porta para ele, com o kit identificado.
+      const cta = dentro.getByTestId('cta-final')
+      expect(cta.getAttribute('href')).toMatch(/^\/checkout\?/)
+      expect(cta.getAttribute('href')).toContain('kit=kit-milagran')
     })
 
     // Saldo negativo e estado legitimo (ajuste de inventario maior que o saldo).
@@ -460,6 +501,7 @@ describe('Home da loja de lancamento', () => {
       expect(screen.queryByTestId('cta-principal')).toBeNull()
       expect(screen.queryByTestId('cta-secundaria')).toBeNull()
       expect(screen.queryByTestId('cta-escassez')).toBeNull()
+      expect(screen.queryByTestId('cta-final')).toBeNull()
       expect(screen.queryByTestId('barra-compra-mobile')).toBeNull()
       // Sem kit nao ha o que perguntar ao estoque.
       expect(saldoDoEstoque).not.toHaveBeenCalled()

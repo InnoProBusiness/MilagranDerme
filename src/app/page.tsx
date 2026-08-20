@@ -8,8 +8,7 @@ import { textoAnvisa, situacaoPendente } from '@/lib/anvisa'
 import { FOTO_HERO, FOTOS_DOS_PRODUTOS, FOTOS_DA_EXPERIENCIA } from '@/lib/fotos'
 import { saldoDoEstoque } from '@/repositories/estoque'
 import { listarKitsAtivos } from '@/repositories/produtos'
-import { CheckoutWizard } from '@/components/checkout-wizard'
-import { cupomDaUrl } from '@/lib/cupom-da-url'
+import { cupomDaUrl, linkDeCheckout } from '@/lib/cupom-da-url'
 import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
 
 /**
@@ -37,6 +36,11 @@ import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
  * checkout. Quem procurar o preco o encontra a um clique; quem esta
  * conhecendo a marca nao tromba com ele.
  *
+ * ISSO SO PASSOU A SER LITERAL quando o checkout mudou de tela, no mesmo dia:
+ * enquanto o formulario estava embutido aqui, o preco aparecia dentro dele e
+ * §8 valia com uma excecao. Hoje nao ha excecao — nenhum caminho desta pagina
+ * imprime um valor em reais.
+ *
  * O QUE NAO PODE SAIR DAQUI, por mais que o redesenho ande:
  *
  *   - O AVISO DA ANVISA (secao 06). E divulgacao regulatoria, nao decoracao:
@@ -46,10 +50,15 @@ import { ENDERECO_RETIRADA, PRAZO_RETIRADA_DIAS } from '@/lib/retirada'
  *   - O AVISO DE PRE-VENDA (§21). Enquanto 25/08 nao chega, quem compra
  *     precisa saber que o pedido sai depois. A frase e a constante
  *     AVISO_PRE_VENDA, compartilhada com o checkout.
- *   - O CHECKOUT EMBUTIDO. A compra acontece nesta pagina, na secao 11.
+ *
+ * O CHECKOUT SAIU DAQUI EM 20/08/2026. Ate entao o formulario inteiro vivia na
+ * secao 11 desta pagina; hoje ele tem tela propria em /checkout, e a secao 11
+ * fecha o argumento e entrega. O porque esta escrito na propria secao — e a
+ * consequencia mais importante e a de cima: sem o formulario, o preco
+ * finalmente nao aparece em lugar nenhum desta pagina.
  *
  * SERVER COMPONENT. Os unicos pedacos com 'use client' sao o contador de
- * estoque, a barra de compra do celular e o checkout.
+ * estoque e a barra de compra do celular.
  *
  * SEM A CLASSE `.reveal` EM LUGAR NENHUM, e isso e armadilha real: `.reveal`
  * comeca com `opacity:0` em globals.css e so aparece quando `public/script.js`
@@ -128,7 +137,6 @@ const SUBTITULO_PRE_VENDA =
  */
 const CTA_COM_PRESENCIAL = 'GARANTIR MEU KIT'
 const CTA_SO_ONLINE = 'COMPRAR ONLINE'
-const DESTINO_COMPRA = '#comprar'
 
 /**
  * §13: os quatro produtos.
@@ -311,6 +319,25 @@ export default async function PaginaInicial({ searchParams }: Props) {
    */
   const rotuloCta = esgotado ? CTA_SO_ONLINE : CTA_COM_PRESENCIAL
 
+  /**
+   * PARA ONDE TODO BOTAO DE COMPRA DESTA PAGINA APONTA — montado UMA vez, e
+   * nao escrito em cada `href`.
+   *
+   * O CUPOM E A RAZAO DE ISTO NAO SER UMA CONSTANTE NO TOPO DO ARQUIVO. Um
+   * link de campanha chega como `/?cupom=CODIGO`, e o codigo so PREENCHE o
+   * campo do checkout — quem concede desconto e o servidor. Mas se o link
+   * daqui para /checkout nao levar o codigo junto, a compradora que veio pelo
+   * anuncio chega na tela de pagamento sem o cupom preenchido e precisa
+   * digitar um codigo que ela nao decorou. Ninguem descobre isso por um erro:
+   * descobre-se pela reclamacao de que "o desconto nao apareceu".
+   * src/app/r/[slug]/page.tsx registra que o cupom importa mais no caminho de
+   * campanha do que em qualquer outra tela.
+   *
+   * `quantidade: 1` porque a home nao pergunta mais quantidade — quem escolhe
+   * e o passo 1 do checkout, que e para onde este link leva.
+   */
+  const hrefCompra = linkDeCheckout(kit.slug, 1, cupomInicial)
+
   // Uma vez, aqui, e nao inline em cada uso: a MESMA situacao alimenta o texto
   // e a decisao de moldura do bloco ANVISA.
   const situacaoAnvisaDoKit = {
@@ -321,7 +348,7 @@ export default async function PaginaInicial({ searchParams }: Props) {
   return (
     <>
       {/* ---------------- §36/02: HERO + FOTO DO PRODUTO ---------------- */}
-      <Hero lancado={lancado} />
+      <Hero lancado={lancado} hrefCompra={hrefCompra} />
 
       {/* ---------------- §36/03: O QUE E A MILAGRAN (§10) ---------------- */}
       <section className="section section--panel" id="a-milagran" aria-labelledby="a-milagran-titulo">
@@ -510,7 +537,7 @@ export default async function PaginaInicial({ searchParams }: Props) {
         )}
 
         <div className="section__acao">
-          <a className="btn btn--ghost" href={DESTINO_COMPRA}>Quero experimentar</a>
+          <a className="btn btn--ghost" href={hrefCompra}>Quero experimentar</a>
         </div>
       </section>
 
@@ -586,7 +613,7 @@ export default async function PaginaInicial({ searchParams }: Props) {
         </p>
 
         <div className="section__acao">
-          <a className="btn btn--solid" href={DESTINO_COMPRA} data-testid="cta-escassez">
+          <a className="btn btn--solid" href={hrefCompra} data-testid="cta-escassez">
             {rotuloCta}
           </a>
         </div>
@@ -594,14 +621,29 @@ export default async function PaginaInicial({ searchParams }: Props) {
 
       {/* ---------------- §36/11: CTA DE COMPRA (§37) ---------------- */}
       {/*
-        A COMPRA ACONTECE AQUI, na propria pagina — o checkout inteiro, e nao um
-        botao para outra tela. Quem leu as dez secoes de argumento age no lugar
-        onde ja esta; mandar para outra URL neste ponto e pedir que a visitante
-        recomece a decisao numa tela que nunca viu.
+        O FECHAMENTO DO ARGUMENTO — e a porta para a compra, que desde
+        20/08/2026 acontece em TELA PROPRIA (/checkout).
 
-        E TAMBEM O UNICO LUGAR DA HOME ONDE O PRECO APARECE — dentro do
-        CheckoutWizard, que e o passo de compra de §20. Ver o cabecalho deste
-        arquivo sobre §8.
+        ATE AQUI O CHECKOUT INTEIRO FICAVA EMBUTIDO NESTA SECAO, e a razao
+        estava escrita: quem leu dez blocos de argumento age no lugar onde ja
+        esta, e mandar para outra URL seria pedir que a decisao recomecasse numa
+        tela nunca vista. A troca foi pedida pelo cliente em 20/08/2026, e ela
+        paga essa perda com tres coisas concretas:
+
+        1. §8 PASSA A VALER AO PE DA LETRA. O preco era a excecao que este bloco
+           abria na home — o kit custa R$ 1.000,00 e o numero aparecia aqui,
+           dentro do formulario. Agora a home inteira nao tem preco; ele mora na
+           vitrine e no checkout, que e o que §8 e §20 pedem.
+        2. A HOME VOLTA A TER UM <h1> SO. O passo 1 do wizard abre com
+           `<h1>{kit.nome}</h1>`, e com ele embutido a home servia DOIS <h1> — o
+           do hero e o do kit. Documento invalido, e dois assuntos concorrendo
+           para o leitor de tela e para o buscador.
+        3. O FLUXO GANHA UMA TELA SEM CONCORRENCIA. Preencher endereco e cartao
+           ao lado de dez secoes de argumento, um menu e uma barra fixa de
+           compra e mais ruido do que ajuda.
+
+        O QUE A TROCA CUSTA, para ficar dito: um clique a mais entre o fim do
+        argumento e o formulario. E o preco de tudo acima.
       */}
       <section className="section section--panel" id="comprar" aria-labelledby="comprar-titulo">
         <div className="section__head">
@@ -609,8 +651,8 @@ export default async function PaginaInicial({ searchParams }: Props) {
           <h2 id="comprar-titulo">Uma nova experiência começa agora.</h2>
           <p className="section__lede">
             {lancado
-              ? 'A Milagran chegou ao mercado depois de 15 anos de história. Escolha a quantidade e finalize aqui mesmo, com PIX ou cartão de crédito.'
-              : 'Depois de 15 anos de história, a Milagran finalmente chega ao mercado. Escolha a quantidade e garanta o seu kit aqui mesmo, com PIX ou cartão de crédito.'}
+              ? 'A Milagran chegou ao mercado depois de 15 anos de história. Escolha a quantidade na próxima tela e finalize com PIX ou cartão de crédito.'
+              : 'Depois de 15 anos de história, a Milagran finalmente chega ao mercado. Escolha a quantidade na próxima tela e garanta o seu kit com PIX ou cartão de crédito.'}
           </p>
         </div>
 
@@ -619,6 +661,11 @@ export default async function PaginaInicial({ searchParams }: Props) {
           AVISO_PRE_VENDA de src/lib/tempo.ts, a mesma que o checkout mostra.
           Duas telas escrevendo a propria versao do prazo e como duas
           superficies prometerem fretes diferentes para a mesma compra.
+
+          ELA CONTINUA NESTA PAGINA mesmo com o formulario em outra: e aqui que
+          a decisao de comprar acontece, e o prazo de entrega e parte dessa
+          decisao. Descobri-lo so depois de preencher nome, CEP e cartao seria
+          contar tarde.
         */}
         {lancado ? (
           <p className="aviso-prevenda" data-testid="prazo-online">
@@ -633,16 +680,11 @@ export default async function PaginaInicial({ searchParams }: Props) {
           </p>
         )}
 
-        {/*
-          `kit` e nao-nulo aqui por construcao: o catalogo vazio ja encerrou a
-          pagina no retorno antecipado la em cima.
-        */}
-        <CheckoutWizard
-          kit={kit}
-          quantidadeInicial={1}
-          cupomInicial={cupomInicial}
-          lancado={lancado}
-        />
+        <div className="section__acao">
+          <a className="btn btn--solid" href={hrefCompra} data-testid="cta-final">
+            {rotuloCta}
+          </a>
+        </div>
       </section>
 
       {/* ---------------- §36/12: REPRESENTANTES (§23) ---------------- */}
@@ -683,7 +725,7 @@ export default async function PaginaInicial({ searchParams }: Props) {
         de despeja-lo no meio da leitura. Ela se recolhe sozinha quando a secao
         do checkout aparece — ver o componente.
       */}
-      <BarraCompraMobile href={DESTINO_COMPRA} alvo="comprar" rotulo={rotuloCta} />
+      <BarraCompraMobile href={hrefCompra} alvo="comprar" rotulo={rotuloCta} />
     </>
   )
 }
@@ -706,13 +748,20 @@ export default async function PaginaInicial({ searchParams }: Props) {
 function Hero({
   lancado,
   /**
-   * As CTAs sao ancoras para secoes desta mesma pagina. Sem catalogo, essas
-   * secoes nao existem — e o hero precisa saber disso para nao publicar botao
-   * que nao leva a lugar nenhum.
+   * Para onde vai a CTA secundaria (§9: "leva diretamente para a compra").
+   * Chega pronta de cima porque so a pagina conhece o kit e o cupom da URL —
+   * ver `hrefCompra`.
+   */
+  hrefCompra,
+  /**
+   * A CTA primaria e uma ancora para uma secao desta mesma pagina. Sem
+   * catalogo, essa secao nao existe — e o hero precisa saber disso para nao
+   * publicar botao que nao leva a lugar nenhum.
    */
   comCompra = true,
 }: {
   lancado: boolean
+  hrefCompra?: string
   comCompra?: boolean
 }) {
   const manchete = lancado ? MANCHETE_LANCADA : MANCHETE_PRE_VENDA
@@ -753,7 +802,7 @@ function Hero({
             <a className="btn btn--solid" href="#a-milagran" data-testid="cta-principal">
               Quero conhecer a Milagran
             </a>
-            <a className="btn btn--ghost" href={DESTINO_COMPRA} data-testid="cta-secundaria">
+            <a className="btn btn--ghost" href={hrefCompra} data-testid="cta-secundaria">
               Garantir meu kit
             </a>
           </div>

@@ -1,3 +1,4 @@
+import type { Metadata } from 'next'
 import { buscarKitAtivoPorSlug, listarKitsAtivos } from '@/repositories/produtos'
 import { QUANTIDADE_MAXIMA } from '@/lib/carrinho'
 import { CheckoutWizard } from '@/components/checkout-wizard'
@@ -8,6 +9,30 @@ import { lancamentoJaOcorreu } from '@/lib/tempo'
 // src/app/comprar/page.tsx e src/app/r/[slug]/page.tsx: um snapshot
 // congelado no build serviria um kit desativado ou um preco velho.
 export const dynamic = 'force-dynamic'
+
+/**
+ * ESTA ROTA VIROU A TELA DE COMPRA EM 20/08/2026.
+ *
+ * Ela ja existia — a vitrine (/comprar) sempre entregou o pedido aqui —, mas
+ * dividia o papel com o checkout embutido na home. O cliente pediu o fluxo em
+ * tela propria, e a home passou a entregar para ca tambem. Ver a secao "A
+ * compra" em src/app/page.tsx para as razoes.
+ *
+ * TITULO PROPRIO porque a aba do navegador passou a ser um lugar onde a
+ * compradora se perde: com o formulario na home, "Milagran — Kit de limpeza de
+ * pele" descrevia a aba corretamente. Agora ha duas abas possiveis da mesma
+ * loja, e a que tem o pedido pela metade precisa se identificar. O template do
+ * layout raiz acrescenta a marca ("Checkout · Milagran").
+ *
+ * `noindex` porque uma tela de checkout nao e resposta para busca nenhuma:
+ * indexada, ela competiria com a home pelo nome da marca e entregaria ao
+ * visitante um formulario no lugar da loja. `follow` fica ligado — os links
+ * daqui (rodape, politica de privacidade) continuam valendo.
+ */
+export const metadata: Metadata = {
+  title: 'Checkout',
+  robots: { index: false, follow: true },
+}
 
 type Props = {
   searchParams: Promise<{ kit?: string; q?: string; cupom?: string | string[] }>
