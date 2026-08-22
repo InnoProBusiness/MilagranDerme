@@ -147,20 +147,180 @@ function texto(v: unknown): string {
   return typeof v === 'string' ? v.trim() : ''
 }
 
+/**
+ * POR QUE O CAMPO NAO PASSA — a FRASE, e nao um booleano.
+ *
+ * Ate 21/08/2026 estas duas regras devolviam so `true`/`false`, e o unico
+ * consumidor era o `disabled` do "Continuar". O resultado foi a reclamacao que
+ * originou este bloco: alguem digitou o WhatsApp com um digito a menos
+ * ("629960153", nove digitos) e clicou em Continuar. A TELA NAO FEZ NADA —
+ * botao sem estilo de desabilitado (nao existia `.btn:disabled` no CSS), sem
+ * mensagem, sem campo destacado, com quatro campos preenchidos e nenhuma pista
+ * de qual deles era o errado. O caminho de recuperacao era adivinhar.
+ *
+ * Devolver o MOTIVO campo a campo e o que permite as tres coisas que a tela
+ * passou a fazer com o mesmo dado: destacar o campo, escrever embaixo dele o
+ * que falta e resumir num alerta o que impede o passo de andar. E o principio
+ * ja escrito em `motivoParaNaoConfirmar`, no passo 4 — "o botao e a explicacao
+ * tem que sair do mesmo lugar".
+ *
+ * AS REGRAS NAO MUDARAM: sao, digito por digito, as mesmas do Zod de
+ * src/app/api/pedidos/route.ts. Apertar aqui o que o servidor aceita criaria a
+ * versao inversa do mesmo defeito — um dado bom recusado pela tela, e desta vez
+ * sem nem o servidor para desmentir.
+ */
+export type ErrosDeDados = Partial<Record<keyof DadosPessoais, string>>
+export type ErrosDeEndereco = Partial<Record<keyof Endereco, string>>
+
+/**
+ * "Voce digitou 9 digitos" — a metade da mensagem que separa "esta errado" de
+ * "falta um". Num campo de digitos, contar e a diferenca entre a pessoa reler o
+ * proprio numero dez vezes sem ver o que ha de errado e ela achar o buraco de
+ * primeira.
+ */
+function contagemDeDigitos(valor: string): string {
+  if (valor.length === 0) return 'O campo está vazio.'
+  return valor.length === 1 ? 'Você digitou 1 dígito.' : `Você digitou ${valor.length} dígitos.`
+}
+
+export function errosDeDados(d: DadosPessoais): ErrosDeDados {
+  const erros: ErrosDeDados = {}
+
+  if (d.nome.trim().length < 3) {
+    erros.nome = 'Digite seu nome completo — ao menos 3 letras.'
+  }
+  if (!EMAIL_REGEX.test(d.email)) {
+    erros.email = d.email.trim() === ''
+      ? 'Informe o e-mail que vai receber a confirmação do pedido.'
+      : 'Este e-mail não parece completo. O formato é nome@provedor.com.'
+  }
+  if (!/^\d{11}$/.test(d.cpf)) {
+    erros.cpf = `O CPF tem 11 dígitos, sem pontos nem traço. ${contagemDeDigitos(d.cpf)}`
+  }
+  if (!/^\d{10,13}$/.test(d.whatsapp)) {
+    // O CASO DA RECLAMACAO. O input ja filtra letras e corta em 13 digitos,
+    // entao o unico jeito de errar aqui e por falta — e e por isso que a
+    // mensagem comeca pelo minimo e termina pela contagem, em vez de dizer so
+    // "invalido".
+    erros.whatsapp = d.whatsapp.length > 13
+      ? 'O WhatsApp tem no máximo 13 dígitos, contando DDD e país.'
+      : `Informe DDD + número, só dígitos — no mínimo 10 (ex.: 62991234567). ${contagemDeDigitos(d.whatsapp)}`
+  }
+
+  return erros
+}
+
+export function errosDeEndereco(e: Endereco): ErrosDeEndereco {
+  const erros: ErrosDeEndereco = {}
+
+  if (!CEP_COMPLETO.test(e.cep)) {
+    erros.cep = `O CEP tem 8 dígitos, sem hífen. ${contagemDeDigitos(e.cep)}`
+  }
+  // `complemento` NAO ENTRA, e a ausencia e a regra: e o unico campo opcional
+  // do endereco (`.default('')` no schema da rota). Apartamento inexistente nao
+  // pode travar entrega nenhuma.
+  if (e.rua.trim() === '') erros.rua = 'Informe a rua ou avenida.'
+  if (e.numero.trim() === '') erros.numero = 'Informe o número. Se não houver, escreva S/N.'
+  if (e.bairro.trim() === '') erros.bairro = 'Informe o bairro.'
+  if (e.cidade.trim() === '') erros.cidade = 'Informe a cidade.'
+  if (!/^[A-Z]{2}$/.test(e.estado)) erros.estado = 'A UF tem 2 letras (ex.: GO).'
+
+  return erros
+}
+
+/**
+ * "Da para seguir?" — DERIVADO da lista de erros, nunca uma segunda copia das
+ * regras. Foi assim que a versao anterior conseguiu ter um botao que sabia
+ * dizer "nao" e nao sabia dizer "por que": eram dois conhecimentos diferentes,
+ * e so um deles estava escrito.
+ */
 function dadosPessoaisValidos(d: DadosPessoais): boolean {
-  return d.nome.trim().length >= 3
-    && EMAIL_REGEX.test(d.email)
-    && /^\d{11}$/.test(d.cpf)
-    && /^\d{10,13}$/.test(d.whatsapp)
+  return Object.keys(errosDeDados(d)).length === 0
 }
 
 function enderecoValido(e: Endereco): boolean {
-  return CEP_COMPLETO.test(e.cep)
-    && e.rua.trim().length > 0
-    && e.numero.trim().length > 0
-    && e.bairro.trim().length > 0
-    && e.cidade.trim().length > 0
-    && /^[A-Z]{2}$/.test(e.estado)
+  return Object.keys(errosDeEndereco(e)).length === 0
+}
+
+/**
+ * O nome do campo COMO ESTA ESCRITO NA TELA. E o vocabulario do resumo de
+ * erros: "Corrija os campos E-mail e WhatsApp" so encurta o caminho de quem
+ * procura se as palavras forem as mesmas que estao em cima dos campos.
+ */
+const ROTULO_DO_CAMPO: Readonly<Record<string, string>> = {
+  nome: 'Nome completo', email: 'E-mail', cpf: 'CPF', whatsapp: 'WhatsApp',
+  cep: 'CEP', estado: 'Estado (UF)', rua: 'Rua', numero: 'Número',
+  bairro: 'Bairro', cidade: 'Cidade',
+}
+
+/**
+ * Os campos NA ORDEM DA TELA — e e essa ordem que decide qual deles recebe o
+ * foco quando o passo se recusa a andar. Mandar o cursor para o segundo erro
+ * quando o primeiro esta acima faria a pessoa rolar para tras.
+ */
+const CAMPOS_DOS_DADOS: ReadonlyArray<keyof DadosPessoais> = ['nome', 'email', 'cpf', 'whatsapp']
+const CAMPOS_DO_ENDERECO: ReadonlyArray<keyof Endereco> = [
+  'cep', 'estado', 'rua', 'numero', 'bairro', 'cidade',
+]
+
+/** "A", "A e B", "A, B e C" — lista humana, com o "e" do portugues no fim. */
+export function listarCampos(rotulos: readonly string[]): string {
+  if (rotulos.length <= 1) return rotulos[0] ?? ''
+  return `${rotulos.slice(0, -1).join(', ')} e ${rotulos[rotulos.length - 1]}`
+}
+
+/** O id do paragrafo de erro de um campo — ver `ErroDoCampo`. */
+function idDoErro(campo: string): string {
+  return `erro-${campo}`
+}
+
+/**
+ * Leva o cursor ate o campo que impede o passo de andar.
+ *
+ * Guardada por `typeof document`: este componente e renderizado no servidor
+ * antes de hidratar, e a funcao so e chamada por clique — mas a guarda custa
+ * uma linha e o ReferenceError custaria a tela inteira.
+ */
+function focarCampo(id: string | null) {
+  if (!id || typeof document === 'undefined') return
+  document.getElementById(id)?.focus()
+}
+
+/**
+ * Os dois atributos que amarram o input a sua mensagem de erro.
+ *
+ * Funcao, e nao dois atributos escritos a mao em cada um dos dez campos, porque
+ * esquecer UM deles em UM campo produz exatamente o defeito que este trabalho
+ * veio corrigir, so que restrito a quem usa leitor de tela: a mensagem esta na
+ * tela e mesmo assim ninguem a recebe.
+ */
+function ariaDoCampo(campo: string, erro?: string) {
+  return {
+    'aria-invalid': erro ? true : undefined,
+    'aria-describedby': erro ? idDoErro(campo) : undefined,
+  } as const
+}
+
+function classeDoCampo(erro: string | undefined, largo = false): string {
+  return `form__field${largo ? ' form__field--wide' : ''}${erro ? ' form__field--invalid' : ''}`
+}
+
+/**
+ * O texto vermelho embaixo do campo.
+ *
+ * Componente proprio para que o `id` do paragrafo e o `aria-describedby` do
+ * input nascam da MESMA regra (`idDoErro`): um `aria-describedby` apontando
+ * para um id que nao existe e pior que nenhum — anuncia que ha explicacao e nao
+ * entrega nenhuma.
+ *
+ * SEM `role` proprio. Sao ate seis destes numa tela; seis live regions
+ * competindo fariam o leitor de tela recitar o formulario inteiro a cada tecla.
+ * Quem anuncia e o resumo unico em `role="alert"` ao lado do botao, e cada
+ * campo se explica ao receber o foco, pelo `aria-describedby`.
+ */
+function ErroDoCampo({ campo, mensagem }: { campo: string; mensagem?: string }) {
+  if (!mensagem) return null
+  return <p className="form__error" id={idDoErro(campo)}>{mensagem}</p>
 }
 
 /**
@@ -360,6 +520,25 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
   // comprador precise reescrever o CEP para forcar a mudanca.
   const [tentativaDeFrete, setTentativaDeFrete] = useState(0)
 
+  /**
+   * QUANDO O ERRO PODE APARECER. Duas chaves, e as duas existem pela mesma
+   * razao: ninguem merece ler "digite seu nome completo" depois de teclar a
+   * primeira letra do proprio nome. Formulario que critica enquanto a pessoa
+   * digita ensina a ignorar vermelho — e ai a mensagem que importa passa
+   * despercebida junto com as outras.
+   *
+   * `camposTocados` libera o erro de UM campo depois que a pessoa saiu dele:
+   * ela ja terminou de digitar ali, entao a critica e sobre algo pronto.
+   * `tentouAvancar` libera TODOS de uma vez, no clique do "Continuar" — o
+   * momento em que a pessoa afirma que terminou o passo inteiro.
+   *
+   * `tentouAvancar` volta a false a cada troca de passo (`irParaPasso`): ele
+   * descreve uma tentativa NAQUELA tela, e carrega-lo adiante pintaria de
+   * vermelho um passo que a pessoa acabou de abrir.
+   */
+  const [camposTocados, setCamposTocados] = useState<Record<string, true>>({})
+  const [tentouAvancar, setTentouAvancar] = useState(false)
+
   const cepCompleto = CEP_COMPLETO.test(endereco.cep) ? endereco.cep : ''
 
   const vaiRetirar = modalidade === 'retirada'
@@ -386,6 +565,128 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
    */
   const entregaResolvida = vaiRetirar
     || (vaiEnviar && enderecoValido(endereco) && opcaoDeFrete !== null)
+
+  const errosDosDados = errosDeDados(dados)
+  const errosDoEndereco = errosDeEndereco(endereco)
+
+  /**
+   * Dos erros que EXISTEM, os que a tela ja pode dizer em voz alta.
+   *
+   * Filtrar aqui, uma vez, e nao perguntar "posso mostrar?" em cada um dos dez
+   * campos: o JSX passa a ler `errosVisiveis.cpf` e pronto, sem repetir a regra
+   * de `camposTocados`/`tentouAvancar` dez vezes — que e onde ela acabaria
+   * escrita de nove jeitos parecidos e um errado.
+   */
+  function somenteOsVisiveis<C extends string>(
+    erros: Partial<Record<C, string>>,
+  ): Partial<Record<C, string>> {
+    const visiveis: Partial<Record<C, string>> = {}
+    for (const campo of Object.keys(erros) as C[]) {
+      if (tentouAvancar || camposTocados[campo]) visiveis[campo] = erros[campo]
+    }
+    return visiveis
+  }
+
+  const errosVisiveisDosDados = somenteOsVisiveis(errosDosDados)
+  const errosVisiveisDoEndereco = somenteOsVisiveis(errosDoEndereco)
+
+  function marcarTocado(campo: string) {
+    setCamposTocados((atual) => (atual[campo] ? atual : { ...atual, [campo]: true }))
+  }
+
+  /** Trocar de passo APAGA a tentativa anterior — ver `tentouAvancar`. */
+  function irParaPasso(destino: number) {
+    setTentouAvancar(false)
+    setPasso(destino)
+  }
+
+  /** Os campos do passo 2 que impedem o passo de andar, na ordem da tela. */
+  const camposPendentesDosDados = CAMPOS_DOS_DADOS.filter((c) => errosDosDados[c] !== undefined)
+
+  /**
+   * POR QUE A ENTREGA NAO ESTA RESOLVIDA — a frase, na mesma forma de
+   * `motivoParaNaoConfirmar` do passo 4.
+   *
+   * Devolve `null` EXATAMENTE quando `entregaResolvida` e true: as duas leem os
+   * mesmos estados, e e por isso que o "Continuar" pode confiar numa e
+   * explicar-se pela outra sem que as duas discordem.
+   *
+   * A FALHA DE COTACAO NAO REPETE O TEXTO do alerta que ja esta na tela — ela
+   * aponta para ele. Duas caixas vermelhas com a mesma frase fazem o comprador
+   * procurar dois problemas onde ha um.
+   */
+  const motivoDaEntrega = (() => {
+    if (modalidade === null) {
+      return 'Escolha como você quer receber o kit: retirada no local ou receber em casa.'
+    }
+    if (vaiRetirar) return null
+    if (Object.keys(errosDoEndereco).length > 0) {
+      return 'Confira os campos destacados do endereço de entrega.'
+    }
+    if (cotandoFrete) return 'Aguarde o cálculo do frete terminar.'
+    if (erroFrete) {
+      return 'O frete ainda não foi calculado. Use "Tentar calcular de novo" acima, '
+        + `ou marque "${ROTULO_RETIRADA}" no topo desta tela.`
+    }
+    if (opcaoDeFrete === null) return 'Escolha uma opção de frete para continuar.'
+    return null
+  })()
+
+  /**
+   * O CLIQUE NO "CONTINUAR" — e por que estes dois botoes NAO sao mais
+   * desabilitados.
+   *
+   * Botao desabilitado nao tem como se explicar: nao recebe clique, nao dispara
+   * evento, nao e anunciado como acionavel. Era literalmente impossivel, na
+   * versao anterior, chegar a mostrar qual campo estava errado — o unico gesto
+   * que a pessoa fazia (clicar) era o unico que a tela nao podia observar. E
+   * como o CSS nao tinha `.btn:disabled`, o botao travado era visualmente
+   * IDENTICO ao botao que funciona: dourado, com hover, convidando ao clique
+   * que nao fazia nada.
+   *
+   * Habilitado, o mesmo clique agora produz tres coisas de uma vez: o primeiro
+   * campo errado recebe o foco, a mensagem aparece embaixo dele e o resumo em
+   * `role="alert"` e anunciado.
+   *
+   * O PASSO CONTINUA TRAVADO. Nada aqui deixa passar dado invalido — as regras
+   * sao as mesmas de antes, e o servidor continua sendo quem decide. A unica
+   * mudanca e que a recusa passou a ser dita em vez de silenciosa.
+   */
+  function continuarDoPasso2() {
+    if (dadosPessoaisValidos(dados)) {
+      irParaPasso(3)
+      return
+    }
+    setTentouAvancar(true)
+    focarCampo(camposPendentesDosDados[0] ?? null)
+  }
+
+  function continuarDoPasso3() {
+    if (entregaResolvida) {
+      irParaPasso(4)
+      return
+    }
+    setTentouAvancar(true)
+    focarCampo(primeiroPendenteDaEntrega())
+  }
+
+  /**
+   * Qual controle o foco procura quando a entrega nao esta resolvida, NA ORDEM
+   * EM QUE A TELA OS APRESENTA: primeiro a modalidade, depois o endereco, por
+   * ultimo a transportadora.
+   *
+   * `null` quando nao ha para onde ir — cotacao em andamento, ou falhada. Ai o
+   * que resolve nao e um campo, e sim o botao de tentar de novo ou a outra
+   * modalidade, e `motivoDaEntrega` ja diz isso por escrito.
+   */
+  function primeiroPendenteDaEntrega(): string | null {
+    if (modalidade === null) return `modalidade-${MODALIDADES[0].chave}`
+    if (vaiRetirar) return null
+    const campo = CAMPOS_DO_ENDERECO.find((c) => errosDoEndereco[c] !== undefined)
+    if (campo) return campo
+    if (opcoesFrete.length > 0) return `frete-${opcoesFrete[0].idServico}`
+    return null
+  }
 
   const cupomLimpo = cupom.trim()
 
@@ -572,6 +873,16 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
    * e a forma mais rapida de alguem achar que a loja quebrou.
    */
   const motivoParaNaoConfirmar = (() => {
+    // 3. A ENTREGA SE PERDEU. Terceiro caso, acrescentado em 21/08/2026 para
+    //    fechar o unico buraco que restava na promessa deste bloco: o botao
+    //    tambem le `entregaResolvida`, e nesse ramo nao havia frase nenhuma —
+    //    dava para o botao ficar cinza sem uma linha explicando por que. Nao e
+    //    hipotese remota: e o mesmo estado que a guarda de ultimo metro de
+    //    `confirmar` existe para cobrir.
+    if (!entregaResolvida) {
+      return motivoDaEntrega
+        ?? 'A forma de entrega se perdeu. Volte um passo e escolha de novo como quer receber.'
+    }
     if (previa && !previa.valido) {
       return 'Este cupom não foi aceito. Apague o código para seguir sem o desconto.'
     }
@@ -752,7 +1063,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
           </div>
 
           <div className="checkout__nav">
-            <button type="button" className="btn btn--solid" onClick={() => setPasso(2)}>
+            <button type="button" className="btn btn--solid" onClick={() => irParaPasso(2)}>
               Continuar
             </button>
           </div>
@@ -763,42 +1074,97 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
         <div className="checkout__passo form">
           <h2>Seus dados</h2>
           <div className="form__grid">
-            <div className="form__field form__field--wide">
+            <div className={classeDoCampo(errosVisiveisDosDados.nome, true)}>
               <label htmlFor="nome">Nome completo</label>
               <input
                 id="nome" autoComplete="name" value={dados.nome}
+                {...ariaDoCampo('nome', errosVisiveisDosDados.nome)}
+                onBlur={() => marcarTocado('nome')}
                 onChange={(e) => setDados({ ...dados, nome: e.target.value })}
               />
+              <ErroDoCampo campo="nome" mensagem={errosVisiveisDosDados.nome} />
             </div>
-            <div className="form__field">
+            <div className={classeDoCampo(errosVisiveisDosDados.email)}>
               <label htmlFor="email">E-mail</label>
               <input
                 id="email" type="email" autoComplete="email" value={dados.email}
-                onChange={(e) => setDados({ ...dados, email: e.target.value })}
+                {...ariaDoCampo('email', errosVisiveisDosDados.email)}
+                onBlur={() => marcarTocado('email')}
+                /*
+                  `.trim()` no proprio onChange, e nao so na validacao: e-mail
+                  nao tem espaco em lugar nenhum (o EMAIL_REGEX ja os proibe), e
+                  o espaco que vem colado no endereco — do autocomplete do
+                  celular, do copiar-e-colar de uma conversa — seria mais um
+                  "cliquei e nao aconteceu nada", desta vez por um caractere
+                  invisivel. O valor continua indo cru para o servidor; o que
+                  muda e que o cru nasce limpo.
+                */
+                onChange={(e) => setDados({ ...dados, email: e.target.value.trim() })}
               />
+              <ErroDoCampo campo="email" mensagem={errosVisiveisDosDados.email} />
             </div>
-            <div className="form__field">
+            <div className={classeDoCampo(errosVisiveisDosDados.cpf)}>
               <label htmlFor="cpf">CPF (somente numeros)</label>
               <input
                 id="cpf" inputMode="numeric" maxLength={11} value={dados.cpf}
+                {...ariaDoCampo('cpf', errosVisiveisDosDados.cpf)}
+                onBlur={() => marcarTocado('cpf')}
                 onChange={(e) => setDados({ ...dados, cpf: somenteDigitos(e.target.value) })}
               />
+              <ErroDoCampo campo="cpf" mensagem={errosVisiveisDosDados.cpf} />
             </div>
-            <div className="form__field form__field--wide">
+            <div className={classeDoCampo(errosVisiveisDosDados.whatsapp, true)}>
               <label htmlFor="whatsapp">WhatsApp (DDD + numero)</label>
+              {/*
+                O EXEMPLO FICA SEMPRE NA TELA, e ANTES do campo. Foi exatamente
+                aqui que a reclamacao de 21/08/2026 nasceu — um numero de nove
+                digitos, que parece completo para quem acabou de escreve-lo. Um
+                exemplo com DDD, lido no caminho de quem vai digitar, evita o
+                erro; a mensagem vermelha logo abaixo do input so o explica
+                depois de ele acontecer.
+              */}
+              <p className="form__dica">Com DDD, só números — por exemplo, 62991234567.</p>
               <input
                 id="whatsapp" inputMode="numeric" maxLength={13} value={dados.whatsapp}
+                {...ariaDoCampo('whatsapp', errosVisiveisDosDados.whatsapp)}
+                onBlur={() => marcarTocado('whatsapp')}
                 onChange={(e) => setDados({ ...dados, whatsapp: somenteDigitos(e.target.value) })}
               />
+              <ErroDoCampo campo="whatsapp" mensagem={errosVisiveisDosDados.whatsapp} />
             </div>
           </div>
+
+          {/*
+            O RESUMO DA RECUSA, em role="alert" e ACIMA do botao.
+
+            role="alert" porque isto e RESPOSTA A UM CLIQUE e precisa ser
+            anunciado na hora — diferente da cotacao de frete, que chega sozinha
+            e usa role="status". Acima do botao pela mesma razao ja escrita no
+            passo 4: quem esta descendo a tela em direcao ao "Continuar" nao le
+            o que estiver depois dele.
+
+            ELE NAO REPETE AS MENSAGENS DOS CAMPOS — diz QUAIS campos, e cada
+            campo diz o que falta nele. Repetir as quatro frases aqui embaixo
+            faria a pessoa ler o mesmo texto duas vezes procurando a diferenca.
+          */}
+          {tentouAvancar && camposPendentesDosDados.length > 0 && (
+            <div className="aviso aviso--erro" role="alert" data-testid="erros-do-passo">
+              <strong className="aviso__titulo">Falta conferir seus dados</strong>
+              <p>
+                {camposPendentesDosDados.length === 1 ? 'Corrija o campo ' : 'Corrija os campos '}
+                {listarCampos(camposPendentesDosDados.map((c) => ROTULO_DO_CAMPO[c]))}
+                {' '}para continuar. A explicação está embaixo de cada um.
+              </p>
+            </div>
+          )}
+
           <div className="checkout__nav">
-            <button type="button" className="btn btn--ghost" onClick={() => setPasso(1)}>Voltar</button>
-            <button
-              type="button" className="btn btn--solid"
-              disabled={!dadosPessoaisValidos(dados)}
-              onClick={() => setPasso(3)}
-            >
+            <button type="button" className="btn btn--ghost" onClick={() => irParaPasso(1)}>Voltar</button>
+            {/*
+              SEM `disabled`. Ver `continuarDoPasso2`: era o botao desabilitado
+              que tornava impossivel dizer o que estava errado.
+            */}
+            <button type="button" className="btn btn--solid" onClick={continuarDoPasso2}>
               Continuar
             </button>
           </div>
@@ -892,10 +1258,12 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
               <h3 className="eyebrow">Endereço de entrega</h3>
 
                   <div className="form__grid">
-                    <div className="form__field">
+                    <div className={classeDoCampo(errosVisiveisDoEndereco.cep)}>
                       <label htmlFor="cep">CEP (somente numeros)</label>
                       <input
                         id="cep" inputMode="numeric" maxLength={8} value={endereco.cep}
+                        {...ariaDoCampo('cep', errosVisiveisDoEndereco.cep)}
+                        onBlur={() => marcarTocado('cep')}
                         onChange={(e) => setEndereco({ ...endereco, cep: somenteDigitos(e.target.value) })}
                       />
                       {/*
@@ -907,30 +1275,44 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
                       <p className="form__status">
                         Preenchemos rua, bairro, cidade e UF quando encontramos o CEP. Você pode corrigir qualquer campo.
                       </p>
+                      <ErroDoCampo campo="cep" mensagem={errosVisiveisDoEndereco.cep} />
                     </div>
-                    <div className="form__field">
+                    <div className={classeDoCampo(errosVisiveisDoEndereco.estado)}>
                       <label htmlFor="estado">Estado (UF)</label>
                       <input
                         id="estado" maxLength={2} value={endereco.estado}
+                        {...ariaDoCampo('estado', errosVisiveisDoEndereco.estado)}
+                        onBlur={() => marcarTocado('estado')}
                         onChange={(e) => setEndereco({
                           ...endereco, estado: e.target.value.toUpperCase().replace(/[^A-Z]/g, ''),
                         })}
                       />
+                      <ErroDoCampo campo="estado" mensagem={errosVisiveisDoEndereco.estado} />
                     </div>
-                    <div className="form__field form__field--wide">
+                    <div className={classeDoCampo(errosVisiveisDoEndereco.rua, true)}>
                       <label htmlFor="rua">Rua</label>
                       <input
                         id="rua" value={endereco.rua}
+                        {...ariaDoCampo('rua', errosVisiveisDoEndereco.rua)}
+                        onBlur={() => marcarTocado('rua')}
                         onChange={(e) => setEndereco({ ...endereco, rua: e.target.value })}
                       />
+                      <ErroDoCampo campo="rua" mensagem={errosVisiveisDoEndereco.rua} />
                     </div>
-                    <div className="form__field">
+                    <div className={classeDoCampo(errosVisiveisDoEndereco.numero)}>
                       <label htmlFor="numero">Numero</label>
                       <input
                         id="numero" value={endereco.numero}
+                        {...ariaDoCampo('numero', errosVisiveisDoEndereco.numero)}
+                        onBlur={() => marcarTocado('numero')}
                         onChange={(e) => setEndereco({ ...endereco, numero: e.target.value })}
                       />
+                      <ErroDoCampo campo="numero" mensagem={errosVisiveisDoEndereco.numero} />
                     </div>
+                    {/*
+                      COMPLEMENTO NAO TEM ErroDoCampo, e nao e esquecimento: e o
+                      unico campo opcional do endereco (ver `errosDeEndereco`).
+                    */}
                     <div className="form__field">
                       <label htmlFor="complemento">Complemento</label>
                       <input
@@ -938,19 +1320,25 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
                         onChange={(e) => setEndereco({ ...endereco, complemento: e.target.value })}
                       />
                     </div>
-                    <div className="form__field">
+                    <div className={classeDoCampo(errosVisiveisDoEndereco.bairro)}>
                       <label htmlFor="bairro">Bairro</label>
                       <input
                         id="bairro" value={endereco.bairro}
+                        {...ariaDoCampo('bairro', errosVisiveisDoEndereco.bairro)}
+                        onBlur={() => marcarTocado('bairro')}
                         onChange={(e) => setEndereco({ ...endereco, bairro: e.target.value })}
                       />
+                      <ErroDoCampo campo="bairro" mensagem={errosVisiveisDoEndereco.bairro} />
                     </div>
-                    <div className="form__field">
+                    <div className={classeDoCampo(errosVisiveisDoEndereco.cidade)}>
                       <label htmlFor="cidade">Cidade</label>
                       <input
                         id="cidade" value={endereco.cidade}
+                        {...ariaDoCampo('cidade', errosVisiveisDoEndereco.cidade)}
+                        onBlur={() => marcarTocado('cidade')}
                         onChange={(e) => setEndereco({ ...endereco, cidade: e.target.value })}
                       />
+                      <ErroDoCampo campo="cidade" mensagem={errosVisiveisDoEndereco.cidade} />
                     </div>
                   </div>
 
@@ -1036,19 +1424,34 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
           )}
 
 
+          {/*
+            O MESMO RESUMO DO PASSO 2, e pela mesma razao — ver o comentario la.
+            Aqui ele carrega a frase inteira em vez de uma lista de campos:
+            "escolha uma opcao de frete" nao e um campo destacavel, e quando o
+            que falta E um campo do endereco a frase manda olhar para os
+            destaques.
+          */}
+          {tentouAvancar && motivoDaEntrega && (
+            <div className="aviso aviso--erro" role="alert" data-testid="erros-do-passo">
+              <strong className="aviso__titulo">Falta definir a entrega</strong>
+              <p>{motivoDaEntrega}</p>
+            </div>
+          )}
+
           <div className="checkout__nav">
-            <button type="button" className="btn btn--ghost" onClick={() => setPasso(2)}>Voltar</button>
+            <button type="button" className="btn btn--ghost" onClick={() => irParaPasso(2)}>Voltar</button>
             {/*
               Duas condicoes independentes, as duas obrigatorias: endereco
               completo E opcao de frete escolhida. A segunda e o que impede o
               checkout de andar com frete desconhecido — e, por tabela, de o
               passo 4 exibir um Total que nao inclui o transporte.
+
+              SEM `disabled` desde 21/08/2026, como no passo 2: as duas
+              condicoes continuam obrigatorias, mas agora o clique que nao passa
+              DIZ qual delas falta (`continuarDoPasso3`). Travado e mudo era o
+              que fazia o comprador achar que a loja tinha quebrado.
             */}
-            <button
-              type="button" className="btn btn--solid"
-              disabled={!entregaResolvida}
-              onClick={() => setPasso(4)}
-            >
+            <button type="button" className="btn btn--solid" onClick={continuarDoPasso3}>
               Continuar
             </button>
           </div>
@@ -1196,14 +1599,29 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
             confirmar, e cobradas na proxima tela. Anunciar so depois de criar o
             pedido faria alguem sem cartao e sem Pix descobrir isso com o pedido
             ja registrado em seu nome.
+
+            E UM AVISO, E NAO UMA ESCOLHA — ver o cabecalho de `.pagamentos-aceitos`
+            em src/app/globals.css. Nada aqui e clicavel: a forma de pagamento e
+            escolhida na tela seguinte. O desenho de chip que estes dois metodos
+            tinham ate 21/08/2026 dizia o contrario.
+
+            O ROTULO E VISIVEL e o `aria-labelledby` aponta para ele, em vez de um
+            `aria-label` que so existia para leitor de tela: quem enxerga tambem
+            precisa saber o que sao os dois nomes soltos.
           */}
-          <div className="pagamentos-aceitos" role="group" aria-label="Formas de pagamento aceitas">
-            <span className="pagamento-chip">PIX</span>
-            <span className="pagamento-chip">Cartão de crédito</span>
+          <div
+            className="pagamentos-aceitos"
+            role="group"
+            aria-labelledby="formas-de-pagamento"
+          >
+            <span className="pagamentos-aceitos__rotulo" id="formas-de-pagamento">
+              Formas de pagamento aceitas
+            </span>
+            <p className="pagamentos-aceitos__metodos">PIX · Cartão de crédito</p>
+            <p className="pagamentos-aceitos__nota">
+              A cobrança acontece na próxima tela, depois que o pedido for criado.
+            </p>
           </div>
-          <p className="vitrine__linha">
-            A cobrança acontece na próxima tela, depois que o pedido for criado.
-          </p>
 
           {/*
             O impedimento aparece ACIMA do botao que ele desabilita, e nao
@@ -1219,7 +1637,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
           {erro && <p className="form__status form__status--error" role="status">{erro}</p>}
 
           <div className="checkout__nav">
-            <button type="button" className="btn btn--ghost" onClick={() => setPasso(3)} disabled={enviando}>
+            <button type="button" className="btn btn--ghost" onClick={() => irParaPasso(3)} disabled={enviando}>
               Voltar
             </button>
             {/*

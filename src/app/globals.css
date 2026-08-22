@@ -399,6 +399,33 @@ main{position:relative;z-index:1;}
   font-weight:500;
 }
 .btn--solid:hover{transform:translateY(-2px);box-shadow:0 12px 30px -10px rgba(201,162,77,0.6);}
+/*
+  BOTAO INDISPONIVEL PRECISA PARECER INDISPONIVEL (21/08/2026).
+
+  Ate esta data o arquivo nao tinha regra nenhuma para `:disabled`, e foi metade
+  da reclamacao que originou a validacao do checkout: um "Continuar" travado
+  saia dourado, com hover e cursor de mao — visualmente IDENTICO ao que
+  funciona. A pessoa clicava, nada acontecia, e nao havia como saber se o
+  problema era o formulario dela ou a loja.
+
+  A outra metade foi resolvida no proprio wizard, e na direcao contraria: os
+  dois "Continuar" deixaram de ser desabilitados e passaram a DIZER o que falta
+  (src/components/checkout-wizard.tsx). Mas continuam existindo botoes
+  legitimamente travados na loja — "Validar cupom" com menos de 3 letras, "Ir
+  para o pagamento" com um cupom ja recusado, o stepper no limite de quantidade
+  —, e todos eles dependiam deste bloco que nao existia.
+
+  `pointer-events:none` NAO entra: alem de o navegador ja bloquear o clique
+  sozinho, ele apagaria justamente o cursor `not-allowed` que avisa por que o
+  clique nao vai acontecer.
+*/
+.btn:disabled{
+  opacity:.4;
+  cursor:not-allowed;
+  box-shadow:none;
+}
+.btn--solid:disabled:hover{transform:none;box-shadow:none;}
+.btn--ghost:disabled:hover{background:transparent;color:var(--gold-light);}
 
 .social-proof{
   margin-top:50px;
@@ -632,10 +659,36 @@ main{position:relative;z-index:1;}
 .form__field select:focus{border-color:var(--gold);outline:none;}
 .form__field--invalid input,
 .form__field--invalid select{border-color:var(--error);}
-.form__error{
+/*
+  A DICA DO CAMPO — o exemplo que aparece ANTES de a pessoa digitar, entre o
+  rotulo e o input.
+
+  Acima do input, e nao abaixo: embaixo ela disputaria o lugar com a mensagem de
+  erro, e as duas empilhadas afastariam o vermelho justamente do campo que ele
+  descreve. Acima, a dica e lida no caminho natural (rotulo -> exemplo ->
+  digitar) e a linha logo abaixo do input fica reservada para a critica.
+
+  `margin:0` porque o `.form__field` e um flex column com `gap:8px` — o espaco
+  ja vem de la. Deixar a margem padrao do navegador (1em) somaria por cima do
+  gap e produziria o afastamento que este bloco existe para evitar.
+*/
+.form__dica{
+  margin:0;
   font-size:12.5px;
+  line-height:1.5;
+  color:var(--ink-muted);
+}
+/*
+  A mensagem de erro do campo. `margin:0` pelo mesmo motivo da dica acima: sem
+  isso, o `1em` padrao do <p> se soma ao `gap:8px` do campo e o vermelho nasce
+  a quase 40px do input que ele critica — longe o bastante para a pessoa nao
+  associar os dois, que e exatamente a falha que a validacao veio corrigir.
+*/
+.form__error{
+  margin:0;
+  font-size:12.5px;
+  line-height:1.5;
   color:var(--error);
-  min-height:16px;
 }
 .form__consent{
   display:flex;
@@ -890,6 +943,28 @@ main{position:relative;z-index:1;}
   margin-top:18px;
   max-width:100%;
   overflow-x:auto;
+}
+/*
+  "ESCOLHER OUTRA FORMA DE PAGAMENTO" — a saida, e nao mais um degrau da
+  escada (21/08/2026).
+
+  Este botao e IRMAO de `.pagamento__pix`, e nao filho: o `gap:14px` que separa
+  tudo la dentro nao alcanca ele, e `.pagamento` e um bloco comum sem espaco
+  proprio. O resultado era o pior desenho possivel para o que ele faz — a
+  moldura dele encostada na do "Já paguei — atualizar" logo acima, as duas em
+  `.btn--ghost`, formando o que parecia um controle unico de duas linhas.
+
+  E as duas acoes sao opostas: uma reconsulta o pagamento que a pessoa acabou de
+  fazer, a outra ABANDONA o Pix gerado e volta a escolha de metodo. Encostadas,
+  a segunda vira o "proximo item da lista" para quem esta com o celular na mao
+  no meio de um pagamento.
+
+  22px e o mesmo respiro de `.pagamento__total` — o bloco inteiro anda nessa
+  cadencia. Vale igual depois do Brick de cartao, onde o botao encostava no
+  iframe pelo mesmo motivo.
+*/
+.pagamento__trocar{
+  margin-top:22px;
 }
 
 /* RESPONSIVE */
@@ -1357,29 +1432,81 @@ main{position:relative;z-index:1;}
   border-radius:2px;
 }
 
+/*
+  AS FORMAS DE PAGAMENTO ACEITAS — no passo 4 do checkout e na tela do balcao.
+
+  ISTO E UM AVISO, E NAO UMA ESCOLHA — e o desenho passou a dizer isso
+  (21/08/2026). Ate aqui os dois metodos saiam como chips: pilula arredondada,
+  moldura, texto dourado em caixa alta. Do lado de fora eram indistinguiveis dos
+  botoes de verdade da mesma tela (VOLTAR, VALIDAR CUPOM, os dois em moldura
+  dourada e caixa alta), e a primeira pessoa a comentar a tela os chamou de
+  "botoes do Pix e cartao". Sao <span>: clicar neles nunca fez nada e nunca vai
+  fazer — a forma de pagamento e escolhida na tela seguinte, no Brick do Mercado
+  Pago. E exatamente a armadilha que a validacao do checkout acabou de corrigir
+  no "Continuar", montada de novo dois blocos abaixo dele.
+
+  O QUE ENTROU NO LUGAR e um rotulo visivel mais uma linha de texto — o mesmo
+  vocabulario de um campo de formulario (`.form__field label`), que e o que os
+  vizinhos de cima e de baixo sao. Sem moldura, sem pilula, sem caixa alta no
+  conteudo: nada que prometa clique.
+
+  O ROTULO VISIVEL SUBSTITUI O `aria-label`. Antes o nome do grupo existia so
+  para leitor de tela, e quem enxergava via duas pilulas soltas sem titulo
+  nenhum — parte do motivo de elas parecerem botoes orfaos. Agora os dois
+  publicos leem a mesma frase, e o `aria-labelledby` aponta para ela.
+
+  ESPACO: 26px em cima (o mesmo respiro de `.checkout__nav` e `.form__grid`,
+  para separar do campo de cupom) e 10px embaixo. O bloco agora inclui a propria
+  frase de rodape — "a cobranca acontece na proxima tela" —, que antes era um
+  paragrafo solto logo abaixo: e a mesma informacao, e informacao junta se le
+  junta.
+*/
 .pagamentos-aceitos{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-  justify-content:center;
-  margin:0 0 8px;
+  margin:26px 0 10px;
 }
-.pagamento-chip{
-  border:1px solid var(--line);
-  border-radius:30px;
-  padding:8px 18px;
-  font-size:12px;
-  letter-spacing:2px;
-  text-transform:uppercase;
-  color:var(--gold-light);
-}
-.pagamento-chip__nota{
+/*
+  No balcao o bloco e o PRIMEIRO filho de um `.form__field`, que ja e um flex
+  column com `gap:8px` — o respiro de cima ja vem de la, e a margem somaria por
+  cima dele. Este e o unico caso, e por isso e uma excecao de uma linha em vez
+  de um modificador que os dois usos teriam que lembrar de aplicar.
+*/
+.form__field > .pagamentos-aceitos:first-child{margin-top:0;}
+/*
+  O rotulo. Deliberadamente igual a `.form__field label`: e o que faz o bloco
+  ser lido como "mais um campo desta tela" em vez de um enfeite que caiu ali.
+*/
+.pagamentos-aceitos__rotulo{
   display:block;
-  font-size:10.5px;
-  letter-spacing:.5px;
-  text-transform:none;
+  font-size:12px;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  color:var(--ink-muted);
+  margin-bottom:8px;
+}
+/*
+  Serve a um <p> (checkout: "PIX · Cartão de crédito") e a um <ul> (balcao: uma
+  linha por metodo, cada uma com a sua nota). Os zeros de `margin`/`padding` sao
+  o que impede a lista de nascer com o recuo e o respiro do navegador.
+*/
+.pagamentos-aceitos__metodos{
+  margin:0;
+  padding:0;
+  list-style:none;
+  color:var(--ink);
+  font-size:15px;
+  line-height:1.7;
+}
+.pagamentos-aceitos__nota{
+  display:block;
+  margin-top:6px;
+  font-size:13.5px;
+  line-height:1.6;
   color:var(--ink-muted);
 }
+/* Dentro de uma linha da lista a nota e a segunda linha do proprio item, e nao
+   um paragrafo novo — o respiro de cima seria espaco a mais no meio do item. */
+.pagamentos-aceitos__metodos li .pagamentos-aceitos__nota{margin-top:0;}
+.pagamentos-aceitos__metodos li + li{margin-top:10px;}
 
 .aviso-prevenda{
   border:1px solid var(--line);

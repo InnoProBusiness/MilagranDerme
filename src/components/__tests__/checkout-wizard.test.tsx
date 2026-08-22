@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen, waitFor, cleanup } from '@testing-library/react'
+import { render, screen, waitFor, cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CheckoutWizard } from '@/components/checkout-wizard'
 import { TEXTO_FRETE_A_COTAR } from '@/components/linha-frete'
@@ -173,6 +173,21 @@ function corpoEnviadoPara(fetchMock: FetchFalso, url: string): Record<string, un
 
 function botaoContinuar() {
   return screen.getByRole('button', { name: /^continuar$/i })
+}
+
+/**
+ * A mensagem de erro de UM campo, procurada pelo id que o `aria-describedby` do
+ * input aponta (`erro-<campo>` em src/components/checkout-wizard.tsx).
+ *
+ * Pelo id, e nao pelo texto: assim o teste prova de uma vez as duas coisas que
+ * importam — que a frase existe E que ela esta no lugar em que o campo promete
+ * que ela esta. Uma mensagem certa com id errado nao chega a quem usa leitor de
+ * tela, e um `getByText` passaria feliz.
+ */
+function erroDoCampo(campo: string): HTMLElement {
+  const elemento = document.getElementById(`erro-${campo}`)
+  if (!elemento) throw new Error(`Nenhuma mensagem de erro visivel para o campo "${campo}"`)
+  return elemento
 }
 
 /**
@@ -437,7 +452,7 @@ describe('CheckoutWizard', () => {
     expect(botaoContinuar()).not.toBeDisabled()
   })
 
-  it('sem opcao de frete escolhida, o "Continuar" do passo 3 fica desabilitado', async () => {
+  it('sem opcao de frete escolhida, o "Continuar" do passo 3 diz o que falta', async () => {
     vi.stubGlobal('fetch', criarFetchFalso())
 
     render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
@@ -449,11 +464,24 @@ describe('CheckoutWizard', () => {
 
     // Endereco completo (o autofill preencheu o resto) e mesmo assim travado:
     // o que falta e a escolha do frete.
+    //
+    // ATE 21/08/2026 ESTE TESTE PEDIA `toBeDisabled()`. A trava continua
+    // exatamente a mesma — o passo nao anda sem frete escolhido —, mas o botao
+    // desabilitado nunca chegava a dizer o que faltava: ele nao recebe clique,
+    // entao nao responde ao unico gesto que o comprador faz. Agora o clique
+    // acontece e produz a frase. Ver a reclamacao registrada em
+    // `describe('dados incorretos ou incompletos')`.
     await waitFor(() => expect(screen.getByLabelText(/^rua$/i)).toHaveValue('Avenida Paulista'))
-    expect(botaoContinuar()).toBeDisabled()
+    await userEvent.click(botaoContinuar())
 
+    expect(screen.getByTestId('erros-do-passo')).toHaveTextContent(/escolha uma opção de frete/i)
+    expect(screen.getByRole('heading', { name: /^entrega$/i })).toBeInTheDocument()
+
+    // Escolhida a opcao, o aviso some sozinho e o mesmo botao passa.
     await userEvent.click(sedex)
-    expect(botaoContinuar()).not.toBeDisabled()
+    expect(screen.queryByTestId('erros-do-passo')).toBeNull()
+    await userEvent.click(botaoContinuar())
+    expect(await screen.findByRole('button', { name: /ir para o pagamento/i })).toBeInTheDocument()
   })
 
   it('mostra transportadora, valor e prazo de cada opcao cotada', async () => {
@@ -594,7 +622,12 @@ describe('CheckoutWizard', () => {
     // NENHUMA opcao de transportadora — nao houve cotacao. As duas
     // modalidades continuam na tela, que e o que da caminho de volta.
     expect(screen.queryByRole('radio', { name: /PAC|SEDEX/ })).toBeNull()
-    expect(botaoContinuar()).toBeDisabled()
+
+    // O passo continua sem andar — e agora DIZ isso, apontando para as duas
+    // saidas que existem: cotar de novo, ou trocar para a retirada.
+    await userEvent.click(botaoContinuar())
+    expect(screen.getByTestId('erros-do-passo')).toHaveTextContent(/tentar calcular de novo/i)
+    expect(screen.getByRole('heading', { name: /^entrega$/i })).toBeInTheDocument()
 
     // O alerta fala do ENVIO, e nao do pedido: com a retirada disponivel, uma
     // queda do provedor deixou de fechar a loja, e dizer que o pedido parou
@@ -658,7 +691,9 @@ describe('CheckoutWizard', () => {
 
     const pac = await screen.findByRole('radio', { name: /PAC/ })
     expect(pac).not.toBeChecked()
-    expect(botaoContinuar()).toBeDisabled()
+    await userEvent.click(botaoContinuar())
+    expect(screen.getByTestId('erros-do-passo')).toHaveTextContent(/escolha uma opção de frete/i)
+    expect(screen.getByRole('heading', { name: /^entrega$/i })).toBeInTheDocument()
 
     // E a nova cotacao saiu para a quantidade nova, nao para a antiga.
     expect(corpoEnviadoPara(fetchMock, '/api/frete')).toEqual({
@@ -696,10 +731,22 @@ describe('CheckoutWizard', () => {
 
     await preencherAteRevisao()
 
+    // Pelo `role="group"` E pelo nome acessivel, que desde 21/08/2026 vem de um
+    // ROTULO VISIVEL (`aria-labelledby`) e nao mais de um `aria-label`
+    // invisivel: se alguem voltar a esconder o titulo do bloco, o nome do grupo
+    // some junto e esta busca falha.
     const formas = screen.getByRole('group', { name: /formas de pagamento/i })
+    expect(screen.getByText(/formas de pagamento aceitas/i)).toBeInTheDocument()
     expect(formas).toHaveTextContent('PIX')
     expect(formas).toHaveTextContent(/cartão de crédito/i)
     expect(screen.getByText(/a cobrança acontece na próxima tela/i)).toBeInTheDocument()
+
+    // E NENHUM DELES E CLICAVEL. O desenho de chip que os dois tinham ate
+    // 21/08/2026 os fazia parecer botoes — a mesma armadilha do "Continuar"
+    // travado e mudo. Nao ha o que clicar aqui: a forma de pagamento e
+    // escolhida na tela seguinte.
+    expect(within(formas).queryByRole('button')).toBeNull()
+    expect(within(formas).queryByRole('radio')).toBeNull()
   })
 
   it('em 422, mostra a mensagem de erro e NAO navega', async () => {
@@ -740,7 +787,12 @@ describe('CheckoutWizard', () => {
       // viraria a escolha de quem so clicou em Continuar sem ler — e essa
       // pessoa descobriria que tem de ir a Goiania depois de pagar.
       expect(screen.getByRole('radio', { name: /receber em casa/i })).not.toBeChecked()
-      expect(botaoContinuar()).toBeDisabled()
+
+      // E o "Continuar" nao anda sem escolha nenhuma — dizendo por que, em vez
+      // de ficar travado e mudo.
+      await userEvent.click(botaoContinuar())
+      expect(screen.getByTestId('erros-do-passo'))
+        .toHaveTextContent(/escolha como você quer receber/i)
     })
 
     it('escolher retirada faz o endereco de entrega desaparecer', async () => {
@@ -926,6 +978,171 @@ describe('CheckoutWizard', () => {
    * erro, e um desconto legitimo nao aparecia em lugar nenhum antes de fechar a
    * compra.
    */
+  /**
+   * A RECLAMACAO DE 21/08/2026 — e a classe inteira de defeito que ela revelou.
+   *
+   * Uma compradora digitou o WhatsApp com um digito a menos ("629960153", nove
+   * digitos), clicou em "Continuar" e A TELA NAO FEZ NADA. Nada mesmo: o botao
+   * estava `disabled`, o CSS nao tinha regra para `:disabled` — entao ele saia
+   * dourado, com hover, visualmente identico ao que funciona —, nenhum campo
+   * estava destacado e nenhuma mensagem existia em lugar nenhum. Quatro campos
+   * preenchidos, e nenhuma pista de qual era o errado.
+   *
+   * O DEFEITO DE FUNDO NAO ERA A VALIDACAO. As regras sempre estiveram certas,
+   * e sao as mesmas do Zod de src/app/api/pedidos/route.ts. Era o CANAL: botao
+   * desabilitado nao recebe clique, logo nao tem como responder ao unico gesto
+   * que a pessoa faz. Por isso os testes daqui fixam o CANAL — o passo recusa,
+   * e ao recusar aponta o campo, escreve a razao e leva o cursor ate la —, e
+   * nao apenas o texto das frases.
+   */
+  describe('dados incorretos ou incompletos', () => {
+    async function irAtePasso2() {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
+      await userEvent.click(botaoContinuar())
+    }
+
+    async function preencherDadosMenosOWhatsapp() {
+      await userEvent.type(screen.getByLabelText(/nome completo/i), 'Ana Souza')
+      await userEvent.type(screen.getByLabelText(/e-mail/i), 'ana.wizard@exemplo.com')
+      await userEvent.type(screen.getByLabelText(/cpf/i), '12345678901')
+    }
+
+    it('o caso da reclamacao: WhatsApp com um digito a menos diz o que falta', async () => {
+      await irAtePasso2()
+      await preencherDadosMenosOWhatsapp()
+      // Nove digitos: o numero exato da reclamacao, que PARECE completo para
+      // quem acabou de escreve-lo.
+      await userEvent.type(screen.getByLabelText(/whatsapp/i), '629960153')
+
+      await userEvent.click(botaoContinuar())
+
+      // 1. O passo NAO andou. Explicar nao e deixar passar: o servidor recusaria
+      //    este telefone do mesmo jeito.
+      expect(screen.getByRole('heading', { name: /seus dados/i })).toBeInTheDocument()
+
+      // 2. A mensagem esta embaixo do campo errado, e CONTA OS DIGITOS — e a
+      //    diferenca entre "esta errado" e "falta um".
+      expect(erroDoCampo('whatsapp')).toHaveTextContent(/no mínimo 10/i)
+      expect(erroDoCampo('whatsapp')).toHaveTextContent(/9 dígitos/i)
+
+      // 3. O cursor foi para la sozinho, sem a pessoa ter que procurar entre
+      //    quatro campos preenchidos.
+      expect(screen.getByLabelText(/whatsapp/i)).toHaveFocus()
+
+      // 4. E o resumo nomeia o campo — so ele, dos quatro.
+      expect(screen.getByTestId('erros-do-passo')).toHaveTextContent(/whatsapp/i)
+      expect(screen.getByTestId('erros-do-passo')).not.toHaveTextContent(/cpf/i)
+    })
+
+    it('corrigir o digito que faltava apaga o erro e destrava o passo', async () => {
+      await irAtePasso2()
+      await preencherDadosMenosOWhatsapp()
+      await userEvent.type(screen.getByLabelText(/whatsapp/i), '629960153')
+      await userEvent.click(botaoContinuar())
+      expect(screen.getByTestId('erros-do-passo')).toBeInTheDocument()
+
+      // O decimo digito.
+      await userEvent.type(screen.getByLabelText(/whatsapp/i), '1')
+
+      expect(document.getElementById('erro-whatsapp')).toBeNull()
+      expect(screen.queryByTestId('erros-do-passo')).toBeNull()
+
+      await userEvent.click(botaoContinuar())
+      expect(screen.getByRole('heading', { name: /^entrega$/i })).toBeInTheDocument()
+    })
+
+    it('com tudo vazio, o clique nomeia os quatro campos e foca o primeiro', async () => {
+      await irAtePasso2()
+      await userEvent.click(botaoContinuar())
+
+      const resumo = screen.getByTestId('erros-do-passo')
+      for (const rotulo of ['Nome completo', 'E-mail', 'CPF', 'WhatsApp']) {
+        expect(resumo).toHaveTextContent(rotulo)
+      }
+      // O foco vai para o PRIMEIRO DA TELA, e nao para um qualquer: mandar o
+      // cursor para o terceiro campo faria a pessoa rolar para tras.
+      expect(screen.getByLabelText(/nome completo/i)).toHaveFocus()
+      expect(screen.getByRole('heading', { name: /seus dados/i })).toBeInTheDocument()
+    })
+
+    /**
+     * O OUTRO LADO DA MESMA MOEDA. Formulario que critica enquanto a pessoa
+     * digita ensina a ignorar vermelho — e ai a mensagem que importa passa
+     * despercebida junto com as outras.
+     */
+    it('nao critica nada antes de a pessoa terminar o campo', async () => {
+      await irAtePasso2()
+      await userEvent.type(screen.getByLabelText(/nome completo/i), 'A')
+
+      expect(document.querySelector('.form__error')).toBeNull()
+      expect(screen.queryByTestId('erros-do-passo')).toBeNull()
+    })
+
+    it('sair de um campo invalido mostra o erro dele, e so dele', async () => {
+      await irAtePasso2()
+      await userEvent.type(screen.getByLabelText(/e-mail/i), 'ana@')
+      await userEvent.tab()
+
+      expect(erroDoCampo('email')).toHaveTextContent(/nome@provedor\.com/i)
+      // Os outros continuam calados: a pessoa nem chegou neles.
+      expect(document.getElementById('erro-cpf')).toBeNull()
+      expect(document.getElementById('erro-whatsapp')).toBeNull()
+      // E o resumo e resposta a um CLIQUE no Continuar, nao a um blur.
+      expect(screen.queryByTestId('erros-do-passo')).toBeNull()
+    })
+
+    /**
+     * A MENSAGEM TEM QUE CHEGAR A QUEM NAO A ENXERGA. Sem estes dois atributos
+     * o campo fica vermelho para uns e mudo para outros — a mesma reclamacao,
+     * num publico menor e ainda mais sem saida.
+     */
+    it('o campo invalido aponta para a propria mensagem', async () => {
+      await irAtePasso2()
+      await userEvent.click(botaoContinuar())
+
+      const cpf = screen.getByLabelText(/cpf/i)
+      expect(cpf).toHaveAttribute('aria-invalid', 'true')
+      expect(cpf).toHaveAttribute('aria-describedby', 'erro-cpf')
+      expect(erroDoCampo('cpf')).toHaveTextContent(/11 dígitos/i)
+    })
+
+    it('o vermelho de um passo nao vai junto para o proximo', async () => {
+      await irAtePasso2()
+      await userEvent.click(botaoContinuar())
+      expect(screen.getByTestId('erros-do-passo')).toBeInTheDocument()
+
+      await preencherDadosMenosOWhatsapp()
+      await userEvent.type(screen.getByLabelText(/whatsapp/i), '11988887777')
+      await userEvent.click(botaoContinuar())
+      await escolherEnvio()
+
+      // Passo 3 recem-aberto, com o endereco todo vazio: nada em vermelho.
+      expect(document.querySelector('.form__error')).toBeNull()
+      expect(screen.queryByTestId('erros-do-passo')).toBeNull()
+    })
+
+    it('endereco incompleto aponta o campo que falta e leva o cursor ate ele', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
+      await irAtePasso3()
+      await escolherEnvio()
+      await userEvent.type(screen.getByLabelText(/^cep \(/i), '01310100')
+      const pac = await screen.findByRole('radio', { name: /PAC/ })
+      await waitFor(() => expect(screen.getByLabelText(/^rua$/i)).toHaveValue('Avenida Paulista'))
+      await userEvent.click(pac)
+
+      // O autofill preenche rua, bairro, cidade e UF — o numero da casa e o
+      // unico que so a pessoa sabe, e o unico que fica faltando.
+      await userEvent.click(botaoContinuar())
+
+      expect(erroDoCampo('numero')).toHaveTextContent(/S\/N/i)
+      expect(screen.getByLabelText(/^numero$/i)).toHaveFocus()
+      expect(screen.getByTestId('erros-do-passo')).toHaveTextContent(/campos destacados do endereço/i)
+      expect(screen.getByRole('heading', { name: /^entrega$/i })).toBeInTheDocument()
+    })
+  })
+
   describe('validacao do cupom', () => {
     it('aplica o desconto no total depois de o servidor confirmar', async () => {
       vi.stubGlobal('fetch', criarFetchFalso())

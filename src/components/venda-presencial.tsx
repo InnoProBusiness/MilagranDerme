@@ -819,15 +819,27 @@ const METODO_DE_COBRANCA = 'pix'
 function PagamentoDoBalcao() {
   return (
     <div className="form__field">
-      <div className="pagamentos-aceitos" role="group" aria-label="Forma de cobrança">
-        <span className="pagamento-chip">
-          PIX
-          <span className="pagamento-chip__nota">QR na tela, confirmado pelo banco</span>
+      {/*
+        AVISO, NAO ESCOLHA: o vendedor nao seleciona nada aqui: esta tela cobra
+        por PIX (`METODO_DE_COBRANCA`) e o cartao acontece na pagina do pedido.
+        Ate 21/08/2026 os dois saiam como chips arredondados com moldura, do
+        mesmo desenho dos botoes da tela — um convite a clicar em algo que nunca
+        respondeu. Ver o cabecalho de `.pagamentos-aceitos` em globals.css.
+      */}
+      <div className="pagamentos-aceitos" role="group" aria-labelledby="formas-de-cobranca">
+        <span className="pagamentos-aceitos__rotulo" id="formas-de-cobranca">
+          Formas de cobrança
         </span>
-        <span className="pagamento-chip">
-          Cartão
-          <span className="pagamento-chip__nota">na página do pedido, pelo link da venda</span>
-        </span>
+        <ul className="pagamentos-aceitos__metodos">
+          <li>
+            PIX
+            <span className="pagamentos-aceitos__nota">QR na tela, confirmado pelo banco</span>
+          </li>
+          <li>
+            Cartão
+            <span className="pagamentos-aceitos__nota">na página do pedido, pelo link da venda</span>
+          </li>
+        </ul>
       </div>
       <p className="form__status">
         Esta tela cobra por PIX. Para cartão, registre a venda e abra a página do pedido

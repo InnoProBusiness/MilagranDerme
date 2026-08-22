@@ -227,9 +227,15 @@ export function Pagamento({ pedidoToken, totalCentavos, chavePublica, emailCompr
         <p className="form__status form__status--error" role="status">{resultado.mensagem}</p>
       )}
 
+      {/*
+        A SAIDA, separada do que vem acima dela por `.pagamento__trocar` — ver o
+        comentario da classe em src/app/globals.css. Este botao desfaz a escolha
+        de metodo; encostado no "Já paguei — atualizar", parecia a segunda linha
+        do mesmo controle.
+      */}
       {metodo !== null && (
         <button
-          type="button" className="btn btn--ghost"
+          type="button" className="btn btn--ghost pagamento__trocar"
           disabled={ocupado}
           onClick={() => { setMetodo(null); setResultado(null) }}
         >
