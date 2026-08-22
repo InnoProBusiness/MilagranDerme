@@ -1143,6 +1143,175 @@ describe('CheckoutWizard', () => {
     })
   })
 
+  /**
+   * O SERVIDOR RECUSOU — E A TELA SABE ONDE ISSO DOI.
+   *
+   * O relato de 21/08/2026, agora do outro lado do fio: comprador em iOS
+   * chegava ao passo 4, clicava em "Ir para o pagamento" e recebia "Não foi
+   * possível concluir o pedido. Confira os dados e tente novamente." Esse texto
+   * e o ULTIMO RECURSO do wizard — ele so aparece quando a rota responde erro
+   * SEM `mensagem`, e o 422 de corpo invalido era exatamente assim: mudo.
+   *
+   * A causa de fundo nao era o iOS, era a DIVERGENCIA: a tela valida e-mail com
+   * um regex simples e a rota com o `z.string().email()`, mais estrito. Um
+   * endereco na faixa entre os dois — `ana@gmail.com.`, com o ponto que o
+   * teclado do iPhone acrescenta — passava aqui e era recusado la. Onze campos
+   * para conferir, e nenhum deles errado pelas regras da tela.
+   *
+   * O QUE ESTES TESTES FIXAM e o canal, e nao a regra de e-mail: a rota manda
+   * `campos`, a tela VOLTA ao passo em que o campo mora, destaca e foca. Vale
+   * para qualquer divergencia futura, inclusive as que ainda nao existem —
+   * perseguir paridade exata de regex seria correr atras do Zod para sempre.
+   */
+  describe('o servidor recusa um campo', () => {
+    const RECUSA_DE_EMAIL = resposta(422, {
+      error: 'dados_invalidos',
+      mensagem: 'Confira o campo E-mail: o valor enviado não foi aceito.',
+      campos: ['email'],
+    })
+
+    it('volta ao passo 2, destaca o e-mail e poe o cursor nele', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso({ pedidos: RECUSA_DE_EMAIL }))
+      await preencherAteRevisao()
+
+      await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
+
+      // 1. A pessoa e LEVADA ao campo, e nao avisada de que ele existe. A
+      //    recusa chega no passo 4; o e-mail mora no 2, onde nem esta montado.
+      expect(await screen.findByRole('heading', { name: /seus dados/i })).toBeInTheDocument()
+      expect(screen.getByLabelText(/e-mail/i)).toHaveFocus()
+
+      // 2. E o campo esta marcado, com a frase embaixo dele.
+      expect(screen.getByLabelText(/e-mail/i)).toHaveAttribute('aria-invalid', 'true')
+      expect(erroDoCampo('email')).toBeInTheDocument()
+
+      // 3. Nenhum outro campo foi acusado junto.
+      expect(document.getElementById('erro-cpf')).toBeNull()
+      expect(document.getElementById('erro-whatsapp')).toBeNull()
+
+      // 4. E o pedido nao navegou para lugar nenhum.
+      expect(push).not.toHaveBeenCalled()
+    })
+
+    /**
+     * O veredito do servidor vale enquanto o campo ainda tiver o valor que ele
+     * julgou — mesma regra da previa do cupom. Sem isso o campo continuaria
+     * vermelho depois de corrigido, acusando um valor que ninguem verificou.
+     */
+    it('corrigir o campo apaga o veredito do servidor', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso({ pedidos: RECUSA_DE_EMAIL }))
+      await preencherAteRevisao()
+      await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
+      await screen.findByRole('heading', { name: /seus dados/i })
+      expect(erroDoCampo('email')).toBeInTheDocument()
+
+      await userEvent.type(screen.getByLabelText(/e-mail/i), 'x')
+
+      expect(document.getElementById('erro-email')).toBeNull()
+      expect(screen.getByLabelText(/e-mail/i)).not.toHaveAttribute('aria-invalid')
+    })
+
+    /**
+     * Nem toda recusa aponta um campo do formulario: 429, 500, ou um `campos`
+     * que so cita o que a propria tela preenche. Arrastar a pessoa para outro
+     * passo nesses casos so a faria perder de vista o texto que explica o
+     * problema.
+     */
+    it('recusa sem campo de formulario fica no passo 4, com a mensagem', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso({
+        pedidos: resposta(429, {
+          error: 'rate_limited',
+          mensagem: 'Recebemos muitas tentativas de compra deste mesmo acesso à internet.',
+        }),
+      }))
+      await preencherAteRevisao()
+
+      await userEvent.click(screen.getByRole('button', { name: /ir para o pagamento/i }))
+
+      expect(await screen.findByText(/muitas tentativas de compra/i)).toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: /revisão/i })).toBeInTheDocument()
+      expect(push).not.toHaveBeenCalled()
+    })
+  })
+
+  /**
+   * DUAS LETRAS NUM CAMPO OPCIONAL DERRUBAVAM O PEDIDO INTEIRO.
+   *
+   * O campo de cupom aceita qualquer texto, e o "Validar cupom" so liga a
+   * partir de 3 caracteres (minimo do CHECK cupom_codigo_formato). Quem
+   * digitasse "AB" e fosse direto ao "Ir para o pagamento" mandava esse "AB" no
+   * corpo — o wizard envia o cupom digitado, validado ou nao — e o
+   * `z.string().trim().min(3)` da rota respondia 422 SEM mensagem: o mesmo
+   * "confira os dados" impossivel de ligar a duas letras num campo marcado
+   * OPCIONAL.
+   */
+  describe('cupom curto demais', () => {
+    it('trava a confirmacao explicando, e nao chega a chamar o servidor', async () => {
+      const fetchMock = criarFetchFalso()
+      vi.stubGlobal('fetch', fetchMock)
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'AB')
+
+      expect(screen.getByTestId('impedimento')).toHaveTextContent(/ao menos 3 caracteres/i)
+      expect(screen.getByRole('button', { name: /ir para o pagamento/i })).toBeDisabled()
+      expect(chamadasDe(fetchMock, '/api/pedidos')).toHaveLength(0)
+    })
+
+    it('completar ou apagar o codigo destrava', async () => {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      await preencherAteRevisao()
+
+      await userEvent.type(screen.getByLabelText(/cupom/i), 'AB')
+      expect(screen.getByRole('button', { name: /ir para o pagamento/i })).toBeDisabled()
+
+      await userEvent.clear(screen.getByLabelText(/cupom/i))
+      expect(screen.queryByTestId('impedimento')).toBeNull()
+      expect(screen.getByRole('button', { name: /ir para o pagamento/i })).toBeEnabled()
+    })
+  })
+
+  /**
+   * A DIVERGENCIA MAIS COMUM, barrada antes da viagem de rede.
+   *
+   * Endereco nenhum termina em ponto nem tem dois pontos seguidos, e o Zod da
+   * rota recusa os dois — entao checa-los aqui so pode barrar o que o servidor
+   * ja barraria. A direcao importa: uma checagem de tela MAIS estrita que a do
+   * servidor recriaria o beco sem saida original, agora sem nem o servidor para
+   * desmentir.
+   */
+  describe('e-mail na faixa entre a tela e o servidor', () => {
+    async function digitarEmail(valor: string) {
+      vi.stubGlobal('fetch', criarFetchFalso())
+      render(<CheckoutWizard kit={KIT} quantidadeInicial={1} lancado={false} />)
+      await userEvent.click(botaoContinuar())
+      await userEvent.type(screen.getByLabelText(/nome completo/i), 'Ana Souza')
+      await userEvent.type(screen.getByLabelText(/cpf/i), '12345678901')
+      await userEvent.type(screen.getByLabelText(/whatsapp/i), '11988887777')
+      await userEvent.type(screen.getByLabelText(/e-mail/i), valor)
+      await userEvent.click(botaoContinuar())
+    }
+
+    // O caso do teclado do iOS: o ponto final que ele acrescenta sozinho.
+    it('ponto no fim e apontado aqui, sem gastar uma viagem ao servidor', async () => {
+      await digitarEmail('ana@gmail.com.')
+
+      expect(screen.getByRole('heading', { name: /seus dados/i })).toBeInTheDocument()
+      expect(erroDoCampo('email')).toBeInTheDocument()
+    })
+
+    it('dois pontos seguidos tambem', async () => {
+      await digitarEmail('ana@gmail..com')
+      expect(erroDoCampo('email')).toBeInTheDocument()
+    })
+
+    // E o contrario, que e o que nao pode quebrar: endereco comum passa.
+    it('endereco comum continua passando', async () => {
+      await digitarEmail('ana.souza+loja@exemplo.com.br')
+      expect(await screen.findByRole('heading', { name: /^entrega$/i })).toBeInTheDocument()
+    })
+  })
+
   describe('validacao do cupom', () => {
     it('aplica o desconto no total depois de o servidor confirmar', async () => {
       vi.stubGlobal('fetch', criarFetchFalso())

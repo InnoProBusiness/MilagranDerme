@@ -18,6 +18,9 @@ import {
   FRETE_RETIRADA, ROTULO_RETIRADA, TEXTO_PRAZO_RETIRADA,
   AVISO_RETIRADA_PRE_VENDA, enderecoRetiradaEmLinha,
 } from '@/lib/retirada'
+import {
+  ROTULO_DO_CAMPO, PASSO_DO_CAMPO, listarCampos,
+} from '@/lib/campos-do-pedido'
 
 type Props = {
   kit: Kit
@@ -105,6 +108,34 @@ const ENDERECO_VAZIO: Endereco = {
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 /**
+ * O e-mail passa? — e por que a pergunta nao e so o regex acima.
+ *
+ * A TELA E O SERVIDOR NUNCA VAO VALIDAR E-MAIL IGUAL. Aqui roda um regex de
+ * uma linha; la roda o `z.string().email()` do Zod, que e bem mais estrito. Ha
+ * uma faixa de enderecos entre os dois, e foi ela que produziu a falha relatada
+ * em 21/08/2026 em aparelhos iOS: `ana@gmail.com.`, com o ponto final que o
+ * teclado acrescenta, passava por aqui e era recusado la — com um 422 que, na
+ * epoca, nao dizia qual campo.
+ *
+ * AS DUAS CHECAGENS EXTRAS SAO ESCOLHIDAS PARA NUNCA RECUSAR DEMAIS. Endereco
+ * nenhum termina em ponto, e nenhum tem dois pontos seguidos fora de um local
+ * part entre aspas — que o Zod tambem recusa. Ou seja: elas so podem barrar o
+ * que o servidor ja barraria, nunca o contrario. Essa direcao e a regra deste
+ * arquivo, e nao um detalhe: uma checagem de tela mais ESTRITA que a do
+ * servidor recria o beco sem saida original, so que sem nem o servidor para
+ * desmentir.
+ *
+ * O QUE FECHA O RESTO DA FAIXA nao esta aqui, e sim no par
+ * `campos`/`recusaDoServidor`: a rota passou a dizer QUAL campo recusou e a
+ * tela passou a destacar esse campo, seja qual for a divergencia. Perseguir
+ * paridade exata de regex seria correr atras da proxima versao do Zod para
+ * sempre.
+ */
+function emailAceitavel(valor: string): boolean {
+  return EMAIL_REGEX.test(valor) && !valor.endsWith('.') && !valor.includes('..')
+}
+
+/**
  * O MESMO formato de POST /api/frete, de GET /api/cep/[cep], de POST
  * /api/pedidos e da coluna `enderecos.cep` (CHECK endereco_cep_digitos): oito
  * digitos, sem hifen. E ele que decide QUANDO o autofill e a cotacao disparam —
@@ -189,7 +220,7 @@ export function errosDeDados(d: DadosPessoais): ErrosDeDados {
   if (d.nome.trim().length < 3) {
     erros.nome = 'Digite seu nome completo — ao menos 3 letras.'
   }
-  if (!EMAIL_REGEX.test(d.email)) {
+  if (!emailAceitavel(d.email)) {
     erros.email = d.email.trim() === ''
       ? 'Informe o e-mail que vai receber a confirmação do pedido.'
       : 'Este e-mail não parece completo. O formato é nome@provedor.com.'
@@ -243,17 +274,6 @@ function enderecoValido(e: Endereco): boolean {
 }
 
 /**
- * O nome do campo COMO ESTA ESCRITO NA TELA. E o vocabulario do resumo de
- * erros: "Corrija os campos E-mail e WhatsApp" so encurta o caminho de quem
- * procura se as palavras forem as mesmas que estao em cima dos campos.
- */
-const ROTULO_DO_CAMPO: Readonly<Record<string, string>> = {
-  nome: 'Nome completo', email: 'E-mail', cpf: 'CPF', whatsapp: 'WhatsApp',
-  cep: 'CEP', estado: 'Estado (UF)', rua: 'Rua', numero: 'Número',
-  bairro: 'Bairro', cidade: 'Cidade',
-}
-
-/**
  * Os campos NA ORDEM DA TELA — e e essa ordem que decide qual deles recebe o
  * foco quando o passo se recusa a andar. Mandar o cursor para o segundo erro
  * quando o primeiro esta acima faria a pessoa rolar para tras.
@@ -262,12 +282,6 @@ const CAMPOS_DOS_DADOS: ReadonlyArray<keyof DadosPessoais> = ['nome', 'email', '
 const CAMPOS_DO_ENDERECO: ReadonlyArray<keyof Endereco> = [
   'cep', 'estado', 'rua', 'numero', 'bairro', 'cidade',
 ]
-
-/** "A", "A e B", "A, B e C" — lista humana, com o "e" do portugues no fim. */
-export function listarCampos(rotulos: readonly string[]): string {
-  if (rotulos.length <= 1) return rotulos[0] ?? ''
-  return `${rotulos.slice(0, -1).join(', ')} e ${rotulos[rotulos.length - 1]}`
-}
 
 /** O id do paragrafo de erro de um campo — ver `ErroDoCampo`. */
 function idDoErro(campo: string): string {
@@ -334,6 +348,35 @@ function mensagemDaResposta(corpo: unknown): string | null {
   const m = (corpo as { mensagem?: unknown }).mensagem
   return typeof m === 'string' && m.trim() !== '' ? m : null
 }
+
+/**
+ * A LISTA DE CAMPOS QUE O SERVIDOR RECUSOU, quando ela vem.
+ *
+ * Companheira de `mensagemDaResposta`: aquela le a frase para a pessoa, esta le
+ * os nomes para a TELA — o que permite destacar o campo e levar o cursor ate
+ * ele, em vez de entregar uma frase e deixar a busca por conta de quem esta
+ * comprando. Ver src/lib/campos-do-pedido.ts.
+ *
+ * Tolerante de proposito: resposta antiga (de um servidor ainda sem o campo),
+ * `campos` que nao e lista, item que nao e string — tudo vira lista vazia, e o
+ * checkout se comporta como antes, mostrando so a mensagem.
+ */
+function camposDaResposta(corpo: unknown): string[] {
+  if (typeof corpo !== 'object' || corpo === null) return []
+  const lista = (corpo as { campos?: unknown }).campos
+  if (!Array.isArray(lista)) return []
+  return lista.filter((c): c is string => typeof c === 'string' && c !== '')
+}
+
+/**
+ * O que fica escrito embaixo de um campo que o SERVIDOR recusou.
+ *
+ * Nao inventa o motivo, porque a rota nao manda motivo — e inventar um
+ * ("formato invalido") seria pior que apontar o campo e deixar a pessoa reler o
+ * que digitou. A frase completa da recusa aparece uma vez so, no alerta do
+ * passo 4.
+ */
+const RECUSADO_PELO_SERVIDOR = 'Este valor não foi aceito. Confira se está escrito corretamente.'
 
 /**
  * Traduz a resposta de GET /api/cep/[cep] nos campos que o formulario preenche.
@@ -539,6 +582,46 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
   const [camposTocados, setCamposTocados] = useState<Record<string, true>>({})
   const [tentouAvancar, setTentouAvancar] = useState(false)
 
+  /**
+   * O VEREDITO DO SERVIDOR SOBRE UM CAMPO, e o VALOR EXATO que o produziu.
+   *
+   * POST /api/pedidos passou a devolver `campos` junto do erro (21/08/2026),
+   * porque a tela e o servidor nao validam pelas mesmas regras e a faixa entre
+   * os dois virava um beco sem saida: o botao liberava, o servidor recusava, e
+   * a mensagem mandava "conferir os dados" de onze campos que, pelas regras da
+   * tela, estavam todos certos.
+   *
+   * GUARDAR O VALOR JULGADO JUNTO nao e redundancia — e a mesma decisao de
+   * `previaCupom` la em cima, pelo mesmo motivo. Sem ele, o servidor recusaria
+   * `ana@gmail.com.`, a pessoa corrigiria para `ana@gmail.com` e o campo
+   * continuaria vermelho, agora acusando um valor que ninguem verificou. Com o
+   * valor dentro do estado, o veredito vale so enquanto o campo ainda contiver
+   * exatamente o que foi julgado; qualquer tecla o invalida sozinha, sem
+   * depender de alguem lembrar de limpar.
+   */
+  const [recusaDoServidor, setRecusaDoServidor] = useState<Record<string, string>>({})
+
+  /**
+   * O campo que vai receber o foco DEPOIS do proximo render.
+   *
+   * Estado, e nao uma chamada direta a `focus()`, por causa do caso que
+   * atravessa passos: quando o servidor recusa o e-mail, a tela precisa VOLTAR
+   * ao passo 2 e so entao focar o campo — e no instante do clique aquele input
+   * nem esta montado, entao um `focus()` sincrono nao acharia nada e falharia
+   * calado. O efeito roda depois do commit, quando o campo ja existe.
+   *
+   * Todos os focos passam por aqui, inclusive os que funcionariam sincronos:
+   * dois caminhos para a mesma coisa e um deles quebrando so no caso raro e
+   * exatamente como um bug destes sobrevive a uma suite verde.
+   */
+  const [campoParaFocar, setCampoParaFocar] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (campoParaFocar === null) return
+    focarCampo(campoParaFocar)
+    setCampoParaFocar(null)
+  }, [campoParaFocar])
+
   const cepCompleto = CEP_COMPLETO.test(endereco.cep) ? endereco.cep : ''
 
   const vaiRetirar = modalidade === 'retirada'
@@ -566,8 +649,30 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
   const entregaResolvida = vaiRetirar
     || (vaiEnviar && enderecoValido(endereco) && opcaoDeFrete !== null)
 
-  const errosDosDados = errosDeDados(dados)
-  const errosDoEndereco = errosDeEndereco(endereco)
+  /**
+   * O QUE O SERVIDOR RECUSOU, somado ao que a propria tela ja sabe criticar —
+   * e so enquanto o campo continuar com o valor julgado (ver
+   * `recusaDoServidor`).
+   *
+   * A CRITICA DA TELA VEM PRIMEIRO quando as duas existem: ela e especifica
+   * ("no mínimo 10 dígitos, você digitou 9") e a do servidor e generica, porque
+   * a rota manda o nome do campo e nao o motivo.
+   */
+  function comRecusaDoServidor<C extends string>(
+    erros: Partial<Record<C, string>>,
+    valores: Record<C, string>,
+  ): Partial<Record<C, string>> {
+    const juntos: Partial<Record<C, string>> = { ...erros }
+    for (const [campo, valorJulgado] of Object.entries(recusaDoServidor)) {
+      const c = campo as C
+      if (!(c in valores) || juntos[c] !== undefined) continue
+      if (valores[c] === valorJulgado) juntos[c] = RECUSADO_PELO_SERVIDOR
+    }
+    return juntos
+  }
+
+  const errosDosDados = comRecusaDoServidor(errosDeDados(dados), dados)
+  const errosDoEndereco = comRecusaDoServidor(errosDeEndereco(endereco), endereco)
 
   /**
    * Dos erros que EXISTEM, os que a tela ja pode dizer em voz alta.
@@ -658,7 +763,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
       return
     }
     setTentouAvancar(true)
-    focarCampo(camposPendentesDosDados[0] ?? null)
+    setCampoParaFocar(camposPendentesDosDados[0] ?? null)
   }
 
   function continuarDoPasso3() {
@@ -667,7 +772,7 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
       return
     }
     setTentouAvancar(true)
-    focarCampo(primeiroPendenteDaEntrega())
+    setCampoParaFocar(primeiroPendenteDaEntrega())
   }
 
   /**
@@ -873,6 +978,20 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
    * e a forma mais rapida de alguem achar que a loja quebrou.
    */
   const motivoParaNaoConfirmar = (() => {
+    // 4. O CUPOM E CURTO DEMAIS PARA EXISTIR. Quarto caso, e o unico dos
+    //    quatro que era uma VENDA PERDIDA silenciosa antes de 21/08/2026.
+    //
+    //    O campo aceita qualquer texto e o "Validar cupom" so liga a partir de
+    //    3 caracteres (minimo do CHECK cupom_codigo_formato). Quem digitasse
+    //    "AB" e fosse direto ao "Ir para o pagamento" mandava esse "AB" no
+    //    corpo — o wizard envia o cupom digitado, validado ou nao — e o
+    //    `z.string().trim().min(3)` da rota derrubava O PEDIDO INTEIRO com 422.
+    //    A pessoa lia "confira os dados" e nao tinha como ligar aquilo a duas
+    //    letras num campo marcado OPCIONAL.
+    if (cupomLimpo !== '' && cupomLimpo.length < 3) {
+      return 'O código do cupom precisa ter ao menos 3 caracteres. '
+        + 'Complete o código ou apague o campo para seguir sem desconto.'
+    }
     // 3. A ENTREGA SE PERDEU. Terceiro caso, acrescentado em 21/08/2026 para
     //    fechar o unico buraco que restava na promessa deste bloco: o botao
     //    tambem le `entregaResolvida`, e nesse ramo nao havia frase nenhuma —
@@ -933,6 +1052,48 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
     }
   }
 
+  /**
+   * O SERVIDOR RECUSOU CAMPOS — LEVA A PESSOA ATE ELES.
+   *
+   * Tres coisas, e a terceira e a que faltava por completo: guarda o veredito
+   * amarrado ao valor julgado, VOLTA AO PASSO em que o primeiro campo recusado
+   * mora, e poe o cursor nele. Antes disto a recusa chegava no passo 4 e ficava
+   * la — "confira os dados" numa tela de revisao onde nenhum dos campos citados
+   * sequer esta montado.
+   *
+   * `setPasso`, E NAO `irParaPasso`: aquele zera `tentouAvancar`, e aqui a
+   * intencao e o oposto — a tela de destino tem que abrir JA mostrando o
+   * vermelho, porque a pessoa nao vai clicar em "Continuar" de novo para
+   * descobrir o que houve.
+   *
+   * LISTA VAZIA NAO MEXE NO PASSO. Ou o servidor nao mandou `campos` (resposta
+   * antiga, erro de rede), ou os campos recusados nao pertencem a passo nenhum
+   * — `idServico`, `tipoEntrega`, o corpo inteiro. Nesses casos a mensagem no
+   * passo 4 e tudo o que ha de honesto a fazer, e arrastar a pessoa para outro
+   * passo so a faria perder de vista o texto que explica o problema.
+   */
+  function aplicarRecusaDoServidor(campos: readonly string[]) {
+    const julgados: Record<string, string> = {}
+    for (const campo of campos) {
+      const valor = valorAtualDoCampo(campo)
+      if (valor !== null) julgados[campo] = valor
+    }
+    setRecusaDoServidor(julgados)
+
+    const primeiro = campos.find((c) => PASSO_DO_CAMPO[c] !== undefined)
+    if (primeiro === undefined) return
+
+    setTentouAvancar(true)
+    setPasso(PASSO_DO_CAMPO[primeiro])
+    setCampoParaFocar(primeiro)
+  }
+
+  function valorAtualDoCampo(campo: string): string | null {
+    if (campo in dados) return dados[campo as keyof DadosPessoais]
+    if (campo in endereco) return endereco[campo as keyof Endereco]
+    return null
+  }
+
   async function confirmar() {
     // Guarda de ultimo metro: sem forma de entrega escolhida nao existe pedido
     // a criar. O botao ja vem desabilitado neste estado — esta linha existe
@@ -978,8 +1139,9 @@ export function CheckoutWizard({ kit, quantidadeInicial, cupomInicial = '', lanc
       if (!resposta.ok) {
         setErro(
           mensagemDaResposta(corpo)
-          ?? 'Nao foi possivel concluir o pedido. Confira os dados e tente novamente.',
+          ?? 'Não foi possível concluir o pedido. Confira os dados e tente novamente.',
         )
+        aplicarRecusaDoServidor(camposDaResposta(corpo))
         setEnviando(false)
         return
       }

@@ -4,6 +4,7 @@ import { getDb, closeDb } from '@/lib/db'
 import { POST } from '@/app/api/pedidos/route'
 import { assinarAtribuicao } from '@/lib/atribuicao'
 import { MAX_PEDIDOS_POR_JANELA } from '@/lib/rate-limit'
+import { ROTULO_DO_CAMPO } from '@/lib/campos-do-pedido'
 import { deInteiro } from '@/lib/money'
 import type { OpcaoDeFrete, VolumeDaCotacao } from '@/lib/frete'
 
@@ -528,18 +529,32 @@ describe('POST /api/pedidos', () => {
     const primeiro = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }))
     expect(primeiro.status).toBe(201)
 
-    // Segundo checkout, mesmo e-mail, CPF diferente: a rota tem que
-    // recusar, mas com o MESMO formato de erro de qualquer 422 de
-    // validacao — sem um campo "mensagem", sem a palavra "cpf" ou
-    // "divergente" em lugar nenhum do corpo.
+    // Segundo checkout, mesmo e-mail, CPF diferente: a rota tem que recusar
+    // sem dizer POR QUE — sem a palavra "cpf", sem "divergente" e, desde
+    // 21/08/2026, sem `campos`.
+    //
+    // A MENSAGEM PASSOU A EXISTIR (21/08/2026) e isso NAO afrouxa a garantia:
+    // o que vazaria seria o MOTIVO, e a frase e a mesma que qualquer outra
+    // recusa de validacao recebe. Antes o ramo respondia sem mensagem nenhuma,
+    // e o comprador legitimo que caisse aqui — o caso real e alguem que ja
+    // comprou e digitou o CPF errado na segunda compra — lia "confira os
+    // dados" sem saber que falar com a loja resolveria.
+    //
+    // `campos` E O QUE NAO PODE APARECER AQUI, e por isso a assercao e
+    // explicita: e o array que o 422 do Zod usa para dizer qual campo cair. Um
+    // `campos: ['cpf']` neste ramo entregaria de bandeja o oraculo que o
+    // comentario da rota descreve — e-mail existe, so falta acertar o CPF.
     const r = await POST(requisicao({
       kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR, cpf: '98765432100',
     }))
     expect(r.status).toBe(422)
     const corpo = await r.json()
-    expect(corpo).toEqual({ error: 'dados_invalidos' })
+    expect(corpo.error).toBe('dados_invalidos')
+    expect(corpo.campos).toBeUndefined()
+    expect(typeof corpo.mensagem).toBe('string')
     expect(JSON.stringify(corpo).toLowerCase()).not.toContain('cpf')
     expect(JSON.stringify(corpo).toLowerCase()).not.toContain('divergente')
+    expect(JSON.stringify(corpo).toLowerCase()).not.toContain('mail')
   })
 
   // NAO havia teste de rota para este mapeamento: pedidos.test.ts prova que
@@ -702,9 +717,18 @@ describe('POST /api/pedidos', () => {
       for (const corpo of corpos) {
         const r = await POST(requisicao(corpo))
         expect(r.status).toBe(422)
-        // Erro achatado, sem detalhe de campo: a resposta de validacao e a
-        // mesma de qualquer outro campo invalido do corpo.
-        expect(await r.json()).toEqual({ error: 'dados_invalidos' })
+        const erro = await r.json()
+        expect(erro.error).toBe('dados_invalidos')
+        // A MENSAGEM NAO MANDA CONFERIR CAMPO NENHUM, e essa e a assercao que
+        // importa aqui. Desde 21/08/2026 o 422 do Zod diz QUAL campo recusou
+        // — mas `idServico` nao e campo de formulario: o checkout o preenche
+        // sozinho a partir do radio de frete. Mandar a compradora "conferir o
+        // idServico" seria manda-la procurar algo que nao existe na tela, que
+        // e a mesma classe de beco sem saida que o `campos` veio resolver.
+        expect(erro.mensagem).toMatch(/atualize a página/i)
+        for (const rotulo of Object.values(ROTULO_DO_CAMPO)) {
+          expect(erro.mensagem).not.toContain(rotulo)
+        }
       }
       expect(await contarPedidos()).toBe(antes)
     })
@@ -734,9 +758,98 @@ describe('POST /api/pedidos', () => {
           kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR, ...extra,
         }))
         expect(r.status).toBe(422)
-        expect(await r.json()).toEqual({ error: 'dados_invalidos' })
+        const erro = await r.json()
+        expect(erro.error).toBe('dados_invalidos')
+        // Campo DESCONHECIDO derrubado pelo `.strict()` nao tem caminho: o
+        // issue do Zod vem com `path` vazio, porque o defeito e do corpo
+        // inteiro e nao de um campo. A resposta manda recomecar, e nao
+        // conferir um campo — ver camposDoErroZod em
+        // src/lib/campos-do-pedido.ts.
+        expect(erro.mensagem).toMatch(/atualize a página/i)
+        expect(erro.campos).toEqual([])
       }
       expect(await contarPedidos()).toBe(antes)
+    })
+
+    /**
+     * O 422 DIZ QUAL CAMPO — e este e o teste da falha relatada em 21/08/2026.
+     *
+     * Compradores em iOS chegavam ao passo 4, clicavam em "Ir para o pagamento"
+     * e recebiam "Não foi possível concluir o pedido. Confira os dados e tente
+     * novamente." — o texto de ULTIMO RECURSO do checkout, que so aparece
+     * quando a rota responde erro SEM `mensagem`. Era exatamente o caso: este
+     * 422 devolvia `{ error: 'dados_invalidos' }` e mais nada.
+     *
+     * A CAUSA NAO ERA O APARELHO, era a DIVERGENCIA. A tela valida e-mail com
+     * um regex simples e esta rota com o `z.string().email()`, mais estrito;
+     * ha uma faixa de enderecos que a primeira aceita e a segunda recusa.
+     * `ana@gmail.com.` — com o ponto que o teclado do iPhone acrescenta — e o
+     * caso comum. O botao liberava, o POST saia, voltava 422 mudo, e a pessoa
+     * relia onze campos que, pelas regras da tela, estavam todos certos. Nao
+     * havia caminho de saida: nenhuma correcao possivel mudava a resposta.
+     *
+     * `campos` E `mensagem` SAO DUAS COISAS DIFERENTES de proposito: a frase e
+     * para ler, a lista e para o checkout DESTACAR o campo e levar a pessoa ate
+     * o passo em que ele mora (src/lib/campos-do-pedido.ts). So a frase ainda
+     * deixaria a busca por conta de quem esta comprando.
+     */
+    it('e-mail recusado pelo Zod volta 422 dizendo QUAL campo', async () => {
+      const antes = await contarPedidos()
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
+        email: 'ana.checkout@exemplo.com.',
+      }))
+
+      expect(r.status).toBe(422)
+      const erro = await r.json()
+      expect(erro.error).toBe('dados_invalidos')
+      expect(erro.campos).toEqual(['email'])
+      expect(erro.mensagem).toContain(ROTULO_DO_CAMPO.email)
+      expect(await contarPedidos()).toBe(antes)
+    })
+
+    /**
+     * DUAS LETRAS NUM CAMPO OPCIONAL DERRUBAVAM O PEDIDO INTEIRO.
+     *
+     * O checkout envia o cupom digitado, validado ou nao, e o botao "Validar
+     * cupom" so liga a partir de 3 caracteres — entao "AB" viajava sem nunca
+     * ter passado por validacao nenhuma e caia neste `min(3)`. A tela agora
+     * trava antes com explicacao, mas a rota tambem tem que saber dizer o que
+     * houve: e o unico jeito de um cliente desatualizado (ou qualquer outro)
+     * receber algo melhor que "confira os dados".
+     */
+    it('cupom curto demais nomeia o cupom, e nao derruba calado', async () => {
+      const antes = await contarPedidos()
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR, cupom: 'AB',
+      }))
+
+      expect(r.status).toBe(422)
+      const erro = await r.json()
+      expect(erro.campos).toEqual(['cupom'])
+      expect(erro.mensagem).toContain(ROTULO_DO_CAMPO.cupom)
+      expect(await contarPedidos()).toBe(antes)
+    })
+
+    /**
+     * NENHUM VALOR ENVIADO VOLTA NA RESPOSTA — so nomes de campo.
+     *
+     * O corpo desta rota carrega CPF, telefone e endereco residencial. Ecoa-los
+     * dentro de uma mensagem de erro os espalharia para qualquer intermediario
+     * que registre resposta, e "para ajudar a pessoa a ver o que digitou" e
+     * exatamente a justificativa que faria isso acontecer.
+     */
+    it('SEGURANCA: a recusa nomeia campos, nunca os valores enviados', async () => {
+      const r = await POST(requisicao({
+        kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
+        email: 'ana.checkout@exemplo.com.',
+      }))
+
+      const corpo = JSON.stringify(await r.json())
+      for (const valor of [COMPRADOR.cpf, COMPRADOR.whatsapp, COMPRADOR.cep, COMPRADOR.rua]) {
+        expect(corpo).not.toContain(valor)
+      }
+      expect(corpo).not.toContain('ana.checkout@exemplo.com')
     })
 
     /**
@@ -786,7 +899,12 @@ describe('POST /api/pedidos', () => {
         kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR,
       }))
       expect(r.status).toBe(500)
-      expect(await r.json()).toEqual({ error: 'nao_foi_possivel_criar_o_pedido' })
+      const erro = await r.json()
+      expect(erro.error).toBe('nao_foi_possivel_criar_o_pedido')
+      // "NADA FOI COBRADO" e a unica coisa que a pessoa precisa saber num 500,
+      // e a que evita o pagamento em duplicidade e a reclamacao. O motivo
+      // tecnico fica no log — ver FALHA_NOSSA na rota.
+      expect(erro.mensagem).toMatch(/nada foi cobrado/i)
       expect(await contarPedidos()).toBe(antes)
     })
   })
@@ -809,7 +927,14 @@ describe('POST /api/pedidos', () => {
 
       const bloqueado = await POST(requisicao({ kitSlug: 'kit-milagran', quantidade: 1, ...ESCOLHA_DE_FRETE, ...COMPRADOR }, undefined, ip))
       expect(bloqueado.status).toBe(429)
-      expect(await bloqueado.json()).toEqual({ error: 'rate_limited' })
+      const erro = await bloqueado.json()
+      expect(erro.error).toBe('rate_limited')
+      // O 429 e o unico erro desta rota em que a pessoa NAO FEZ NADA DE ERRADO
+      // e o remedio e so esperar. Sem a mensagem, o checkout caia no texto
+      // generico ("confira os dados") e mandava alguem reler quatro campos
+      // corretos — e tentar de novo, o que so afunda mais o proprio contador.
+      expect(erro.mensagem).toMatch(/aguarde/i)
+      expect(erro.mensagem).toMatch(/nada foi cobrado/i)
       expect(await contarPedidos()).toBe(MAX_PEDIDOS_POR_JANELA)
     })
 

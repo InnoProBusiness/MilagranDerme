@@ -19,6 +19,7 @@ import {
   criarLimitadorPorIp, ipDoPedido,
   JANELA_RATE_LIMIT_MS, MAX_PEDIDOS_POR_JANELA,
 } from '@/lib/rate-limit'
+import { camposDoErroZod, mensagemDeCamposInvalidos } from '@/lib/campos-do-pedido'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -172,6 +173,44 @@ function comEntregaPadrao(corpo: unknown): unknown {
 }
 
 /**
+ * O QUE A PESSOA LE QUANDO O DEFEITO E NOSSO.
+ *
+ * As duas unicas coisas que ela precisa saber num 500 estao aqui, e nenhuma
+ * delas e o motivo tecnico: que NAO HOUVE COBRANCA — a duvida que faz alguem
+ * pagar duas vezes ou abrir reclamacao — e que existe uma saida humana. O
+ * motivo fica no log do servidor, onde nao vira dado vazado.
+ */
+const FALHA_NOSSA = 'Tivemos um problema do nosso lado ao registrar o pedido. '
+  + 'Nada foi cobrado. Tente de novo em instantes e, se continuar, fale com a gente pelo WhatsApp.'
+
+/**
+ * A RECUSA QUE NAO EXPLICA POR QUE — e nao pode explicar.
+ *
+ * Serve ao ramo do CpfDivergenteError e a qualquer outra recusa de validacao
+ * que so o banco conhece. O texto e o mesmo nos dois casos DE PROPOSITO: e a
+ * unica forma de a resposta do e-mail que ja existe com outro CPF ser
+ * indistinguivel da resposta de qualquer outra falha — ver o comentario longo
+ * no catch do POST.
+ *
+ * O QUE ELE AINDA ASSIM ENTREGA: um caminho de saida. Antes desta constante o
+ * ramo respondia sem `mensagem` nenhuma e a pessoa ficava com "confira os
+ * dados" sobre um formulario que, para ela, estava certo — sem nem saber que
+ * falar com a loja resolveria.
+ *
+ * O QUE ELE NAO PODE ENTREGAR, E A PRIMEIRA VERSAO DESTA CONSTANTE ENTREGAVA:
+ * a frase dizia "confira o e-mail e o CPF digitados" — util, e justamente o
+ * mapa do ataque. Nomear os dois campos diz a quem sondar que o e-mail existe e
+ * que o CPF e o que falta acertar, que e exatamente o oraculo descrito no
+ * comentario do catch. O teste de seguranca desta rota barra a palavra "cpf" no
+ * corpo da resposta e pegou a versao anterior. A frase abaixo manda conferir o
+ * FORMULARIO, sem dizer qual campo — e serve igual a qualquer outra recusa de
+ * validacao que so o banco conhece, que e o que a mantem indistinguivel.
+ */
+const RECUSA_SEM_MOTIVO = 'Não foi possível concluir o pedido com os dados enviados. '
+  + 'Confira o formulário e tente de novo. Se o erro continuar, '
+  + 'fale com a gente pelo WhatsApp para concluir a compra.'
+
+/**
  * Sinaliza um cupom recusado (ResultadoCupom.ok === false) sem confundir
  * esse caminho de negocio esperado com um erro de infraestrutura — o catch
  * da rota distingue os dois so verificando `instanceof`.
@@ -308,7 +347,10 @@ async function opcaoDeFreteEscolhida(e: {
     // historia errada — 503 sugere "tente de novo", e tentar de novo com o
     // mesmo kit quebrado nao resolve nada.
     console.error('[pedidos] falha inesperada ao cotar frete:', mensagemSeguraDoErro(erro))
-    return Response.json({ error: 'nao_foi_possivel_criar_o_pedido' }, { status: 500 })
+    return Response.json({
+      error: 'nao_foi_possivel_criar_o_pedido',
+      mensagem: FALHA_NOSSA,
+    }, { status: 500 })
   }
 }
 
@@ -317,17 +359,65 @@ export async function POST(req: Request) {
   // nao chega a abrir transacao, entao um 429 nao pode deixar cliente,
   // endereco ou pedido gravado.
   if (excedeuRateLimit(ipDoPedido(req.headers))) {
-    return Response.json({ error: 'rate_limited' }, { status: 429 })
+    // A MENSAGEM IMPORTA MAIS AQUI DO QUE EM QUALQUER OUTRO 4xx desta rota,
+    // porque este e o unico erro em que a pessoa NAO FEZ NADA DE ERRADO e o
+    // remedio e so esperar. Sem a frase, o checkout caia no texto generico
+    // ("confira os dados") e mandava alguem reler quatro campos corretos —
+    // e, pior, tentar de novo, o que so afunda mais o proprio contador.
+    //
+    // O TEXTO FALA DE "ESTE ACESSO", e nao "voce": o contador e por IP, e uma
+    // saida de operadora movel (CGNAT) poe muitos compradores atras do mesmo
+    // numero. Dizer "voce tentou demais" seria falso para quem acabou de
+    // chegar — ver o cabecalho de MAX_PEDIDOS_POR_JANELA em
+    // src/lib/rate-limit.ts.
+    return Response.json({
+      error: 'rate_limited',
+      mensagem: 'Recebemos muitas tentativas de compra deste mesmo acesso à internet '
+        + 'nos últimos minutos. Aguarde alguns minutos e tente de novo — '
+        + 'nenhum pedido foi criado e nada foi cobrado.',
+    }, { status: 429 })
   }
 
   const parsed = Corpo.safeParse(comEntregaPadrao(await req.json().catch(() => null)))
   if (!parsed.success) {
-    return Response.json({ error: 'dados_invalidos' }, { status: 422 })
+    // QUAL CAMPO, e nao so "dados invalidos" (21/08/2026).
+    //
+    // Este era o 422 mais mudo da rota e o mais provavel de acontecer com
+    // comprador real, porque a tela e o servidor NAO validam pelas mesmas
+    // regras — o checkout usa um regex simples de e-mail e aqui roda o
+    // `z.string().email()`, que e mais estrito. Um endereco na faixa entre os
+    // dois (`ana@gmail.com.`, com o ponto que o teclado do iOS acrescenta)
+    // passava pela tela, era recusado aqui e voltava sem uma palavra sobre
+    // onde estava o problema. A pessoa relia os quatro campos, nao achava nada
+    // — nao havia nada errado PELAS REGRAS DA TELA — e desistia.
+    //
+    // `campos` VAI SEPARADO da frase de proposito: a frase e para ler, a lista
+    // e para o checkout DESTACAR o campo e levar a pessoa ate o passo em que
+    // ele mora (src/lib/campos-do-pedido.ts). Uma frase sozinha ainda deixaria
+    // a busca por conta de quem esta comprando.
+    //
+    // NAO ECOA VALOR NENHUM — so nomes de campo. O corpo desta rota carrega
+    // CPF, telefone e endereco residencial; devolve-los dentro de uma mensagem
+    // de erro os espalharia para qualquer intermediario que registre resposta.
+    // Pelo mesmo motivo o log abaixo tambem so leva os nomes.
+    const campos = camposDoErroZod(parsed.error.issues)
+    console.error('[pedidos] corpo invalido nos campos:', campos.join(',') || '(corpo inteiro)')
+    return Response.json({
+      error: 'dados_invalidos',
+      mensagem: mensagemDeCamposInvalidos(campos),
+      campos,
+    }, { status: 422 })
   }
   const d = parsed.data
 
   const kit = await buscarKitAtivoPorSlug(d.kitSlug)
-  if (!kit) return Response.json({ error: 'kit_indisponivel' }, { status: 422 })
+  if (!kit) {
+    return Response.json({
+      error: 'kit_indisponivel',
+      mensagem: 'Este kit não está mais disponível para venda. '
+        + 'Atualize a página para ver o catálogo atual.',
+    }, { status: 422 })
+  }
 
   // O preco vem do catalogo. Nada no corpo da requisicao influencia dinheiro:
   // precoUnitarioCentavos/total, se enviados, nem sobrevivem ao parse do Zod
@@ -590,7 +680,7 @@ export async function POST(req: Request) {
     // ver o doc comment de salvarClienteComEndereco).
     if (e instanceof CpfDivergenteError) {
       console.error('[pedidos] falha ao criar pedido:', mensagem)
-      return Response.json({ error: 'dados_invalidos' }, { status: 422 })
+      return Response.json({ error: 'dados_invalidos', mensagem: RECUSA_SEM_MOTIVO }, { status: 422 })
     }
 
     // PrecoDivergenteError (criarPedido): a mensagem CRUA do throw carrega o
@@ -611,7 +701,10 @@ export async function POST(req: Request) {
     // `detail` carregaria a linha inteira de clientes) so loga a mensagem —
     // nunca o objeto de erro cru.
     console.error('[pedidos] falha ao criar pedido:', mensagem)
-    return Response.json({ error: 'nao_foi_possivel_criar_o_pedido' }, { status: 500 })
+    return Response.json({
+      error: 'nao_foi_possivel_criar_o_pedido',
+      mensagem: FALHA_NOSSA,
+    }, { status: 500 })
   }
 }
 
